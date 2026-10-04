@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import shutil
+import socket
 import sys
 import time
 import urllib.error
@@ -82,7 +83,20 @@ def _reap_stale(runs_dir: Path) -> None:
     f.unlink(missing_ok=True)
 
 
-def _preconditions(runs_dir: Path) -> None:
+def _port_in_use(port: int) -> bool:
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
+def preconditions(runs_dir: Path, n_processes: int = 0) -> None:
+    """Checks before anything is built, deployed or started: stale runs reaped, no game already
+    running, enough disk space, and the debug ports for n_processes free on 127.0.0.1."""
     try:
         runs_dir.mkdir(parents=True, exist_ok=True)
         _reap_stale(runs_dir)
@@ -98,6 +112,11 @@ def _preconditions(runs_dir: Path) -> None:
         raise HarnessError(f"cannot check disk space: {e}") from e
     if free_mb < config.MIN_FREE_MB:
         raise HarnessError(f"only {free_mb} MB free disk space")
+    busy = [p for p in range(config.FIRST_DEBUG_PORT, config.FIRST_DEBUG_PORT + n_processes)
+            if _port_in_use(p)]
+    if busy:
+        raise HarnessError(f"debug port(s) {busy} already in use on 127.0.0.1; "
+                           "another program holds them")
 
 
 def _args(spec, port: int, run_dir: Path, n_clients: int) -> list[str]:
@@ -114,19 +133,33 @@ def _records(scn, handles, run_dir: Path, killed: frozenset | set = frozenset())
     """Exit codes count only for processes that exited on their own; ones the runner killed read None."""
     recs = []
     for spec in scn.processes:
-        crashes = [json.loads(p.read_text()) for p in sorted(run_dir.glob(f"{spec.name}.*.crash.json"))]
+        crashes = [_report(p, {"first_chance": True, "frames": []})
+                   for p in sorted(run_dir.glob(f"{spec.name}.*.crash.json"))]
         hang_f = run_dir / f"{spec.name}.hang.json"
         log_f = run_dir / f"{spec.name}.log"
         tail = log_f.read_text(errors="replace").splitlines()[-80:] if log_f.exists() else []
         h = handles.get(spec.name)
         recs.append(ProcessRecord(spec.name, spec.role, h.exit_code() if h and spec.name not in killed else None, crashes,
-                                  json.loads(hang_f.read_text()) if hang_f.exists() else None, tail))
+                                  _report(hang_f, {"frames": []}) if hang_f.exists() else None, tail))
     return recs
+
+
+def _report(p: Path, fallback: dict) -> dict:
+    """A crash or hang report. One that cannot be read (half written, locked, bad bytes) is an
+    "unreadable report", never a crash of the runner. An unreadable crash report counts as
+    first-chance, so it is graded a crash only if the process then dies."""
+    try:
+        r = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        if isinstance(r, dict):
+            return r
+    except (ValueError, OSError):
+        pass
+    return {"unreadable": p.name, **fallback}
 
 
 def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: float = 2.0) -> RunResult:
     launcher = launcher or launch.RealLauncher()
-    _preconditions(runs_dir)
+    preconditions(runs_dir, len(scn.processes))
     base_id = f"{datetime.now():%Y%m%d-%H%M%S}-{scn.name}"
     try:
         run_id, n = base_id, 1

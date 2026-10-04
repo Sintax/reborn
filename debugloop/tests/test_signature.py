@@ -33,3 +33,8 @@ def test_other_kinds():
 def test_slug_is_filename_safe():
     assert signature.slug("crash:0xc0000005:reborn>battleborn+0x99") == \
         "crash_0xc0000005_reborn_battleborn+0x99"
+
+def test_windows_ui_and_network_modules_are_skipped():
+    for mod in ("user32", "win32u", "gdi32", "d3d11", "dxgi", "ws2_32", "mswsock", "combase"):
+        o = O("crash", code="0xC0000005", frame=f"{mod.upper()}+0x10|battleborn+0x99")
+        assert signature.make(o, scn()) == "crash:0xc0000005:battleborn+0x99", mod

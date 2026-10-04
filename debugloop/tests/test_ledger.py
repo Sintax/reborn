@@ -21,3 +21,13 @@ def test_open_bugs_sorted_by_count(tmp_path):
     L = ledger.Ledger.load(tmp_path)
     L.record("a", "s", "r"); L.record("b", "s", "r"); L.record("b", "s", "r2")
     assert [b.signature for b in L.open_bugs()] == ["b", "a"]
+
+import pytest
+from debugloop.state import StateCorrupt
+
+@pytest.mark.parametrize("content", [b"{half", b'{"a": "\xff"}', b"[1, 2]", b'{"a": {"nope": 1}}'])
+def test_corrupt_ledger_raises_not_resets(tmp_path, content):
+    (tmp_path / "ledger.json").write_bytes(content)
+    with pytest.raises(StateCorrupt):
+        ledger.Ledger.load(tmp_path)
+    assert (tmp_path / "ledger.json").read_bytes() == content

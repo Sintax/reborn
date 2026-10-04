@@ -91,3 +91,15 @@ def test_deploy_into_wrong_folder_changes_nothing(tmp_path):
     with pytest.raises(deploy.DeployError):
         deploy.deploy(dll, win64)
     assert not (win64 / "reborn.dll").exists()
+
+
+def test_locked_dll_is_deploy_error(tmp_path, monkeypatch):
+    win64 = tmp_path / "Win64"; win64.mkdir()
+    (win64 / "Battleborn.exe").write_bytes(b"exe")
+    dll = tmp_path / "reborn.dll"; dll.write_bytes(b"new")
+
+    def locked(*a, **k):
+        raise PermissionError(13, "The process cannot access the file", str(win64 / "reborn.dll"))
+    monkeypatch.setattr(deploy.shutil, "copy2", locked)
+    with pytest.raises(deploy.DeployError, match="cannot access"):
+        deploy.deploy(dll, win64)

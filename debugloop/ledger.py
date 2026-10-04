@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config
-from .state import atomic_write
+from .state import StateCorrupt, atomic_write
 
 
 def _now() -> str:
@@ -34,7 +34,10 @@ class Ledger:
         p = directory / "ledger.json"
         bugs = {}
         if p.exists():
-            bugs = {k: Bug(**v) for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+            try:
+                bugs = {k: Bug(**v) for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+            except (ValueError, TypeError, AttributeError) as e:
+                raise StateCorrupt(f"{p} is unreadable: {e}. Fix or delete it by hand.") from e
         return cls(directory, bugs)
 
     def get(self, sig: str) -> Bug | None:

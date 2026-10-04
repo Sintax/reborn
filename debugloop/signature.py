@@ -3,7 +3,8 @@ import re
 from .outcome import Outcome
 from .scenario import Scenario
 
-SYSTEM = ("ntdll", "kernelbase", "kernel32", "ucrtbase", "vcruntime140", "msvcp140")
+SYSTEM = ("ntdll", "kernelbase", "kernel32", "ucrtbase", "vcruntime140", "msvcp140",
+          "user32", "win32u", "gdi32", "d3d11", "dxgi", "ws2_32", "mswsock", "combase")
 
 
 def _norm(frame: str) -> str:

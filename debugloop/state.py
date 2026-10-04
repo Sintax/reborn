@@ -34,6 +34,7 @@ class LoopState:
     stopped_reason: str | None = None
     bug_phase: str | None = None          # phase the current bug happened in
     bug_elapsed_s: float = 0.0            # how far into the run it happened
+    bug_head: str | None = None           # git HEAD the loop expects while the bug is open
 
     @classmethod
     def load(cls, directory: Path = config.STATE_DIR) -> "LoopState":
@@ -42,7 +43,7 @@ class LoopState:
             return cls()
         try:
             return cls(**json.loads(p.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, TypeError) as e:
+        except (ValueError, TypeError) as e:   # ValueError covers bad JSON and bad UTF-8
             raise StateCorrupt(f"{p} is unreadable: {e}. Fix or delete it by hand.") from e
 
     def save(self, directory: Path = config.STATE_DIR) -> None:

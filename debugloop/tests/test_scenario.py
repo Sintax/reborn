@@ -52,3 +52,10 @@ def test_real_scenarios_load_and_cover_ladder():
         assert scenario.ladder(step), f"no scenario for step {step}"
         assert scenario.ladder(step, smoke=True), f"no smoke scenario for step {step}"
     assert scenario.find_scenario("selftest-crash").step == 0
+
+
+def test_smoke_limits_leave_room_past_the_startup_timeout():
+    from debugloop.outcome import STARTUP_TIMEOUT_S
+    for s in scenario.load_all():
+        if s.smoke:
+            assert s.time_limit_s >= 270 > STARTUP_TIMEOUT_S, s.name

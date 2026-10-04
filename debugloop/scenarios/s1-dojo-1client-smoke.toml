@@ -1,7 +1,7 @@
 name = "s1-dojo-1client-smoke"
 step = 1
 smoke = true
-time_limit_s = 180
+time_limit_s = 270
 pass_when = "survive"
 required_passes = 1
 expect_map = "Dojo_P"

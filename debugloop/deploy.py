@@ -65,6 +65,14 @@ def ensure_serverborn(win64: Path = config.WIN64) -> Path:
 
 
 def deploy(dll: Path = config.MOD_DLL, win64: Path = config.WIN64) -> DeployResult:
+    """A locked or unreadable file (the game still holding reborn.dll, say) is a DeployError."""
+    try:
+        return _deploy(dll, win64)
+    except OSError as e:
+        raise DeployError(f"cannot deploy to {win64}: {e}") from e
+
+
+def _deploy(dll: Path, win64: Path) -> DeployResult:
     _require_game_exe(win64)   # fail before touching anything if this is not the game folder
     r = DeployResult()
     target = win64 / "reborn.dll"

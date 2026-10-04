@@ -261,3 +261,35 @@ def test_multiplayer_args_save_memory_solo_keeps_its_resolution(tmp_path):
     assert "-ResX=640" in client and "-ResY=360" in client
     assert "-ResX=960" not in client and "-ResY=540" not in client
     assert "-ResX=960" in solo and "-ResY=540" in solo
+
+
+def test_unreadable_reports_do_not_crash_the_runner(tmp_path):
+    (tmp_path / "c1.1.crash.json").write_bytes(b'{"code": "\xff\xfe')
+    (tmp_path / "c1.hang.json").write_bytes(b"\xff not json")
+    recs = run._records(scn(), {}, tmp_path)
+    assert recs[0].crash_reports == [{"unreadable": "c1.1.crash.json", "first_chance": True, "frames": []}]
+    assert recs[0].hang_report == {"unreadable": "c1.hang.json", "frames": []}
+
+
+def test_preconditions_refuse_a_debug_port_already_in_use(tmp_path, monkeypatch):
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    try:
+        monkeypatch.setattr(run.config, "FIRST_DEBUG_PORT", s.getsockname()[1] - 1)
+        run.preconditions(tmp_path, 1)   # only the port below is used: fine
+        with pytest.raises(run.HarnessError, match=str(s.getsockname()[1])):
+            run.preconditions(tmp_path, 2)
+    finally:
+        s.close()
+
+
+def test_preconditions_free_ports_pass(tmp_path, monkeypatch):
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    monkeypatch.setattr(run.config, "FIRST_DEBUG_PORT", port)
+    run.preconditions(tmp_path, 1)
