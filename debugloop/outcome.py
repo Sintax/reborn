@@ -77,12 +77,17 @@ def classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
         last = [s for s in samples if s.name == name][-3:]
         if len(last) == 3 and all(s.http_status == 503 for s in last):
             return Outcome("hang", "game_thread_unresponsive", name, phase, "unknown")
-    # Check server clean exit first (exit 0 + match_ended + pass_when=="match_end")
-    # to avoid depending on process list order.
+    # Check for any non-zero exit first (must fail the pass check)
+    for r in procs:
+        if r.exit_code is not None and r.exit_code != 0:
+            return Outcome("exit", "", r.name, phase, code=str(r.exit_code))
+    # Check server clean exit (exit 0 + match_ended + pass_when=="match_end")
+    # Only if no other process has non-zero exit.
     for r in procs:
         if (r.role == "server" and r.exit_code == 0 and match_ended
                 and scn.pass_when == "match_end"):
             return Outcome("pass", "match_end", r.name, phase)
+    # Check for any zero exit
     for r in procs:
         if r.exit_code is not None:
             return Outcome("exit", "", r.name, phase, code=str(r.exit_code))

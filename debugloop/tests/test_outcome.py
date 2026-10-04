@@ -102,10 +102,21 @@ def test_mid_run_exit_zero_with_first_chance():
     assert o.kind == "exit" and o.code == "0"
 
 def test_exit_pass_priority_with_client_first():
-    # Verify server pass check doesn't depend on process list order
+    # Both client and server exit 0 at match end; expect pass.
+    # With client listed first, verifies we check non-zero exits first (not in order).
     r_client_first = [
-        ProcessRecord("c1", "client", None, [], None, []),
+        ProcessRecord("c1", "client", 0, [], None, []),
         ProcessRecord("server", "server", 0, [], None, [])
     ]
     o = outcome.classify(scn("match_end"), pair(1), r_client_first, 100, True)
     assert o.kind == "pass"
+
+def test_server_pass_blocked_by_client_non_zero_exit():
+    # Client exits -1, server exits 0 at match end; expect exit:-1 (not pass).
+    # Non-zero client exit blocks server's pass, regardless of order.
+    r = [
+        ProcessRecord("c1", "client", -1, [], None, []),
+        ProcessRecord("server", "server", 0, [], None, [])
+    ]
+    o = outcome.classify(scn("match_end"), pair(1), r, 100, True)
+    assert o.kind == "exit" and o.code == "-1"
