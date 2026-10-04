@@ -24,6 +24,8 @@ namespace Overlay {
 
     void OpenSaveManager();
 
+    void LockInCharacter(int i);
+
     std::string GetItemDisplayName(const Metagame::Item* item);
 
     void Render();

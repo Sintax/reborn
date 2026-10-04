@@ -97,6 +97,26 @@ namespace Overlay {
         ppc->ServerPlayerSelectClass(L"", L"");
     }
 
+    void LockInCharacter(int i) {
+        Globals::CharacterSelectHasLockedIn = true;
+
+        // We're on the client here, so we should only ever have one PPC (aside from the CDO), so this *shouldn't* break. TODO refactor tho
+        APoplarPlayerController* ppc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
+
+        ppc->ServerCharacterSelectInput(i);
+
+        ppc->ServerSetHasReceivedEntitlements();
+        ppc->eventServerSelectCharacter(nullptr, nullptr, nullptr, true);
+        ppc->ServerPlayerSelectClass(L"", L"");
+
+        ppc->ServerCharacterSelectInput(i);
+
+        Globals::selectedCharacter = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[i]);
+
+        std::thread t(UnfuckCharacterSelect, ppc, i);
+        t.detach();
+    }
+
     void Render() {
         if (Globals::LaunchSequenceState > Globals::ELaunchSequenceState::NotOpen) {
             ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -334,23 +354,7 @@ namespace Overlay {
                     if (ImGui::BeginTabItem("Character Select")) {
                         for (int i = 0; i < 30; i++) {
                             if (ImGui::Button(("Lock In " + Constants::CharacterSelectCharacterTable[i]).c_str())) {
-                                Globals::CharacterSelectHasLockedIn = true;
-
-                                // We're on the client here, so we should only ever have one PPC (aside from the CDO), so this *shouldn't* break. TODO refactor tho
-                                APoplarPlayerController* ppc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
-
-                                ppc->ServerCharacterSelectInput(i);
-
-                                ppc->ServerSetHasReceivedEntitlements();
-                                ppc->eventServerSelectCharacter(nullptr, nullptr, nullptr, true);
-                                ppc->ServerPlayerSelectClass(L"", L"");
-
-                                ppc->ServerCharacterSelectInput(i);
-
-                                Globals::selectedCharacter = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[i]);
-
-                                std::thread t(UnfuckCharacterSelect, ppc, i);
-                                t.detach();
+                                LockInCharacter(i);
                             }
                         }
 
