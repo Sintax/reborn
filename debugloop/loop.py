@@ -1,13 +1,14 @@
 import argparse
 import subprocess
 import sys
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from . import analyze, build, config, deploy, run, scenario, signature
 from .ledger import Ledger
-from .state import LoopState, atomic_write
+from .state import LoopState, StateCorrupt, atomic_write
 
 MAX_ATTEMPTS = 5
 MAX_HARNESS_ERRORS = 3
@@ -15,6 +16,8 @@ ALLOWED = ("reborn/", "gamecontroller/")
 FORBIDDEN = ("reborn/BB/",)
 REQUIRED_BRANCH = "agent/autofix"
 PHASE_ORDER = {"startup": 0, "playing": 1}
+REGRESSION_SCENARIO = "s0-solo-dojo-smoke"   # re-run after every fix commit
+NOTES_DIR = "docs/notes/"
 OK, HARNESS, STOPPED, LADDER_DONE, GAVE_UP, FIX_NEEDED, ATTEMPT_FAILED = 0, 2, 3, 4, 5, 10, 11
 
 
@@ -27,6 +30,9 @@ def _branch() -> str:
     return _git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
 
 
+_preconditions = run.preconditions   # the Deps field named `run` hides the module inside the class
+
+
 @dataclass
 class Deps:
     run: Callable = field(default=run.run_scenario)
@@ -37,6 +43,7 @@ class Deps:
     state_dir: Path = config.STATE_DIR
     runs_dir: Path = config.RUNS_DIR
     branch: Callable = field(default=_branch)
+    preconditions: Callable = field(default=_preconditions)
 
 
 def _load(d):
@@ -84,6 +91,57 @@ def _touched(d) -> list[str]:
     return [p for p in _changed_paths(d) if not p.startswith("debugloop/")]
 
 
+def _debugloop_edits(d) -> list[str]:
+    return [p for p in _tracked_dirty(d) if p.startswith("debugloop/")]
+
+
+def _head(d) -> str:
+    return d.git(["rev-parse", "HEAD"]).strip()
+
+
+def _head_moved(st, d) -> int | None:
+    """Only the loop commits while a bug is open. Any other commit (a fixer that committed)
+    would slip past every check, so a human looks first."""
+    if st.bug_head is None:
+        return None
+    head = _head(d)
+    if head == st.bug_head:
+        return None
+    print(f"STOPPED: needs a human: HEAD moved from {st.bug_head[:12]} to {head[:12]} while bug "
+          f"{st.current_bug} was open; something other than the loop committed. Check the new "
+          "commits, then run `python -m debugloop.loop reset-stop` to accept HEAD as it is now.")
+    return STOPPED
+
+
+def _restore_head_dll(d) -> None:
+    """Build HEAD and deploy it, so a failed attempt's DLL never stays in the game folder.
+    Failing here is only a warning: `next` builds and deploys HEAD again before it runs."""
+    try:
+        b = d.build()
+        if not b.ok:
+            print(f"WARNING: could not rebuild HEAD; `next` will retry.\n{b.output[-1500:]}")
+            return
+        d.deploy()
+    except Exception as e:   # the attempt is already recorded; never lose that over this
+        print(f"WARNING: could not put HEAD's DLL back in the game folder: {e}. `next` will retry.")
+
+
+def _check_preconditions(st, d, scns) -> int | None:
+    try:
+        d.preconditions(d.runs_dir, max(len(s.processes) for s in scns))
+    except run.HarnessError as e:
+        return _harness_error(st, d, str(e))
+    return None
+
+
+def _deploy_or_harness(st, d) -> int | None:
+    try:
+        d.deploy()
+    except deploy.DeployError as e:
+        return _harness_error(st, d, f"deploy failed: {e}")
+    return None
+
+
 def _guard_branch(d):
     try:
         b = d.branch()
@@ -123,21 +181,35 @@ def _prune_dumps(d, bug) -> None:
             dmp.unlink()
 
 
-def _write_brief(d, st, bug, r, triage: Path) -> None:
-    atomic_write(d.state_dir / "brief.md", "\n".join([
+def _write_brief(d, st, bug, last_failure: str | None = None) -> None:
+    """Written fresh each time, from the ledger: the run folder is the bug's latest failed run."""
+    run_dir = d.runs_dir / bug.runs[-1]
+    leftovers = [p for p in _changed_paths(d) if p.startswith(ALLOWED)]
+    lines = [
         "# Fix brief", "",
         f"- Bug: `{bug.signature}` (seen {bug.count} times in {', '.join(bug.scenarios)})",
         f"- Attempt: {st.attempts_on_current + 1} of {MAX_ATTEMPTS}",
-        f"- Run folder: `{r.run_dir}`",
-        f"- Triage (read first): `{triage}`",
+        f"- Run folder (latest failed run of this bug): `{run_dir}`",
+        f"- Triage (read first): `{run_dir / 'triage.md'}`",
         f"- Earlier attempts: diffs in `{d.state_dir / 'attempts' / signature.slug(bug.signature)}`",
-        "", "## History", "", *[f"- {n}" for n in bug.notes], "",
+        f"- Also read every file in {NOTES_DIR} if present (`{config.REPO / NOTES_DIR}`).", ""]
+    if leftovers:
+        lines += ["## Warning: uncommitted changes already in the tree", "",
+                  "These files were already changed when this brief was written, probably left by "
+                  "an earlier fixer. They are not part of HEAD. Check them before you build on them:", "",
+                  *[f"- `{p}`" for p in leftovers[:20]], ""]
+    lines += [
+        "## History", "", *[f"- {n}" for n in bug.notes], "",
         "## Rules", "",
         "- Edit only `reborn/` (never `reborn/BB/`) and `gamecontroller/`.",
         "- Do not commit, do not start the game, do not touch the game folder.",
         "- Build with `python -m debugloop.loop build` until it prints BUILD OK.",
         f"- Write 2-5 lines in `{d.state_dir / 'attempt_note.md'}`: what you changed and why.",
-        "- Then stop. The loop verifies your fix by running the game.", ""]))
+        "- Then stop. The loop verifies your fix by running the game.", ""]
+    if last_failure:
+        lines += [f"## Attempt {st.attempts_on_current} failed", "", last_failure, "",
+                  f"Now on attempt {st.attempts_on_current + 1} of {MAX_ATTEMPTS}. Try a different idea.", ""]
+    atomic_write(d.state_dir / "brief.md", "\n".join(lines))
 
 
 def _new_failure(st, L, d, scn_name: str, r) -> int:
@@ -154,23 +226,61 @@ def _new_failure(st, L, d, scn_name: str, r) -> int:
     L.save()
     st.current_bug, st.bug_scenario, st.attempts_on_current = bug.signature, scn_name, 0
     st.bug_phase, st.bug_elapsed_s = r.outcome.phase, r.elapsed_s
-    _write_brief(d, st, bug, r, d.triage(r))
+    st.bug_head = _head(d)
+    d.triage(r)
+    _write_brief(d, st, bug)
     st.save(d.state_dir)
     print(f"FIX NEEDED: {bug.signature}  brief: {d.state_dir / 'brief.md'}")
     return FIX_NEEDED
 
 
 def _close_bug(st) -> None:
-    st.current_bug = st.bug_scenario = st.bug_phase = None
+    st.current_bug = st.bug_scenario = st.bug_phase = st.bug_head = None
     st.attempts_on_current, st.bug_elapsed_s = 0, 0.0
 
 
-def _fixed(st, L, d, note: str) -> None:
+def _regression_run(d):
+    """Step 0's smoke test after a fix commit. Returns (failed run or None, harness error or None)."""
+    try:
+        r = d.run(scenario.find_scenario(REGRESSION_SCENARIO))
+    except (run.HarnessError, scenario.ScenarioError) as e:
+        return None, str(e)
+    if r.outcome.kind == "pass":
+        return None, None
+    if not r.signature:
+        return None, f"run {r.run_id} ended '{r.outcome.kind}' with no signature"
+    return r, None
+
+
+def _revert_fix(st, L, d, fix: str, r, note: str) -> int:
+    """The fix broke step 0: undo it with a new commit (never a reset) and count a failed attempt."""
+    diff = d.git(["diff", f"{fix}~1", fix, "--", *ALLOWED])
+    d.git(["revert", "--no-edit", fix])
+    st.bug_head = _head(d)
+    _record_failed_run(d, L, r)
+    triage = d.triage(r)
+    print(f"REGRESSION: the fix broke {REGRESSION_SCENARIO}; reverted {fix[:12]}")
+    return _attempt_failed(st, L, d, f"fix broke step 0 smoke: {r.signature} in run {r.run_id} "
+                                     f"(triage: {triage}). Note was: {note}", diff=diff)
+
+
+def _fixed(st, L, d, note: str, ran=frozenset()) -> int:
+    """Commit the fix, check step 0 still passes, close the bug. `ran` holds the scenarios this
+    verify already ran and judged, so step 0's smoke test is not run (and judged) twice."""
     sig = st.current_bug
+    smoke_err = None
     if _has_changes(d):
         d.git(["add", "-A", "--", *[p for p in _touched(d) if p.startswith(ALLOWED)]])
         d.git(["commit", "-m", f"fix: {sig} [bb-autofix]\n\n{note}\n\n"
                                "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"])
+        fix = st.bug_head = _head(d)
+        st.save(d.state_dir)
+        if REGRESSION_SCENARIO not in ran:
+            broke, smoke_err = _regression_run(d)
+            if broke is not None:
+                return _revert_fix(st, L, d, fix, broke, note)
+            if smoke_err:
+                note += f" (step 0 smoke check could not run: {smoke_err})"
     else:
         note += " (passed with no code change - may be flaky)"
     L.set_status(sig, "fixed", note)
@@ -179,9 +289,12 @@ def _fixed(st, L, d, note: str) -> None:
     st.save(d.state_dir)
     _clear_note(d)
     print(f"FIXED {sig}")
+    if smoke_err:
+        return _harness_error(st, d, f"step 0 smoke check after the fix could not run: {smoke_err}")
+    return OK
 
 
-def _attempt_failed(st, L, d, why: str) -> int:
+def _attempt_failed(st, L, d, why: str, diff: str | None = None) -> int:
     sig = st.current_bug
     st.attempts_on_current += 1
     L.get(sig).attempts += 1
@@ -193,7 +306,9 @@ def _attempt_failed(st, L, d, why: str) -> int:
     while diff_file.exists():   # never overwrite an earlier diff
         diff_file = folder / f"{st.attempts_on_current}-{n}.diff"
         n += 1
-    diff_file.write_text(d.git(["diff", "HEAD", "--", *ALLOWED]), encoding="utf-8")
+    if diff is None:
+        diff = d.git(["diff", "HEAD", "--", *ALLOWED])
+    diff_file.write_text(diff, encoding="utf-8")
     touched = _touched(d)
     if touched:
         # Only the paths the attempt touched: never sweep up debugloop/ or the loop's own state.
@@ -205,13 +320,13 @@ def _attempt_failed(st, L, d, why: str) -> int:
         L.save()
         _close_bug(st)
         st.save(d.state_dir)
+        _restore_head_dll(d)
         print(f"GAVE UP {sig}")
         return GAVE_UP
     L.save()
     st.save(d.state_dir)
-    with open(d.state_dir / "brief.md", "a", encoding="utf-8") as f:
-        f.write(f"\n## Attempt {st.attempts_on_current} failed\n\n{why}\n\n"
-                f"Now on attempt {st.attempts_on_current + 1} of {MAX_ATTEMPTS}. Try a different idea.\n")
+    _write_brief(d, st, L.get(sig), why)
+    _restore_head_dll(d)
     print(f"ATTEMPT FAILED ({st.attempts_on_current}/{MAX_ATTEMPTS}): {why[:300]}")
     return ATTEMPT_FAILED
 
@@ -225,10 +340,24 @@ def cmd_next(d: Deps) -> int:
         print(f"STOPPED: {st.stopped_reason}")
         return STOPPED
     if st.current_bug:
+        if st.bug_head is None:   # bug opened by a loop from before bug_head existed
+            st.bug_head = _head(d)
+            st.save(d.state_dir)
         print(f"FIX NEEDED: {st.current_bug}  brief: {d.state_dir / 'brief.md'}")
         return FIX_NEEDED
     scns = scenario.ladder(st.step)
     scn = scns[st.scenario_index % len(scns)]
+    # Test HEAD, never a DLL a failed attempt left in the game folder. MSBuild only rebuilds
+    # what changed, and deploy copies nothing when the deployed DLL already matches the build.
+    blocked = _check_preconditions(st, d, [scn])
+    if blocked is not None:
+        return blocked
+    b = d.build()
+    if not b.ok:
+        return _harness_error(st, d, f"building HEAD failed: {b.output[-1500:]}")
+    blocked = _deploy_or_harness(st, d)
+    if blocked is not None:
+        return blocked
     try:
         r = d.run(scn)
     except run.HarnessError as e:
@@ -278,24 +407,35 @@ def cmd_verify(d: Deps) -> int:
     if not st.current_bug:
         print("nothing to verify")
         return OK
+    moved = _head_moved(st, d)
+    if moved is not None:
+        return moved
+    edited = _debugloop_edits(d)
+    if edited:
+        print(f"STOPPED: needs a human: debugloop/ was edited during a fix ({edited[:5]}). "
+              "The fixer may only edit reborn/ and gamecontroller/. Nothing was stashed.")
+        return STOPPED
     note = _note(d)
     bad = _forbidden(d)
     if bad:
         return _attempt_failed(st, L, d, f"touched forbidden paths {bad}. {note}")
-    b = d.build()
-    if not b.ok:
-        return _attempt_failed(st, L, d, f"build failed: {b.output[-1500:]}")
-    try:
-        d.deploy()
-    except deploy.DeployError as e:
-        return _harness_error(st, d, f"deploy failed: {e}")
     try:
         scn = scenario.find_scenario(st.bug_scenario)
     except scenario.ScenarioError as e:
-        print(f"HARNESS ERROR: {e}")
-        return HARNESS
-    r = None
-    for s in [x for x in (_smoke_of(scn), scn) if x]:
+        return _harness_error(st, d, str(e))
+    to_run = [x for x in (_smoke_of(scn), scn) if x]
+    blocked = _check_preconditions(st, d, to_run)
+    if blocked is not None:
+        return blocked
+    b = d.build()
+    if not b.ok:
+        return _attempt_failed(st, L, d, f"build failed: {b.output[-1500:]}")
+    blocked = _deploy_or_harness(st, d)
+    if blocked is not None:
+        return blocked
+    r, ran = None, set()
+    for s in to_run:
+        ran.add(s.name)
         try:
             r = d.run(s)
         except run.HarnessError as e:
@@ -306,24 +446,32 @@ def cmd_verify(d: Deps) -> int:
             break
     st.harness_errors_in_row = 0
     if r.outcome.kind == "pass":
-        _fixed(st, L, d, note)
-        return OK
-    if r.signature == st.current_bug:
-        _record_failed_run(d, L, r)
-        return _attempt_failed(st, L, d, f"same bug again in run {r.run_id}. Note was: {note}")
+        return _fixed(st, L, d, note, ran)
     later = (PHASE_ORDER.get(r.outcome.phase, 0), r.elapsed_s) > \
             (PHASE_ORDER.get(st.bug_phase or "startup", 0), st.bug_elapsed_s)
-    if later:
-        _fixed(st, L, d, f"{note} (got further; next failure {r.signature})")
+    if r.signature != st.current_bug and later:
+        rc = _fixed(st, L, d, f"{note} (got further; next failure {r.signature})", ran)
+        if rc != OK:
+            return rc
         return _new_failure(st, L, d, r.scenario, r)
     _record_failed_run(d, L, r)
-    return _attempt_failed(st, L, d, f"new, earlier failure {r.signature} in run {r.run_id}. Note was: {note}")
+    triage = d.triage(r)
+    if r.signature == st.current_bug:
+        return _attempt_failed(st, L, d, f"same bug again in run {r.run_id}. Note was: {note}")
+    return _attempt_failed(st, L, d, f"new, earlier failure {r.signature} in run {r.run_id} "
+                                     f"(triage: {triage}). Note was: {note}")
 
 
 def cmd_giveup(d: Deps) -> int:
+    blocked = _guard_branch(d)
+    if blocked is not None:
+        return blocked
     st, L = _load(d)
     if not st.current_bug:
         return OK
+    moved = _head_moved(st, d)
+    if moved is not None:
+        return moved
     st.attempts_on_current = MAX_ATTEMPTS - 1
     return _attempt_failed(st, L, d, "fix agent gave up")
 
@@ -339,6 +487,8 @@ def cmd_status(d: Deps) -> int:
 def cmd_reset_stop(d: Deps) -> int:
     st, _ = _load(d)
     st.stopped_reason, st.harness_errors_in_row = None, 0
+    if st.current_bug:
+        st.bug_head = _head(d)   # accept HEAD as it is now (a checked commit, a harness repair)
     st.save(d.state_dir)
     return OK
 
@@ -349,13 +499,32 @@ def cmd_build(d: Deps) -> int:
     return OK if r.ok else HARNESS
 
 
-def main(argv=None) -> int:
+def _state_corrupt(e: StateCorrupt) -> int:
+    print(f"STOPPED: {e} The loop never resets its own state; a human has to repair or move "
+          "the file before the loop can go on.")
+    return STOPPED
+
+
+def main(argv=None, deps: Deps | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m debugloop.loop")
     ap.add_argument("command", choices=["next", "verify", "giveup", "status", "reset-stop", "build"])
     a = ap.parse_args(argv)
     fn = {"next": cmd_next, "verify": cmd_verify, "giveup": cmd_giveup, "status": cmd_status,
           "reset-stop": cmd_reset_stop, "build": cmd_build}[a.command]
-    return fn(Deps())
+    d = deps or Deps()
+    try:
+        return fn(d)
+    except StateCorrupt as e:
+        return _state_corrupt(e)
+    except Exception as e:
+        # Anything unexpected is a harness error, so three in a row stop the loop.
+        traceback.print_exc(file=sys.stdout)
+        try:
+            st = LoopState.load(d.state_dir)
+        except StateCorrupt as e2:
+            return _state_corrupt(e2)
+        return _harness_error(st, d, f"unexpected Python error (traceback above): "
+                                     f"{type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

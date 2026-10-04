@@ -16,9 +16,10 @@ class FakeGit:
     """`status` is what `git status --porcelain -z` shows while a fix is being attempted.
     The tree is clean until a bug is open, unless always_dirty is set."""
 
-    def __init__(self, status=" M reborn/Hooks.cpp\x00", state_dir=None, always_dirty=False):
+    def __init__(self, status=" M reborn/Hooks.cpp\x00", state_dir=None, always_dirty=False, log=None):
         self.calls, self.status = [], status
         self.state_dir, self.always_dirty = state_dir, always_dirty
+        self.head, self.log = "h0", log if log is not None else []
 
     def _bug_open(self):
         f = self.state_dir / "loop_state.json"
@@ -26,6 +27,11 @@ class FakeGit:
 
     def __call__(self, args):
         self.calls.append(args)
+        self.log.append(args[0])
+        if args[0] == "rev-parse":
+            return self.head + "\n"
+        if args[0] in ("commit", "revert"):
+            self.head = f"h{len(self.calls)}"
         if args[0] == "status":
             return self.status if self.always_dirty or self._bug_open() else ""
         if args[0] == "diff":
@@ -40,8 +46,11 @@ def deps(tmp_path, outcomes, build_ok=True, status=" M reborn/Hooks.cpp\x00", br
          always_dirty=False):
     it = iter(outcomes)
     n = iter(range(1000))
+    log, ran, triaged = [], [], []
 
     def fake_run(scn):
+        log.append("run")
+        ran.append(scn.name)
         o = next(it)
         if isinstance(o, Exception):
             raise o
@@ -53,11 +62,21 @@ def deps(tmp_path, outcomes, build_ok=True, status=" M reborn/Hooks.cpp\x00", br
             (rd / "crash.dmp").write_text("x")
         return RunResult(rid, scn.name, Outcome(kind, phase=phase), sig, rd, elapsed)
 
-    return loop.Deps(run=fake_run, build=lambda: BuildResult(build_ok, "compiler said no", None),
-                     deploy=lambda: None, triage=lambda r: r.run_dir / "triage.md",
-                     git=FakeGit(status, tmp_path / "state", always_dirty),
-                     state_dir=tmp_path / "state", runs_dir=tmp_path / "runs",
-                     branch=lambda: branch)
+    def fake_build():
+        log.append("build")
+        return BuildResult(build_ok, "compiler said no", None)
+
+    def fake_triage(r):
+        triaged.append(r.run_id)
+        return r.run_dir / "triage.md"
+
+    d = loop.Deps(run=fake_run, build=fake_build, deploy=lambda: log.append("deploy"),
+                  triage=fake_triage, git=FakeGit(status, tmp_path / "state", always_dirty, log),
+                  state_dir=tmp_path / "state", runs_dir=tmp_path / "runs",
+                  branch=lambda: branch,
+                  preconditions=lambda runs_dir, n: log.append("preconditions"))
+    d.log, d.ran, d.triaged = log, ran, triaged
+    return d
 
 
 PASS = ("pass", None, "playing", 300)
@@ -122,9 +141,14 @@ def test_forbidden_path_rejected_before_build(tmp_path):
     assert "forbidden" in Ledger.load(d.state_dir).get("exit:3").notes[-1]
 
 
+def _fail_builds(d):
+    d.build = lambda: BuildResult(False, "compiler said no", None)
+
+
 def test_build_failure_is_failed_attempt(tmp_path):
-    d = deps(tmp_path, [BUG], build_ok=False)
+    d = deps(tmp_path, [BUG])
     loop.cmd_next(d)
+    _fail_builds(d)
     assert loop.cmd_verify(d) == 11
     assert "compiler said no" in Ledger.load(d.state_dir).get("exit:3").notes[-1]
 
@@ -202,14 +226,22 @@ def test_non_ascii_path_parsed(tmp_path):
     assert loop._forbidden(d) == []
 
 
-def test_debugloop_change_is_forbidden_and_not_stashed(tmp_path):
+def test_debugloop_edit_during_fix_needs_a_human(tmp_path, capsys):
     status = " M reborn/Hooks.cpp\x00 M debugloop/loop.py\x00"
     d = deps(tmp_path, [BUG], status=status)
     loop.cmd_next(d)
-    assert loop.cmd_verify(d) == 11
-    assert "forbidden" in Ledger.load(d.state_dir).get("exit:3").notes[-1]
-    stash = next(c for c in d.git.calls if c[0] == "stash")
-    assert "debugloop/loop.py" not in stash and "reborn/Hooks.cpp" in stash
+    d.log.clear()
+    assert loop.cmd_verify(d) == 3
+    assert "needs a human: debugloop/ was edited during a fix" in capsys.readouterr().out
+    assert not d.git.did("stash") and "build" not in d.log and "run" not in d.log
+    assert LoopState.load(d.state_dir).attempts_on_current == 0, "not a failed attempt"
+    assert Ledger.load(d.state_dir).get("exit:3").attempts == 0
+
+
+def test_untracked_debugloop_file_does_not_stop_verify(tmp_path):
+    d = deps(tmp_path, [BUG, PASS, PASS], status=" M reborn/Hooks.cpp\x00?? debugloop/scratch.txt\x00")
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 0
 
 
 def test_dumps_limited_to_three_after_failed_attempts(tmp_path):
@@ -268,3 +300,266 @@ def test_no_signature_failure_is_harness_error(tmp_path):
     d = deps(tmp_path, [("exit", None, "playing", 5)])
     assert loop.cmd_next(d) == 2
     assert LoopState.load(d.state_dir).current_bug is None
+
+
+# --- final review fixes -------------------------------------------------------------------
+
+
+def test_next_builds_and_deploys_head_before_running(tmp_path):
+    d = deps(tmp_path, [PASS])
+    assert loop.cmd_next(d) == 0
+    assert d.log == ["preconditions", "build", "deploy", "run"]
+
+
+def test_next_build_failure_is_harness_error(tmp_path):
+    d = deps(tmp_path, [PASS], build_ok=False)
+    assert loop.cmd_next(d) == 2
+    assert "run" not in d.log and "deploy" not in d.log
+    assert LoopState.load(d.state_dir).harness_errors_in_row == 1
+
+
+def test_next_deploy_failure_is_harness_error(tmp_path):
+    d = deps(tmp_path, [PASS])
+
+    def bad_deploy():
+        raise deploy.DeployError("reborn.dll is locked")
+    d.deploy = bad_deploy
+    assert loop.cmd_next(d) == 2
+    assert "run" not in d.log
+    assert LoopState.load(d.state_dir).harness_errors_in_row == 1
+
+
+def test_next_precondition_failure_comes_before_build(tmp_path):
+    d = deps(tmp_path, [PASS])
+
+    def busy(runs_dir, n):
+        raise run.HarnessError("a game process is already running")
+    d.preconditions = busy
+    assert loop.cmd_next(d) == 2
+    assert d.log == []
+
+
+def test_failed_attempt_puts_head_dll_back(tmp_path):
+    d = deps(tmp_path, [BUG, BUG])
+    loop.cmd_next(d)
+    d.log.clear()
+    assert loop.cmd_verify(d) == 11
+    after = d.log[d.log.index("stash"):]
+    assert "build" in after and after.index("build") < after.index("deploy"), d.log
+
+
+def test_giveup_puts_head_dll_back(tmp_path):
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+    d.log.clear()
+    assert loop.cmd_giveup(d) == 5
+    after = d.log[d.log.index("stash"):]
+    assert "build" in after and "deploy" in after
+
+
+def test_giveup_refuses_wrong_branch(tmp_path):
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+    d.branch = lambda: "main"
+    assert loop.cmd_giveup(d) == 3
+    assert LoopState.load(d.state_dir).current_bug == "exit:3"
+    assert not d.git.did("stash")
+
+
+def test_foreign_game_at_verify_exits_2_before_any_deploy(tmp_path, monkeypatch):
+    from debugloop import launch
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+    d.log.clear()
+    d.preconditions = run.preconditions          # the real checks, with a fake game process
+    monkeypatch.setattr(launch, "find_game_processes", lambda: [424242])
+    assert loop.cmd_verify(d) == 2
+    assert "deploy" not in d.log and "build" not in d.log and "run" not in d.log
+    st = LoopState.load(d.state_dir)
+    assert st.harness_errors_in_row == 1 and st.attempts_on_current == 0
+
+
+def test_unexpected_exception_in_main_is_harness_error(tmp_path, capsys):
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+
+    def locked():
+        raise PermissionError(13, "Permission denied", "reborn.dll")
+    d.deploy = locked
+    assert loop.main(["verify"], deps=d) == 2
+    out = capsys.readouterr().out
+    assert "Traceback" in out and "PermissionError" in out
+    st = LoopState.load(d.state_dir)
+    assert st.harness_errors_in_row == 1 and st.current_bug == "exit:3"
+
+
+def test_three_unexpected_exceptions_stop_the_loop(tmp_path):
+    d = deps(tmp_path, [])
+
+    def boom():
+        raise PermissionError(13, "Permission denied", "reborn.dll")
+    d.deploy = boom
+    assert [loop.main(["next"], deps=d) for _ in range(3)] == [2, 2, 3]
+    assert "PermissionError" in LoopState.load(d.state_dir).stopped_reason
+
+
+def test_corrupt_state_stops_and_is_never_reset(tmp_path, capsys):
+    d = deps(tmp_path, [PASS])
+    d.state_dir.mkdir(parents=True)
+    f = d.state_dir / "loop_state.json"
+    f.write_bytes(b"{half \xff")
+    for cmd in ("next", "verify", "giveup", "reset-stop"):
+        assert loop.main([cmd], deps=d) == 3
+    assert "loop_state.json" in capsys.readouterr().out
+    assert f.read_bytes() == b"{half \xff"
+    assert "run" not in d.log
+
+
+def test_corrupt_ledger_stops(tmp_path):
+    d = deps(tmp_path, [PASS])
+    d.state_dir.mkdir(parents=True)
+    (d.state_dir / "ledger.json").write_text("{half")
+    assert loop.main(["next"], deps=d) == 3
+    assert (d.state_dir / "ledger.json").read_text() == "{half"
+
+
+def test_head_recorded_when_bug_opens_and_after_commit(tmp_path):
+    d = deps(tmp_path, [BUG, ("crash", "crash:0xc0000005:battleborn+0x10", "playing", 200)])
+    loop.cmd_next(d)
+    assert LoopState.load(d.state_dir).bug_head == "h0"
+    assert loop.cmd_verify(d) == 10            # fix committed, later bug opened
+    assert LoopState.load(d.state_dir).bug_head == d.git.head != "h0"
+
+
+def test_head_moved_stops_verify_and_giveup(tmp_path, capsys):
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+    d.git.head = "fixer-commit"
+    assert loop.cmd_verify(d) == 3
+    assert loop.cmd_giveup(d) == 3
+    assert "HEAD moved" in capsys.readouterr().out
+    st = LoopState.load(d.state_dir)
+    assert st.attempts_on_current == 0 and st.current_bug == "exit:3"
+    assert not d.git.did("stash") and not d.git.did("commit")
+
+
+def test_reset_stop_accepts_head_as_it_is_now(tmp_path):
+    d = deps(tmp_path, [BUG, BUG])
+    loop.cmd_next(d)
+    d.git.head = "harness-repair-commit"
+    assert loop.cmd_reset_stop(d) == 0
+    assert LoopState.load(d.state_dir).bug_head == "harness-repair-commit"
+    assert loop.cmd_verify(d) == 11
+
+
+def test_next_records_head_for_a_bug_opened_by_an_older_loop(tmp_path):
+    d = deps(tmp_path, [])
+    LoopState(step=1, current_bug="timeout:startup", bug_scenario="s1-dojo-1client",
+              attempts_on_current=1).save(d.state_dir)
+    assert loop.cmd_next(d) == 10
+    assert LoopState.load(d.state_dir).bug_head == "h0"
+
+
+def test_missing_scenario_in_verify_counts_as_harness_error(tmp_path):
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+    st = LoopState.load(d.state_dir)
+    st.bug_scenario = "no-such-scenario"
+    st.save(d.state_dir)
+    assert [loop.cmd_verify(d) for _ in range(3)] == [2, 2, 3]
+
+
+def test_brief_points_at_latest_failed_run_and_docs_notes(tmp_path):
+    d = deps(tmp_path, [BUG, BUG])
+    loop.cmd_next(d)
+    brief = (d.state_dir / "brief.md").read_text()
+    assert str(tmp_path / "runs" / "r0") in brief
+    assert loop.cmd_verify(d) == 11
+    brief = (d.state_dir / "brief.md").read_text()
+    assert str(tmp_path / "runs" / "r1") in brief and str(tmp_path / "runs" / "r0") not in brief
+    assert str(tmp_path / "runs" / "r1" / "triage.md") in brief
+    assert "Attempt 1 failed" in brief and "same bug again" in brief
+    assert "Attempt: 2 of 5" in brief and "read every file in docs/notes/ if present" in brief
+
+
+def test_failed_verify_runs_get_triage(tmp_path):
+    d = deps(tmp_path, [BUG, BUG, ("timeout", "timeout:startup", "startup", 240)])
+    loop.cmd_next(d)
+    loop.cmd_verify(d)
+    loop.cmd_verify(d)
+    assert d.triaged == ["r0", "r1", "r2"]
+
+
+def test_brief_warns_about_leftover_changes(tmp_path):
+    d = deps(tmp_path, [BUG], status="?? reborn/Leftover.cpp\x00", always_dirty=True)
+    assert loop.cmd_next(d) == 10
+    brief = (d.state_dir / "brief.md").read_text()
+    assert "uncommitted" in brief and "reborn/Leftover.cpp" in brief
+
+
+def test_clean_tree_brief_has_no_leftover_warning(tmp_path):
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+    assert "uncommitted" not in (d.state_dir / "brief.md").read_text()
+
+
+def _step1(d):
+    LoopState(step=1).save(d.state_dir)
+
+
+def test_fix_that_breaks_step0_smoke_is_reverted(tmp_path):
+    d = deps(tmp_path, [BUG, PASS, PASS, ("exit", "exit:7", "playing", 30)])
+    _step1(d)
+    assert loop.cmd_next(d) == 10
+    d.log.clear()
+    assert loop.cmd_verify(d) == 11
+    assert d.ran[-1] == "s0-solo-dojo-smoke"
+    fix_commit = next(i for i, c in enumerate(d.git.calls) if c[0] == "commit")
+    revert = next(c for c in d.git.calls if c[0] == "revert")
+    assert revert[:2] == ["revert", "--no-edit"] and not d.git.did("reset")
+    assert fix_commit < d.git.calls.index(revert)
+    after = d.log[d.log.index("revert"):]
+    assert "build" in after and "deploy" in after, "HEAD's DLL goes back in the game folder"
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug == "exit:3" and st.attempts_on_current == 1
+    assert st.bug_head == d.git.head
+    bug = Ledger.load(d.state_dir).get("exit:3")
+    assert bug.status == "fixing" and "fix broke step 0 smoke" in bug.notes[-1]
+
+
+def test_fix_that_keeps_step0_smoke_passing_is_kept(tmp_path):
+    d = deps(tmp_path, [BUG, PASS, PASS, PASS])
+    _step1(d)
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 0
+    assert d.ran[-1] == "s0-solo-dojo-smoke"
+    assert not d.git.did("revert")
+    assert Ledger.load(d.state_dir).get("exit:3").status == "fixed"
+
+
+def test_step0_smoke_not_rerun_when_verify_just_passed_it(tmp_path):
+    d = deps(tmp_path, [BUG, PASS, PASS])
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 0
+    assert d.ran == ["s0-solo-dojo", "s0-solo-dojo-smoke", "s0-solo-dojo"]
+
+
+def test_step0_check_that_cannot_run_keeps_the_fix_and_counts_harness_error(tmp_path):
+    d = deps(tmp_path, [BUG, PASS, PASS, run.HarnessError("port busy")])
+    _step1(d)
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 2
+    assert d.git.did("commit") and not d.git.did("revert")
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug is None and st.harness_errors_in_row == 1
+    assert "could not run" in Ledger.load(d.state_dir).get("exit:3").notes[-1]
+
+
+def test_progress_whose_fix_breaks_step0_is_reverted_and_no_new_bug_opens(tmp_path):
+    d = deps(tmp_path, [BUG, ("crash", "crash:0xc0000005:battleborn+0x10", "playing", 200),
+                        ("exit", "exit:7", "playing", 30)])
+    _step1(d)
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 11
+    assert d.git.did("revert")
+    assert LoopState.load(d.state_dir).current_bug == "exit:3"
