@@ -58,6 +58,28 @@ def _phase(scn: Scenario, samples: list[Sample]) -> tuple[str, int]:
 
 def classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
              elapsed_s: float, match_ended: bool) -> Outcome:
+    o = _classify(scn, samples, procs, elapsed_s, match_ended)
+    # Outcomes decided at or after the desync check get a note when the check was blind.
+    if o.kind in ("desync", "pass", "timeout", "running") or o.code == "wrong_map":
+        phase, start = _phase(scn, samples)
+        if phase == "playing":
+            roles = {p.name: p.role for p in scn.processes}
+            missing = _missing_unique_id(roles, samples[start:])
+            if missing:
+                note = "no unique_id from " + ",".join(missing) + " (desync matched by name)"
+                o.detail = f"{o.detail}; {note}" if o.detail else note
+    return o
+
+
+def _missing_unique_id(roles: dict[str, str], play: list[Sample]) -> list[str]:
+    """Clients that reported a pawn_location but no unique_id."""
+    return sorted({s.name for s in play
+                   if roles.get(s.name) == "client" and s.state
+                   and s.state.get("pawn_location") and not s.state.get("unique_id")})
+
+
+def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
+              elapsed_s: float, match_ended: bool) -> Outcome:
     phase, start = _phase(scn, samples)
     roles = {p.name: p.role for p in scn.processes}
 

@@ -142,3 +142,12 @@ def test_server_pass_blocked_by_client_non_zero_exit():
     ]
     o = outcome.classify(scn("match_end"), pair(1), r, 100, True)
     assert o.kind == "exit" and o.code == "-1"
+
+def test_missing_unique_id_is_noted_on_outcome():
+    o = outcome.classify(scn(), pair(1) + pair(3), recs(), 900, False)
+    assert o.kind == "pass" and "no unique_id" in o.detail and "c1" in o.detail
+
+def test_present_unique_id_adds_no_note():
+    c = cli(unique_id="01000000000000000000000000000000")
+    o = outcome.classify(scn(), pair(1, c=c) + pair(3, c=c), recs(), 900, False)
+    assert (o.kind, o.detail) == ("pass", "survived")
