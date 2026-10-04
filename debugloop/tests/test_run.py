@@ -93,11 +93,97 @@ def test_refuses_when_foreign_game_running(tmp_path, monkeypatch):
     assert L.started == [], "nothing may be started or killed"
 
 
+def _sleeper():
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
+def _write_active(tmp_path, rec):
+    (tmp_path / "active.json").write_text(json.dumps({"run_id": "old", "pids": {"c1": rec}}))
+
+
 def test_reaps_stale_active_file(tmp_path):
-    stale = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    (tmp_path / "active.json").write_text(json.dumps({"run_id": "old", "pids": {"c1": stale.pid}}))
+    stale = _sleeper()
+    _write_active(tmp_path, run._identity(stale.pid))
     run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5)
     assert stale.wait(timeout=10) is not None
+
+
+def test_does_not_kill_process_with_reused_pid(tmp_path):
+    other = _sleeper()
+    try:
+        rec = run._identity(other.pid)
+        rec["create_time"] -= 3600  # same pid, but a different process started it
+        _write_active(tmp_path, rec)
+        run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5)
+        assert other.poll() is None, "unrelated process must survive"
+        assert not (tmp_path / "active.json").exists()
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_does_not_kill_when_exe_name_differs(tmp_path):
+    other = _sleeper()
+    try:
+        rec = run._identity(other.pid)
+        rec["exe"] = "Battleborn.exe"
+        _write_active(tmp_path, rec)
+        run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5)
+        assert other.poll() is None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_old_format_active_file_kills_nothing(tmp_path):
+    other = _sleeper()
+    try:
+        _write_active(tmp_path, other.pid)  # old format: bare pid
+        run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5)
+        assert other.poll() is None
+        assert not (tmp_path / "active.json").exists()
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_corrupt_active_file_is_deleted_not_fatal(tmp_path):
+    (tmp_path / "active.json").write_text("{not json")
+    r = run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5)
+    assert r.outcome.kind == "pass"
+    assert not (tmp_path / "active.json").exists()
+
+
+def test_same_scenario_twice_in_one_second_gets_distinct_folders(tmp_path, monkeypatch):
+    class Frozen(run.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return run.datetime(2026, 1, 1, 0, 0, 0)
+    monkeypatch.setattr(run, "datetime", Frozen)
+    a = run.run_scenario(scn(2), FakeLauncher(), tmp_path, poll_s=0.5)
+    b = run.run_scenario(scn(2), FakeLauncher(), tmp_path, poll_s=0.5)
+    assert a.run_dir != b.run_dir and b.run_dir.exists()
+
+
+def test_get_state_treats_garbage_as_unreachable(monkeypatch):
+    import http.client
+
+    def boom(*a, **k):
+        raise http.client.BadStatusLine("x")
+    monkeypatch.setattr(run.urllib.request, "urlopen", boom)
+    assert run._get_state(1) == (None, None)
+
+    def bad_unicode(*a, **k):
+        raise UnicodeDecodeError("utf-8", bytes([255]), 0, 1, "bad")
+    monkeypatch.setattr(run.urllib.request, "urlopen", bad_unicode)
+    assert run._get_state(1) == (None, None)
+
+
+def test_unwritable_runs_dir_is_harness_error(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    with pytest.raises(run.HarnessError):
+        run.run_scenario(scn(), FakeLauncher(), blocker / "runs", poll_s=0.5)
 
 
 def test_passing_run_deletes_dumps(tmp_path):

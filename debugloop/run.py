@@ -1,5 +1,7 @@
 import argparse
+import http.client
 import json
+import os
 import shutil
 import sys
 import time
@@ -8,6 +10,8 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+
+import psutil
 
 from . import config, launch, scenario, signature
 from .outcome import STARTUP_TIMEOUT_S, Outcome, ProcessRecord, Sample, classify
@@ -33,30 +37,65 @@ def _get_state(port: int) -> tuple[dict | None, int | None]:
             return json.loads(r.read()), r.status
     except urllib.error.HTTPError as e:
         return None, e.code
-    except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError):
+    except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, ValueError):
         return None, None
+
+
+def _identity(pid: int) -> dict | None:
+    """pid + start time + exe name: enough to tell our process from a reused pid."""
+    try:
+        p = psutil.Process(pid)
+        return {"pid": pid, "create_time": p.create_time(), "exe": p.name()}
+    except psutil.Error:
+        return None
+
+
+def _is_same_process(rec) -> bool:
+    if not isinstance(rec, dict) or "create_time" not in rec or "exe" not in rec or "pid" not in rec:
+        return False  # old format or damaged: never kill on a guess
+    try:
+        p = psutil.Process(int(rec["pid"]))
+        return abs(p.create_time() - float(rec["create_time"])) <= 1.0 and p.name() == rec["exe"]
+    except (psutil.Error, ValueError, TypeError):
+        return False
 
 
 def _reap_stale(runs_dir: Path) -> None:
     f = runs_dir / "active.json"
     if not f.exists():
         return
-    for pid in json.loads(f.read_text()).get("pids", {}).values():
-        try:
-            launch.ProcessHandle(pid).kill()
-        except OSError:
-            pass
-    f.unlink()
+    try:
+        recs = json.loads(f.read_text(encoding="utf-8")).get("pids", {}).values()
+    except (ValueError, AttributeError, OSError):
+        print(f"note: {f} was unreadable; deleting it without stopping anything")
+        recs = []
+    for rec in recs:
+        if _is_same_process(rec):
+            try:
+                h = launch.ProcessHandle(int(rec["pid"]))
+            except OSError:
+                continue
+            try:
+                h.kill()
+            finally:
+                h.close()
+    f.unlink(missing_ok=True)
 
 
 def _preconditions(runs_dir: Path) -> None:
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    _reap_stale(runs_dir)
+    try:
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        _reap_stale(runs_dir)
+    except OSError as e:
+        raise HarnessError(f"cannot prepare {runs_dir}: {e}") from e
     foreign = launch.find_game_processes()
     if foreign:
         raise HarnessError(f"a game process is already running (pids {foreign}); "
                            "close it first - the runner only stops games it started")
-    free_mb = shutil.disk_usage(runs_dir).free // (1024 * 1024)
+    try:
+        free_mb = shutil.disk_usage(runs_dir).free // (1024 * 1024)
+    except OSError as e:
+        raise HarnessError(f"cannot check disk space: {e}") from e
     if free_mb < config.MIN_FREE_MB:
         raise HarnessError(f"only {free_mb} MB free disk space")
 
@@ -88,10 +127,21 @@ def _records(scn, handles, run_dir: Path, killed: frozenset | set = frozenset())
 def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: float = 2.0) -> RunResult:
     launcher = launcher or launch.RealLauncher()
     _preconditions(runs_dir)
-    run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{scn.name}"
-    run_dir = runs_dir / run_id
-    run_dir.mkdir(parents=True)
-    shutil.copy2(scn.path, run_dir / "scenario.toml") if scn.path.exists() else None
+    base_id = f"{datetime.now():%Y%m%d-%H%M%S}-{scn.name}"
+    try:
+        run_id, n = base_id, 1
+        while True:
+            run_dir = runs_dir / run_id
+            try:
+                run_dir.mkdir(parents=True)
+                break
+            except FileExistsError:
+                n += 1
+                run_id = f"{base_id}-{n}"
+        if scn.path.exists():
+            shutil.copy2(scn.path, run_dir / "scenario.toml")
+    except OSError as e:
+        raise HarnessError(f"cannot create run folder: {e}") from e
     ports = {p.name: config.FIRST_DEBUG_PORT + i for i, p in enumerate(scn.processes)}
     n_clients = sum(p.role == "client" for p in scn.processes)
     handles: dict[str, launch.ProcessHandle] = {}
@@ -101,7 +151,10 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
     t0 = time.time()
 
     def save_active():
-        active.write_text(json.dumps({"run_id": run_id, "pids": {n: h.pid for n, h in handles.items()}}))
+        pids = {n: _identity(h.pid) or {"pid": h.pid} for n, h in handles.items()}
+        tmp = active.with_name("active.json.tmp")
+        tmp.write_text(json.dumps({"run_id": run_id, "pids": pids}), encoding="utf-8")
+        os.replace(tmp, active)
 
     def poll():
         with open(run_dir / "timeline.jsonl", "a", encoding="utf-8") as tl:
@@ -138,8 +191,10 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
         while True:
             poll()
             elapsed = time.time() - t0
-            server_log = run_dir / "server.log"
-            match_ended = server_log.exists() and "Match ended" in server_log.read_text(errors="replace")
+            match_ended = any(
+                (run_dir / f"{sp.name}.log").exists()
+                and "Match ended" in (run_dir / f"{sp.name}.log").read_text(errors="replace")
+                for sp in servers)
             o = classify(scn, samples, _records(scn, handles, run_dir, killed), elapsed, match_ended)
             if o.kind != "running":
                 break
@@ -149,7 +204,10 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
     finally:
         for n, h in handles.items():
             killed.add(n)  # from here on, exit codes are ours, not the game's
-            h.kill()
+            try:
+                h.kill()
+            finally:
+                h.close()
         active.unlink(missing_ok=True)
 
     sig = signature.make(o, scn)
