@@ -43,11 +43,13 @@ Each step must pass reliably before the AI moves to the next one.
 |---|---|---|
 | 0 | The modded game starts and loads a solo mission | 3 starts in a row |
 | 1 | The server runs and one autopilot player plays 15 minutes on the training map | 3 runs in a row, no crash |
-| 2 | Two autopilot players finish a full co-op story mission | 2 runs in a row |
+| 2 | Two autopilot players play a co-op story mission for 30 minutes: fighting, dying, respawning. No crash, freeze, disconnect, and the server and players must agree on where everyone is. | 2 runs in a row |
 | 3 | A PvP match runs to the end with two autopilot players plus bots | 2 runs in a row |
-| 4 | You and your friend play for real | Your call |
+| 4 | You and your friend play for real, including finishing a story mission | Your call |
 
 Step 4 is the only one that needs people. The AI tells you when step 3 passes.
+
+*Changed 4 Oct while planning:* the autopilot wanders randomly, so it can't complete story objectives. Step 2 now tests 30 minutes of real play, and finishing a mission moves to step 4. PvP matches end on their own because bots play the objective, so step 3 is unchanged.
 
 ### What you'll see while it runs
 
@@ -100,11 +102,17 @@ New files, each with one job:
   - `-rbautoplay`: turns on the autopilot.
   - `-rbdebugport=<port>`: port for the status endpoint (default `0`, meaning off).
   - `-rbrundir=<path>`: where to write logs and dumps.
-  - `-rbtestcrash=<seconds>`: deliberately crash after N seconds. Used only to self-test the crash capture.
+  - `-rbtestcrash=<seconds>` / `-rbtesthang=<seconds>`: deliberately crash or freeze after N seconds. Used only to self-test the crash and hang capture.
+  - `-rbsolomap=<map>`: client starts that map in solo mode, used for step 0.
+  - `-rbcharacter=<index>`: which character the autopilot locks in.
+  - `-rbseed=<n>`: seed for the wandering pattern.
+  - `-rbhangsecs=<n>`: freeze threshold.
 - **`Diagnostics.cpp/.hpp`**:
   - Every existing `printf` also goes to `<rundir>/<instance>.log`, with timestamps and a 500-line in-memory ring buffer.
   - An unhandled-exception filter, plus a vectored handler as backup, writes `<instance>.dmp` with `MiniDumpWriteDump` (MiniDumpWithIndirectlyReferencedMemory, plus thread info). It also writes `<instance>.crash.json` with the exception code, the faulting thread's stack as `module+offset` frames, and the ring buffer.
-  - A watchdog thread detects a frozen game: no engine tick for 20 seconds. It writes a dump and `hang.json` without killing the process.
+  - A watchdog thread detects a frozen game: no engine tick for `-rbhangsecs` seconds (default 60, because map loads block the game thread). It writes a dump and `hang.json` without killing the process.
+  - Fatal exceptions are caught first-chance by a vectored handler: the engine catches crashes itself, so an unhandled-exception filter alone would never fire. Reports carry `first_chance: true`. The runner counts them only if the process then dies or hangs, so exceptions that the anti-tamper layer handles internally are ignored. At most 3 dumps per process.
+  - With no `-rbrundir`, logs and dumps go to `Documents\RebornLogs\`, so human sessions in step 4 also leave evidence.
 - **`DebugServer.cpp/.hpp`**: uses the cpp-httplib copy already in the repo; listens only on `127.0.0.1`.
   - `GET /state` returns JSON: instance, server/client role, uptime, tick count, last-tick time, current map, connection count with per-connection state, replicated actor count, process memory, and player pawn location and health when there is one.
   - `POST /exec` runs a console command and returns. This lets the runner and the AI poke a live game.
@@ -125,9 +133,11 @@ New files, each with one job:
   3. Launches the processes. Clients go through the Steam emulator loader; the exact method is settled by Spike S1 below.
   4. Polls each `/state` every 2 seconds and records a timeline.
   5. Detects the outcome: process exit, `.dmp` present, `hang.json`, a client's connection dropping to zero, or time limit hit.
-  6. Kills everything it started.
-  7. Writes `result.json`: outcome, signature, artifact paths, peak memory per process.
-  8. Exit code: 0 pass, 1 fail, 2 harness error. A harness error is never counted as a game bug.
+  6. Kills everything it started, and only that. Started process ids are recorded in `runs/active.json`. A game the runner did not start, e.g. you playing, makes it refuse with a harness error instead of killing anything.
+  7. Desync check: each client's own player position must be within 1500 units of some player position on the server. Breaking that for 10 seconds straight counts as a `desync` failure.
+  8. Retention: passing runs keep logs but delete dumps, and at most the 3 newest dumps per bug are kept.
+  9. Writes `result.json`: outcome, signature, artifact paths, peak memory per process.
+  10. Exit code: 0 pass, 1 fail, 2 harness error. A harness error is never counted as a game bug.
 - **Signatures**:
   - Crash: `crash:<exception code>:<first frame inside Battleborn.exe or reborn.dll as module+offset>`.
   - Hang: `hang:<module+offset of game thread top frame>`.
