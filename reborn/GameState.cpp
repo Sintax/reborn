@@ -82,7 +82,8 @@ namespace GameState {
             j["network_objects"] = SDKUtils::GetAllOfClass<UActorChannel>().size();
             j["player_locations"] = locs;
         } else {
-            APoplarPlayerController* pc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
+            APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+            if (!pc) pc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
             bool hasPawn = pc && !IsDefault(pc) && pc->Pawn;
             j["has_pawn"] = hasPawn;
             std::string uid = (pc && !IsDefault(pc) && pc->PlayerReplicationInfo)

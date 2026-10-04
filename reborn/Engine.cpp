@@ -1,6 +1,42 @@
 #include "Engine.hpp"
 
+#include <mutex>
+#include <vector>
+
 namespace Engine {
+    namespace {
+        struct DeferredTask {
+            float remaining;
+            std::function<void()> fn;
+        };
+
+        std::mutex g_tasksMutex;
+        std::vector<DeferredTask> g_tasks;
+    }
+
+    void RunOnGameThreadAfter(float seconds, std::function<void()> fn) {
+        std::scoped_lock l(g_tasksMutex);
+        g_tasks.push_back({ seconds, std::move(fn) });
+    }
+
+    void PumpGameThreadTasks(float dt) {
+        std::vector<std::function<void()>> due;
+        {
+            std::scoped_lock l(g_tasksMutex);
+            for (size_t i = 0; i < g_tasks.size();) {
+                g_tasks[i].remaining -= dt;
+                if (g_tasks[i].remaining <= 0.0f) {
+                    due.push_back(std::move(g_tasks[i].fn));
+                    g_tasks.erase(g_tasks.begin() + i);
+                } else {
+                    i++;
+                }
+            }
+        }
+        // Run outside the lock: a task may schedule another one.
+        for (auto& fn : due) fn();
+    }
+
     void* EngineMalloc(size_t size) {
         return reinterpret_cast<void* (*)(size_t)>(Globals::baseAddress + 0xD2E0A0)(size);
     }

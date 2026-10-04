@@ -35,6 +35,23 @@ namespace SDKUtils {
         return ret;
     }
 
+    // The local player's current PlayerController, read from the engine's own ULocalPlayer::Actor.
+    // GetLastOfClass<APoplarPlayerController>() is not safe for this on a client: the engine spawns
+    // a placeholder controller while connecting, swaps in the one the server replicates, and the
+    // old one stays in GObjects (pending kill) until garbage collection frees it. Null when there
+    // is no live local controller.
+    inline APoplarPlayerController* GetLocalPlayerController() {
+        const uint64_t pendingKill = 0x2000000000000000; // RF_PendingKill
+        for (ULocalPlayer* lp : GetAllOfClass<ULocalPlayer>()) {
+            if (!lp || (lp->ObjectFlags & pendingKill)) continue;
+            if (lp->GetFullName().find("Default__") != std::string::npos) continue;
+            APlayerController* pc = lp->Actor;
+            if (pc && !(pc->ObjectFlags & pendingKill) && pc->IsA(APoplarPlayerController::StaticClass()))
+                return reinterpret_cast<APoplarPlayerController*>(pc);
+        }
+        return nullptr;
+    }
+
     template<typename T>
     inline void ListAllOfClass() {
         UClass* theClass = T::StaticClass();

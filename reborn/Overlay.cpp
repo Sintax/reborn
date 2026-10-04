@@ -85,8 +85,17 @@ namespace Overlay {
 
     
 
-    void UnfuckCharacterSelect(APoplarPlayerController* ppc, int characterSelectIDX) {
-        Sleep(3 * 1000);
+    // Re-sends the lock-in 3 s later, on the game thread (it used to be a detached std::thread with
+    // a Sleep). The controller is looked up again instead of being captured: the one that took the
+    // first lock-in can be freed by then (the client swaps its placeholder controller for the
+    // server's), and calling ProcessEvent on it from a foreign thread crashed that thread inside the
+    // ProcessEvent hook while it held the hook's mutex, which froze the game thread for good.
+    void UnfuckCharacterSelect(int characterSelectIDX) {
+        APoplarPlayerController* ppc = SDKUtils::GetLocalPlayerController();
+        if (!ppc) {
+            printf("[GAME] character select re-send skipped: no live local player controller\n");
+            return;
+        }
 
         Globals::CharacterSelectThisPossesionsTheRealOne = true;
 
@@ -100,8 +109,14 @@ namespace Overlay {
     void LockInCharacter(int i) {
         Globals::CharacterSelectHasLockedIn = true;
 
-        // We're on the client here, so we should only ever have one PPC (aside from the CDO), so this *shouldn't* break. TODO refactor tho
-        APoplarPlayerController* ppc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
+        APoplarPlayerController* ppc = SDKUtils::GetLocalPlayerController();
+        if (!ppc) ppc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
+        if (!ppc) {
+            printf("[GAME] lock in skipped: no player controller\n");
+            return;
+        }
+
+        printf("[GAME] locking in character %i on %s\n", i, ppc->GetFullName().c_str());
 
         ppc->ServerCharacterSelectInput(i);
 
@@ -113,8 +128,7 @@ namespace Overlay {
 
         Globals::selectedCharacter = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[i]);
 
-        std::thread t(UnfuckCharacterSelect, ppc, i);
-        t.detach();
+        Engine::RunOnGameThreadAfter(3.0f, [i] { UnfuckCharacterSelect(i); });
     }
 
     void Render() {

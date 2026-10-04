@@ -33,6 +33,8 @@ namespace Autopilot {
         float g_menuTime = 0.f;           // seconds the menu condition has held continuously
         bool g_leftMenu = false;          // Launching: the world has left the menu at least once
         bool g_startupPending = false;    // startup finished; pick a save and continue on the next tick
+        float g_lockInTime = 0.f;         // CharacterSelect: phase time of the last lock-in
+        int g_lockInTries = 0;            // CharacterSelect: lock-ins sent so far (0 = none yet)
         const float kMenuGrace = 2.f;     // menu must hold this long before we call it a real return
         const float kLaunchTimeout = 90.f;
 
@@ -44,6 +46,7 @@ namespace Autopilot {
             g_menuTime = 0.f;
             g_leftMenu = false;
             if (p == Phase::Playing) g_hadPawn = false;
+            if (p == Phase::CharacterSelect) { g_lockInTime = 0.f; g_lockInTries = 0; }
             std::printf("[AUTOPILOT] phase %s\n", PhaseName());
         }
 
@@ -63,7 +66,11 @@ namespace Autopilot {
         }
 
         APoplarPlayerController* LocalPC() {
-            APoplarPlayerController* pc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
+            // The engine's own local-player controller first; the last controller in GObjects can
+            // be a dead placeholder on a client.
+            APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+            if (pc) return pc;
+            pc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
             if (!pc || pc->GetFullName().find("Default__") != std::string::npos) return nullptr;
             return pc;
         }
@@ -273,6 +280,16 @@ namespace Autopilot {
             }
             if (pc && g_phaseTime > 5.f && !Globals::CharacterSelectHasLockedIn) {
                 Overlay::LockInCharacter(CharacterIndex(opt.character));
+                g_lockInTime = g_phaseTime;
+                g_lockInTries = 1;
+            }
+            // The first lock-in can land on the client's placeholder controller before the server's
+            // arrives; its RPCs go nowhere. Lock in again a few times while there is still no pawn.
+            if (pc && !pc->Pawn && g_lockInTries > 0 && g_lockInTries < 4 && g_phaseTime - g_lockInTime > 12.f) {
+                std::printf("[AUTOPILOT] no pawn %.0fs after lock-in, locking in again\n", g_phaseTime - g_lockInTime);
+                Overlay::LockInCharacter(CharacterIndex(opt.character));
+                g_lockInTime = g_phaseTime;
+                g_lockInTries++;
             }
             if (pc && pc->Pawn && g_phaseTime > 5.f) SetPhase(Phase::Playing);
             break;

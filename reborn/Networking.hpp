@@ -13,6 +13,8 @@ namespace ServerNetworking {
 
     void InitListen();
 
+    void LogConnectionPackageMap(UNetConnection* connection);
+
     UActorChannel* GetActorChannelForActor(AActor* actor, UNetConnection* connection);
 
     std::vector<AActor*> BuildConsiderList(AWorldInfo* WorldInfo, UNetDriver* NetDriver);

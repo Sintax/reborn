@@ -78,7 +78,117 @@ namespace ServerNetworking {
         }
     }
 
+    // The retail client build answers every incoming connection with ACCEPTC_Reject:
+    // UWorld::NotifyAcceptingConnection (battleborn+0x45adb0) is just "xor eax,eax; ret".
+    // UTcpNetDriver::TickDispatch (battleborn+0xc21f80) only creates a connection when that
+    // call returns 1, so the client's hello is read and dropped before any control message
+    // exists. The server swaps that vtable slot for one that accepts.
+    int NotifyAcceptingConnectionAccept(void* notify) {
+        static int logged = 0;
+        if (logged < 5) { logged++; printf("[NETWORKING] accepting an incoming connection\n"); }
+        return 1; // ACCEPTC_Accept
+    }
+
+    void ForceAcceptConnections() {
+        static bool done = false;
+        if (done) return;
+        done = true;
+
+        void** slot = reinterpret_cast<void**>(Globals::baseAddress + 0x27c2330); // UWorld's FNetworkNotify vtable, slot 0
+        void* expected = reinterpret_cast<void*>(Globals::baseAddress + 0x45adb0);
+        if (*slot != expected) {
+            printf("[NETWORKING] NotifyAcceptingConnection slot holds %p, expected %p; not patching\n", *slot, expected);
+            return;
+        }
+
+        DWORD old = 0;
+        if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old)) {
+            printf("[NETWORKING] could not unprotect NotifyAcceptingConnection slot (error %lu)\n", GetLastError());
+            return;
+        }
+        *slot = reinterpret_cast<void*>(&NotifyAcceptingConnectionAccept);
+        VirtualProtect(slot, sizeof(void*), old, &old);
+        printf("[NETWORKING] NotifyAcceptingConnection patched to accept\n");
+    }
+
+    // UWorld::Listen normally follows the driver's InitListen with BuildServerMasterMap(), which is
+    // NetDriver->MasterMap->AddNetPackages(): one FPackageInfo per loaded package that has net
+    // objects, then Compute() to fill the name->index map. The mod calls the driver's InitListen
+    // directly and never did that, so the master map stayed empty. UWorld::WelcomePlayer
+    // (battleborn+0x45b060) copies the master map into each connection's PackageMap; with an
+    // empty map UPackageMap::ObjectToIndex (battleborn+0x1f0f0) returns INDEX_NONE for every
+    // class, GetClassNetCache (battleborn+0x1e310) returns NULL, and UActorChannel::SetChannelActor
+    // (battleborn+0x611970) reads [NULL+0x20] at +0x1b8 on the very first replicated actor.
+    void BuildServerMasterMap(UTcpNetDriver* NetDriver) {
+        uintptr_t driver = reinterpret_cast<uintptr_t>(NetDriver);
+        uintptr_t masterMap = *reinterpret_cast<uintptr_t*>(driver + 0x90); // UNetDriver::MasterMap, read at driver+0x90 by WelcomePlayer
+        if (!masterMap) {
+            printf("[NETWORKING] net driver has no master package map; replication will crash\n");
+            return;
+        }
+
+        void** vtable = *reinterpret_cast<void***>(masterMap);
+        void* addNetPackages = vtable[0x238 / 8]; // UPackageMap::AddNetPackages (battleborn+0x1eb40); it calls Compute() (slot 0x230) itself
+        printf("[NETWORKING] building master package map, AddNetPackages at battleborn+0x%llx\n",
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(addNetPackages) - Globals::baseAddress));
+
+        reinterpret_cast<void (*)(void*)>(addNetPackages)(reinterpret_cast<void*>(masterMap));
+
+        int numPackages = *reinterpret_cast<int*>(masterMap + 0x58); // UPackageMap::List.Num (TArray here is {Num, Max, Data})
+        printf("[NETWORKING] master package map has %i packages\n", numPackages);
+
+        // UPackageMap::Compute (battleborn+0x1e8d0, slot 0x230) only puts a package into the
+        // name->index map that ObjectToIndex (battleborn+0x1f0f0) searches when its FPackageInfo
+        // has RemoteGeneration (+0x28) > 0. The FPackageInfo ctor (battleborn+0x1dda0) leaves it 0;
+        // the engine would normally set it from the client's NMT_Have replies, but this client
+        // build's UWorld::NotifyControlMessage (battleborn+0x45c540) only handles the client-side
+        // messages (Failure, Uses, Unload, DebugText), so NMT_Have is ignored and the map that
+        // UPackageMap::Copy (slot 0x250) hands to every connection stays empty: SupportsObject
+        // fails for every class and nothing can be replicated. Client and server are the same
+        // build, so mark every package as present on the remote side at its local generation.
+        uintptr_t list = *reinterpret_cast<uintptr_t*>(masterMap + 0x60); // UPackageMap::List.Data, 0x50 bytes per FPackageInfo
+        int marked = 0;
+        for (int i = 0; i < numPackages && list; i++) {
+            uintptr_t info = list + static_cast<uintptr_t>(i) * 0x50;
+            int localGeneration = *reinterpret_cast<int*>(info + 0x24);
+            if (localGeneration > 0) {
+                *reinterpret_cast<int*>(info + 0x28) = localGeneration; // RemoteGeneration
+                marked++;
+            }
+        }
+
+        reinterpret_cast<void (*)(void*)>(vtable[0x230 / 8])(reinterpret_cast<void*>(masterMap)); // UPackageMap::Compute
+
+        int numMapped = *reinterpret_cast<int*>(masterMap + 0x68); // UPackageMap::PackageListMap pairs Num
+        bool supportsWorldInfo = reinterpret_cast<bool (*)(void*, UObject*)>(vtable[0x210 / 8])(reinterpret_cast<void*>(masterMap), AWorldInfo::StaticClass());
+        printf("[NETWORKING] master package map: %i packages marked present remotely, %i in the name map, supports Engine.WorldInfo: %s\n",
+            marked, numMapped, supportsWorldInfo ? "yes" : "no");
+    }
+
+    bool PackageMapSupportsObject(UNetConnection* connection, UObject* object) {
+        void* packageMap = connection->PackageMap;
+        if (!packageMap || !object)
+            return false;
+
+        void** vtable = *reinterpret_cast<void***>(packageMap);
+        return reinterpret_cast<bool (*)(void*, UObject*)>(vtable[0x210 / 8])(packageMap, object); // UPackageMap::SupportsObject (battleborn+0x1f1e0)
+    }
+
+    void LogConnectionPackageMap(UNetConnection* connection) {
+        uintptr_t map = reinterpret_cast<uintptr_t>(connection ? connection->PackageMap : nullptr);
+        if (!map) {
+            printf("[NETWORKING] connection has no package map\n");
+            return;
+        }
+
+        printf("[NETWORKING] connection package map: %i packages, %i in the name map, supports Engine.WorldInfo: %s\n",
+            *reinterpret_cast<int*>(map + 0x58), *reinterpret_cast<int*>(map + 0x68),
+            PackageMapSupportsObject(connection, AWorldInfo::StaticClass()) ? "yes" : "no");
+    }
+
     void InitListen() {
+        ForceAcceptConnections();
+
         SDKUtils::GetLastOfClass<UGameEngine>()->CreateNamedNetDriver(FName(020724));
 
         UTcpNetDriver* NetDriver = SDKUtils::GetLastOfClass<UTcpNetDriver>();
@@ -98,6 +208,10 @@ namespace ServerNetworking {
         printf("[NETWORKING] Normal init status %i\n", reinterpret_cast<char (*)(UNetDriver * NetDriver, size_t world, FURL & url, FString & error)>(Globals::baseAddress + 0x0c21e30)(NetDriver, (__int64)theWorld + 0x58, furl, error));
 
         theWorld->NetDriver = NetDriver;
+
+        printf("[NETWORKING] net driver %s, bound port %i\n", NetDriver->GetFullName().c_str(), furl.Port);
+
+        BuildServerMasterMap(NetDriver);
 
         NetDriver->NetConnectionClass = UTcpipConnection::StaticClass();
 
@@ -286,11 +400,22 @@ namespace ServerNetworking {
                 if (!channel && actor && !(actor->ObjectFlags & 0x2000000000000000) && (*reinterpret_cast<bool(**)(UNetConnection*, bool)>(*(__int64*)connection + 0x260))(connection, 1)) {
                     //printf("[NETWORKING] No channel for %s, creating...\n", actor->GetFullName().c_str());
 
-                    channel = reinterpret_cast<UActorChannel * (__thiscall*)(UNetConnection * connection, int channelType, uint32_t openedLocally, int chIndex)>(Globals::baseAddress + 0x061daa0)(connection, 2, 1, -1);
+                    // SetChannelActor dereferences GetClassNetCache(actor->Class) without a NULL check,
+                    // and that is NULL whenever the connection's package map does not know the class.
+                    if (!PackageMapSupportsObject(connection, actor->Class)) {
+                        static int unsupportedLogged = 0;
+                        if (unsupportedLogged < 20) {
+                            unsupportedLogged++;
+                            printf("[NETWORKING] not replicating %s: its class is not in the connection's package map\n", actor->GetFullName().c_str());
+                        }
+                    }
+                    else {
+                        channel = reinterpret_cast<UActorChannel * (__thiscall*)(UNetConnection * connection, int channelType, uint32_t openedLocally, int chIndex)>(Globals::baseAddress + 0x061daa0)(connection, 2, 1, -1);
 
-                    if (channel) { //&& (*reinterpret_cast<bool(**)(UNetConnection*, bool)>(*(__int64*)connection + 0x260))(connection, 1)
-                        //printf("[NETWORKING] Setting channel actor...\n");
-                        reinterpret_cast<void(__thiscall*)(UActorChannel*, AActor*)>(Globals::baseAddress + 0x0611970)(channel, actor);
+                        if (channel) { //&& (*reinterpret_cast<bool(**)(UNetConnection*, bool)>(*(__int64*)connection + 0x260))(connection, 1)
+                            //printf("[NETWORKING] Setting channel actor...\n");
+                            reinterpret_cast<void(__thiscall*)(UActorChannel*, AActor*)>(Globals::baseAddress + 0x0611970)(channel, actor);
+                        }
                     }
                 }
 

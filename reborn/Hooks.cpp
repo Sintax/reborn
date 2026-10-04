@@ -40,6 +40,9 @@ namespace Hooks {
     }
 
     void WorldControlMessageHook(UWorld* world, UNetConnection* connection, uint8_t message, void* inbunch) {
+        static int messagesLogged = 0;
+        if (messagesLogged < 40) { messagesLogged++; printf("[NETWORKING] control message %u\n", (unsigned)message); }
+
         WorldControlMessage.call<void>(world, connection, message, inbunch);
 
         static int numPlayersJoined = 0;
@@ -69,6 +72,8 @@ namespace Hooks {
                 Globals::ServerPlayers.push_back(serverPlayer);
 
                 reinterpret_cast<void* (*)(UWorld*, UNetConnection*)>(Globals::baseAddress + 0x045b060)(world, connection);
+
+                ServerNetworking::LogConnectionPackageMap(connection);
             }
         }
         else if (message == 0x9) {
@@ -96,6 +101,7 @@ namespace Hooks {
         Diagnostics::NoteTick();
         DebugServer::Pump();
         Autopilot::Tick(DeltaTime);
+        Engine::PumpGameThreadTasks(DeltaTime);
 
         if (Globals::amServer) {
             /*
@@ -257,7 +263,16 @@ namespace Hooks {
 
                             std::wstring wPlayerName = std::wstring(serverPlayer.Name.begin(), serverPlayer.Name.end());
 
-                            pc->MyPoplarPRI->PlayerName = FString(wcsdup(wPlayerName.c_str())); // TODO: stop leaking memory like it's going out of style
+                            // Assign the name with the engine's own FString::operator= (battleborn+0x39ec0) so the
+                            // buffer belongs to the engine's string allocator (tag 2). The old FString(wcsdup(...))
+                            // put a buffer from the SDK's EngineMalloc into the PRI; when the PRI's name refresh
+                            // (battleborn+0x123b530 -> +0x123ac90, run from the actor tick) reassigned PlayerName,
+                            // the allocator's ownership check on that buffer failed and it crashed on purpose
+                            // (battleborn+0xd2cf24, write to address 0x17).
+                            {
+                                struct { const wchar_t* begin; const wchar_t* end; } range = { wPlayerName.c_str(), wPlayerName.c_str() + wPlayerName.size() + 1 }; // end includes the terminator, like FString::Num()
+                                reinterpret_cast<void (*)(FString*, void*)>(Globals::baseAddress + 0x039ec0)(&pc->MyPoplarPRI->PlayerName, &range);
+                            }
                             pc->MyPoplarPRI->UniqueId.bHasValue = true;
                             pc->MyPoplarPRI->UniqueId.RawId[0x0] = id;
 
@@ -345,31 +360,13 @@ namespace Hooks {
     }
 
 
-    void SetGear() {
-        Sleep(10 * 1000);
-
-        APoplarPlayerController* ppc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
-
-        nlohmann::json jsonObj = nlohmann::json();
-
-        jsonObj["NEMA"] = true;
-
-        if (Globals::GearSlotOne)
-            jsonObj["perkOne"] = Globals::GearSlotOne->itemObjectName;
-
-        if (Globals::GearSlotTwo)
-            jsonObj["perkTwo"] = Globals::GearSlotTwo->itemObjectName;
-
-        if (Globals::GearSlotThree)
-            jsonObj["perkThree"] = Globals::GearSlotThree->itemObjectName;
-
-        std::string jsonObjStr = jsonObj.dump();
-
-        std::wstring wJsonObjStr(jsonObjStr.begin(), jsonObjStr.end());
-
-        ppc->eventServerProcessConvolve(wJsonObjStr.c_str(), 0);
-
-        Sleep(5 * 1000);
+    // Second half of SetGear, 5 s after the convolve request. Game thread only (see SetGear).
+    void SetGearPerks() {
+        APoplarPlayerController* ppc = SDKUtils::GetLocalPlayerController();
+        if (!ppc || !ppc->MyPoplarPRI) {
+            printf("[GAME] gear setup skipped: no live local player controller\n");
+            return;
+        }
 
         if (Globals::GearSlotOne) {
             ppc->MyPoplarPRI->Perks[0].PerkFunction = UObject::FindObject<UPoplarPerkFunction>(Globals::GearSlotOne->itemObjectName);
@@ -399,6 +396,40 @@ namespace Hooks {
         ppc->MyPoplarPRI->OnRep_Perks(0, ppc->MyPoplarPRI->Perks[0]);
     }
 
+    // Was a detached std::thread with Sleep(10 s) / Sleep(5 s) that called ProcessEvent off the
+    // game thread on a controller pointer that could be freed by then. Now scheduled on the game
+    // thread, and the controller is looked up when each step runs.
+    void SetGear() {
+        Engine::RunOnGameThreadAfter(10.0f, [] {
+            APoplarPlayerController* ppc = SDKUtils::GetLocalPlayerController();
+            if (!ppc) {
+                printf("[GAME] gear setup skipped: no live local player controller\n");
+                return;
+            }
+
+            nlohmann::json jsonObj = nlohmann::json();
+
+            jsonObj["NEMA"] = true;
+
+            if (Globals::GearSlotOne)
+                jsonObj["perkOne"] = Globals::GearSlotOne->itemObjectName;
+
+            if (Globals::GearSlotTwo)
+                jsonObj["perkTwo"] = Globals::GearSlotTwo->itemObjectName;
+
+            if (Globals::GearSlotThree)
+                jsonObj["perkThree"] = Globals::GearSlotThree->itemObjectName;
+
+            std::string jsonObjStr = jsonObj.dump();
+
+            std::wstring wJsonObjStr(jsonObjStr.begin(), jsonObjStr.end());
+
+            ppc->eventServerProcessConvolve(wJsonObjStr.c_str(), 0);
+
+            Engine::RunOnGameThreadAfter(5.0f, SetGearPerks);
+        });
+    }
+
     void ProcessEventHook(UObject* object, UFunction* function, void* params) {
         /*
         if (Globals::amServer && !function->GetFullName().contains("Input") && !function->GetFullName().contains("Timer") && !function->GetFullName().contains("Move")) {
@@ -422,8 +453,7 @@ namespace Hooks {
             characterSelectClosedUFunction = UFunction::FindFunction("Function PoplarGame.PoplarCharacterSelectGFxMovie.WaitForCharacterSelectLevelToUnload");
 
         if (!Globals::amServer && !Globals::amStandalone && function == characterSelectClosedUFunction) {
-            std::thread t(SetGear);
-            t.detach();
+            SetGear();   // schedules its work on the game thread
 
             Globals::CharacterSelectMenuOpen = false;
         }
