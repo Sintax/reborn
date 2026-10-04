@@ -84,6 +84,9 @@ namespace Globals {
 
     unsigned int MatchIndex = 0;
 
+    std::vector<GameCoordinator::ServerBrowserEntry> ServerBrowserEntries;
+    GameCoordinator::ServerBrowserEntry CurrentMatchEntry;
+
     bool ConnectedToGameCoordinatorMatch = false;
 
     bool DisplayWaitingForPlayers = false;

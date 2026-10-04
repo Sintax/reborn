@@ -151,7 +151,6 @@ namespace GameCoordinator {
     void ConnectToWebsocket();
 };
 
-/*
 namespace GameCoordinator {
     struct ServerBrowserEntry {
         std::string InstanceName = "";
@@ -181,4 +180,3 @@ namespace GameCoordinator {
 
     void CreateGame(std::string InstanceName, std::string HumanReadableInstanceMapMode, std::string ServerStartupCommand, int MaxNumPlayers, std::string Password);
 }
-*/

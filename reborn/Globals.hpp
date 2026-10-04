@@ -132,6 +132,9 @@ namespace Globals {
 
     extern unsigned int MatchIndex; // TODO: this is horrifying, but we don't have a match ID yet on our objects so here it is
 
+    extern std::vector<GameCoordinator::ServerBrowserEntry> ServerBrowserEntries;
+    extern GameCoordinator::ServerBrowserEntry CurrentMatchEntry;
+
     extern bool ConnectedToGameCoordinatorMatch;
     
     extern bool DisplayWaitingForPlayers;
