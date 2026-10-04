@@ -13,13 +13,18 @@ MAX_ATTEMPTS = 5
 MAX_HARNESS_ERRORS = 3
 ALLOWED = ("reborn/", "gamecontroller/")
 FORBIDDEN = ("reborn/BB/",)
+REQUIRED_BRANCH = "agent/autofix"
 PHASE_ORDER = {"startup": 0, "playing": 1}
 OK, HARNESS, STOPPED, LADDER_DONE, GAVE_UP, FIX_NEEDED, ATTEMPT_FAILED = 0, 2, 3, 4, 5, 10, 11
 
 
 def _git(args: list[str]) -> str:
     return subprocess.run(["git", *args], cwd=config.REPO, capture_output=True, text=True,
-                          check=True).stdout
+                          encoding="utf-8", errors="replace", check=True).stdout
+
+
+def _branch() -> str:
+    return _git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
 
 
 @dataclass
@@ -31,23 +36,43 @@ class Deps:
     git: Callable = field(default=_git)
     state_dir: Path = config.STATE_DIR
     runs_dir: Path = config.RUNS_DIR
+    branch: Callable = field(default=_branch)
 
 
 def _load(d):
     return LoopState.load(d.state_dir), Ledger.load(d.state_dir)
 
 
+def _entries(d) -> list[tuple[str, list[str]]]:
+    """Parse `git status --porcelain -z` into (XY, [paths]); renames/copies list dest AND source."""
+    parts = d.git(["status", "--porcelain", "-z"]).split(chr(0))
+    out, i = [], 0
+    while i < len(parts):
+        e = parts[i]
+        i += 1
+        if len(e) < 4:
+            continue
+        xy, paths = e[:2], [e[3:]]
+        if ("R" in xy or "C" in xy) and i < len(parts):
+            paths.append(parts[i])
+            i += 1
+        out.append((xy, paths))
+    return out
+
+
 def _changed_paths(d) -> list[str]:
-    paths = []
-    for line in d.git(["status", "--porcelain"]).splitlines():
-        if line.strip():
-            paths.append(line[3:].split(" -> ")[-1].strip().strip('"'))
-    return paths
+    """Every path a fix attempt changed. Untracked files outside reborn/ and gamecontroller/
+    (the loop's own runs/state, stray files) are not a fix attempt and are ignored."""
+    return [p for xy, paths in _entries(d) for p in paths
+            if xy != "??" or p.startswith(ALLOWED)]
+
+
+def _tracked_dirty(d) -> list[str]:
+    return [p for xy, paths in _entries(d) if xy != "??" for p in paths]
 
 
 def _forbidden(d) -> list[str]:
-    return [p for p in _changed_paths(d)
-            if not p.startswith(("debugloop/",)) and (not p.startswith(ALLOWED) or p.startswith(FORBIDDEN))]
+    return [p for p in _changed_paths(d) if not p.startswith(ALLOWED) or p.startswith(FORBIDDEN)]
 
 
 def _has_changes(d) -> bool:
@@ -55,8 +80,20 @@ def _has_changes(d) -> bool:
 
 
 def _touched(d) -> list[str]:
-    """Paths a fix attempt changed (never debugloop/, which is the loop's own folder)."""
+    """Paths to stash or commit: never debugloop/, which is the loop's own folder."""
     return [p for p in _changed_paths(d) if not p.startswith("debugloop/")]
+
+
+def _guard_branch(d):
+    try:
+        b = d.branch()
+    except Exception as e:
+        print(f"STOPPED: cannot read the git branch: {e}")
+        return STOPPED
+    if b != REQUIRED_BRANCH:
+        print(f"STOPPED: on branch '{b}', not '{REQUIRED_BRANCH}'. Switch branch by hand.")
+        return STOPPED
+    return None
 
 
 def _note(d) -> str:
@@ -151,11 +188,17 @@ def _attempt_failed(st, L, d, why: str) -> int:
     L.set_status(sig, "fixing", f"attempt {st.attempts_on_current} failed: {why}")
     folder = d.state_dir / "attempts" / signature.slug(sig)
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{st.attempts_on_current}.diff").write_text(d.git(["diff", "HEAD", "--", *ALLOWED]))
-    if _has_changes(d) or _forbidden(d):
-        # Only the paths the attempt touched: never sweep up the loop's own state files.
+    diff_file = folder / f"{st.attempts_on_current}.diff"
+    n = 2
+    while diff_file.exists():   # never overwrite an earlier diff
+        diff_file = folder / f"{st.attempts_on_current}-{n}.diff"
+        n += 1
+    diff_file.write_text(d.git(["diff", "HEAD", "--", *ALLOWED]), encoding="utf-8")
+    touched = _touched(d)
+    if touched:
+        # Only the paths the attempt touched: never sweep up debugloop/ or the loop's own state.
         d.git(["stash", "push", "-u", "-m", f"bb-autofix failed attempt {st.attempts_on_current} {sig}",
-               "--", *_touched(d)])
+               "--", *touched])
     _clear_note(d)
     if st.attempts_on_current >= MAX_ATTEMPTS:
         L.set_status(sig, "gave_up", f"gave up after {MAX_ATTEMPTS} attempts")
@@ -174,6 +217,9 @@ def _attempt_failed(st, L, d, why: str) -> int:
 
 
 def cmd_next(d: Deps) -> int:
+    blocked = _guard_branch(d)
+    if blocked is not None:
+        return blocked
     st, L = _load(d)
     if st.stopped_reason:
         print(f"STOPPED: {st.stopped_reason}")
@@ -191,6 +237,11 @@ def cmd_next(d: Deps) -> int:
         return _harness_error(st, d, f"run {r.run_id} ended '{r.outcome.kind}' with no signature")
     st.harness_errors_in_row = 0
     if r.outcome.kind != "pass":
+        dirty = _tracked_dirty(d)
+        if dirty:
+            print(f"STOPPED: the working tree has uncommitted changes {dirty[:5]}; "
+                  "commit or stash them before the loop opens a bug.")
+            return STOPPED
         return _new_failure(st, L, d, scn.name, r)
     st.consecutive_passes += 1
     st.scenario_index += 1
@@ -205,6 +256,11 @@ def cmd_next(d: Deps) -> int:
     return LADDER_DONE if st.step > 3 else OK
 
 
+def _record_failed_run(d, L, r) -> None:
+    """Keep the bug's history and its dump limit for runs that did not open a new bug."""
+    _prune_dumps(d, L.record(r.signature, r.scenario, r.run_id))
+
+
 def _smoke_of(scn):
     if scn.smoke:
         return None
@@ -215,6 +271,9 @@ def _smoke_of(scn):
 
 
 def cmd_verify(d: Deps) -> int:
+    blocked = _guard_branch(d)
+    if blocked is not None:
+        return blocked
     st, L = _load(d)
     if not st.current_bug:
         print("nothing to verify")
@@ -230,7 +289,11 @@ def cmd_verify(d: Deps) -> int:
         d.deploy()
     except deploy.DeployError as e:
         return _harness_error(st, d, f"deploy failed: {e}")
-    scn = scenario.find_scenario(st.bug_scenario)
+    try:
+        scn = scenario.find_scenario(st.bug_scenario)
+    except scenario.ScenarioError as e:
+        print(f"HARNESS ERROR: {e}")
+        return HARNESS
     r = None
     for s in [x for x in (_smoke_of(scn), scn) if x]:
         try:
@@ -246,12 +309,14 @@ def cmd_verify(d: Deps) -> int:
         _fixed(st, L, d, note)
         return OK
     if r.signature == st.current_bug:
+        _record_failed_run(d, L, r)
         return _attempt_failed(st, L, d, f"same bug again in run {r.run_id}. Note was: {note}")
     later = (PHASE_ORDER.get(r.outcome.phase, 0), r.elapsed_s) > \
             (PHASE_ORDER.get(st.bug_phase or "startup", 0), st.bug_elapsed_s)
     if later:
         _fixed(st, L, d, f"{note} (got further; next failure {r.signature})")
         return _new_failure(st, L, d, r.scenario, r)
+    _record_failed_run(d, L, r)
     return _attempt_failed(st, L, d, f"new, earlier failure {r.signature} in run {r.run_id}. Note was: {note}")
 
 
@@ -281,7 +346,7 @@ def cmd_reset_stop(d: Deps) -> int:
 def cmd_build(d: Deps) -> int:
     r = d.build()
     print("BUILD OK" if r.ok else "BUILD FAILED\n" + r.output[-6000:])
-    return OK if r.ok else 1
+    return OK if r.ok else HARNESS
 
 
 def main(argv=None) -> int:

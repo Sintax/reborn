@@ -1,3 +1,5 @@
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,13 +13,21 @@ from debugloop.state import LoopState
 
 
 class FakeGit:
-    def __init__(self, status=" M reborn/Hooks.cpp\n"):
+    """`status` is what `git status --porcelain -z` shows while a fix is being attempted.
+    The tree is clean until a bug is open, unless always_dirty is set."""
+
+    def __init__(self, status=" M reborn/Hooks.cpp\x00", state_dir=None, always_dirty=False):
         self.calls, self.status = [], status
+        self.state_dir, self.always_dirty = state_dir, always_dirty
+
+    def _bug_open(self):
+        f = self.state_dir / "loop_state.json"
+        return f.exists() and json.loads(f.read_text())["current_bug"] is not None
 
     def __call__(self, args):
         self.calls.append(args)
         if args[0] == "status":
-            return self.status
+            return self.status if self.always_dirty or self._bug_open() else ""
         if args[0] == "diff":
             return "the diff"
         return ""
@@ -26,21 +36,28 @@ class FakeGit:
         return any(c[0] == verb for c in self.calls)
 
 
-def deps(tmp_path, outcomes, build_ok=True, status=" M reborn/Hooks.cpp\n"):
+def deps(tmp_path, outcomes, build_ok=True, status=" M reborn/Hooks.cpp\x00", branch="agent/autofix",
+         always_dirty=False):
     it = iter(outcomes)
+    n = iter(range(1000))
 
     def fake_run(scn):
         o = next(it)
         if isinstance(o, Exception):
             raise o
         kind, sig, phase, elapsed = o
-        rd = tmp_path / "runs" / f"r{elapsed}"
+        rid = f"r{next(n)}"
+        rd = tmp_path / "runs" / rid
         rd.mkdir(parents=True, exist_ok=True)
-        return RunResult(f"r{elapsed}", scn.name, Outcome(kind, phase=phase), sig, rd, elapsed)
+        if kind != "pass":
+            (rd / "crash.dmp").write_text("x")
+        return RunResult(rid, scn.name, Outcome(kind, phase=phase), sig, rd, elapsed)
 
     return loop.Deps(run=fake_run, build=lambda: BuildResult(build_ok, "compiler said no", None),
                      deploy=lambda: None, triage=lambda r: r.run_dir / "triage.md",
-                     git=FakeGit(status), state_dir=tmp_path / "state", runs_dir=tmp_path / "runs")
+                     git=FakeGit(status, tmp_path / "state", always_dirty),
+                     state_dir=tmp_path / "state", runs_dir=tmp_path / "runs",
+                     branch=lambda: branch)
 
 
 PASS = ("pass", None, "playing", 300)
@@ -99,7 +116,7 @@ def test_earlier_different_failure_is_regression(tmp_path):
 
 
 def test_forbidden_path_rejected_before_build(tmp_path):
-    d = deps(tmp_path, [BUG], status=" M reborn/BB/SDK_HEADERS/Engine_classes.hpp\n")
+    d = deps(tmp_path, [BUG], status=" M reborn/BB/SDK_HEADERS/Engine_classes.hpp\x00")
     loop.cmd_next(d)
     assert loop.cmd_verify(d) == 11
     assert "forbidden" in Ledger.load(d.state_dir).get("exit:3").notes[-1]
@@ -142,12 +159,109 @@ def test_deploy_error_is_harness_error_not_attempt(tmp_path):
 
 
 def test_failed_attempt_stashes_only_touched_paths(tmp_path):
-    status = " M reborn/Hooks.cpp\n" + "?? debugloop/state/x.json\n"
+    status = " M reborn/Hooks.cpp\x00?? debugloop/state/x.json\x00"
     d = deps(tmp_path, [BUG, BUG], status=status)
     loop.cmd_next(d)
     loop.cmd_verify(d)
     stash = next(c for c in d.git.calls if c[0] == "stash")
     assert stash[-1] == "reborn/Hooks.cpp" and "debugloop/state/x.json" not in stash
+
+
+def test_wrong_branch_refuses_next_and_verify(tmp_path):
+    d = deps(tmp_path, [PASS, BUG], branch="main")
+    assert loop.cmd_next(d) == 3
+    assert not (d.state_dir / "loop_state.json").exists(), "nothing ran"
+    d2 = deps(tmp_path, [BUG])
+    loop.cmd_next(d2)
+    d2.branch = lambda: "main"
+    assert loop.cmd_verify(d2) == 3
+    assert LoopState.load(d2.state_dir).attempts_on_current == 0
+
+
+def test_dirty_tree_refuses_to_open_bug(tmp_path):
+    d = deps(tmp_path, [BUG], always_dirty=True)
+    assert loop.cmd_next(d) == 3
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug is None and st.stopped_reason is None
+    assert not d.git.did("stash")
+
+
+def test_staged_rename_out_of_sdk_is_forbidden(tmp_path):
+    status = "R  reborn/X.hpp\x00reborn/BB/X.hpp\x00"
+    d = deps(tmp_path, [BUG], status=status)
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 11
+    assert "forbidden" in Ledger.load(d.state_dir).get("exit:3").notes[-1]
+    assert not d.git.did("commit")
+
+
+def test_non_ascii_path_parsed(tmp_path):
+    d = deps(tmp_path, [BUG], status=" M reborn/Hooks é日.cpp\x00?? docs/stray.txt\x00")
+    loop.cmd_next(d)
+    assert loop._changed_paths(d) == ["reborn/Hooks é日.cpp"]
+    assert loop._forbidden(d) == []
+
+
+def test_debugloop_change_is_forbidden_and_not_stashed(tmp_path):
+    status = " M reborn/Hooks.cpp\x00 M debugloop/loop.py\x00"
+    d = deps(tmp_path, [BUG], status=status)
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 11
+    assert "forbidden" in Ledger.load(d.state_dir).get("exit:3").notes[-1]
+    stash = next(c for c in d.git.calls if c[0] == "stash")
+    assert "debugloop/loop.py" not in stash and "reborn/Hooks.cpp" in stash
+
+
+def test_dumps_limited_to_three_after_failed_attempts(tmp_path):
+    d = deps(tmp_path, [BUG] * 5)
+    loop.cmd_next(d)
+    for _ in range(4):
+        assert loop.cmd_verify(d) == 11
+    dumps = list((tmp_path / "runs").glob("*/*.dmp"))
+    assert len(dumps) == 3
+    assert Ledger.load(d.state_dir).get("exit:3").count == 5
+
+
+def test_diff_never_overwritten(tmp_path):
+    d = deps(tmp_path, [BUG, BUG])
+    loop.cmd_next(d)
+    folder = d.state_dir / "attempts" / "exit_3"
+    folder.mkdir(parents=True)
+    (folder / "1.diff").write_text("old")
+    loop.cmd_verify(d)
+    assert (folder / "1.diff").read_text() == "old"
+    assert (folder / "1-2.diff").read_text() == "the diff"
+
+
+def test_missing_scenario_in_verify_returns_2(tmp_path):
+    d = deps(tmp_path, [BUG])
+    loop.cmd_next(d)
+    st = LoopState.load(d.state_dir)
+    st.bug_scenario = "no-such-scenario"
+    st.save(d.state_dir)
+    assert loop.cmd_verify(d) == 2
+
+
+def test_build_command_failure_returns_2(tmp_path):
+    d = deps(tmp_path, [], build_ok=False)
+    assert loop.cmd_build(d) == 2
+
+
+def test_real_git_pathspec_stash_in_throwaway_repo(tmp_path):
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=tmp_path, capture_output=True, text=True,
+                              encoding="utf-8", check=True).stdout
+    git("init", "-q")
+    for n in ("user.email", "user.name"):
+        git("config", n, "t")
+    (tmp_path / "reborn").mkdir()
+    (tmp_path / "reborn" / "a.cpp").write_text("a")
+    git("add", "-A")
+    git("commit", "-qm", "i")
+    (tmp_path / "reborn" / "a.cpp").write_text("b")
+    git("mv", "reborn/a.cpp", "reborn/é.cpp")
+    d = loop.Deps(git=lambda args: git(*args))
+    assert sorted(loop._changed_paths(d)) == ["reborn/a.cpp", "reborn/é.cpp"]
 
 
 def test_no_signature_failure_is_harness_error(tmp_path):
