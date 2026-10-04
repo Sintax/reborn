@@ -29,7 +29,9 @@ def pick_frame(frames: str | None) -> str:
     first = user[0]
     if first.startswith("reborn+"):
         nxt = next((f for f in user[1:] if f.startswith("battleborn+")), None)
-        return _round_reborn(first) + (f">{nxt}" if nxt else "")
+        if nxt:
+            return f"reborn>{nxt}"
+        return _round_reborn(first)
     return first
 
 

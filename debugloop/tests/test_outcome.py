@@ -88,3 +88,24 @@ def test_startup_timeout():
 def test_wrong_map():
     o = outcome.classify(scn(), pair(1, c=cli(map="Frontend")), recs(), 60, False)
     assert o.kind == "exit" and o.code == "wrong_map"
+
+def test_first_chance_on_exit_zero_after_match_end():
+    rep = {"code": "0xC0000005", "frames": ["battleborn+0x10"], "first_chance": True}
+    r = recs(server=ProcessRecord("server", "server", 0, [rep], None, []))
+    o = outcome.classify(scn("match_end"), pair(1), r, 100, True)
+    assert o.kind == "pass"
+
+def test_mid_run_exit_zero_with_first_chance():
+    rep = {"code": "0xC0000005", "frames": ["battleborn+0x10"], "first_chance": True}
+    r = recs(server=ProcessRecord("server", "server", 0, [rep], None, []))
+    o = outcome.classify(scn(), pair(1), r, 100, False)
+    assert o.kind == "exit" and o.code == "0"
+
+def test_exit_pass_priority_with_client_first():
+    # Verify server pass check doesn't depend on process list order
+    r_client_first = [
+        ProcessRecord("c1", "client", None, [], None, []),
+        ProcessRecord("server", "server", 0, [], None, [])
+    ]
+    o = outcome.classify(scn("match_end"), pair(1), r_client_first, 100, True)
+    assert o.kind == "pass"

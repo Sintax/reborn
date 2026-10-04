@@ -61,10 +61,10 @@ def classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
     phase, start = _phase(scn, samples)
     roles = {p.name: p.role for p in scn.processes}
 
-    # A first-chance report only counts if the process then died: the game (or its
-    # anti-tamper) may raise and handle access violations on purpose.
+    # A first-chance report only counts if the process exited with non-zero code: the
+    # game (or its anti-tamper) may raise and handle access violations on purpose.
     crashed = [(r, c) for r in procs for c in r.crash_reports
-               if r.exit_code is not None or not c.get("first_chance", False)]
+               if not c.get("first_chance", False) or (r.exit_code is not None and r.exit_code != 0)]
     if crashed:
         r, c = crashed[0]
         return Outcome("crash", c.get("address", ""), r.name, phase,
@@ -77,11 +77,14 @@ def classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
         last = [s for s in samples if s.name == name][-3:]
         if len(last) == 3 and all(s.http_status == 503 for s in last):
             return Outcome("hang", "game_thread_unresponsive", name, phase, "unknown")
+    # Check server clean exit first (exit 0 + match_ended + pass_when=="match_end")
+    # to avoid depending on process list order.
+    for r in procs:
+        if (r.role == "server" and r.exit_code == 0 and match_ended
+                and scn.pass_when == "match_end"):
+            return Outcome("pass", "match_end", r.name, phase)
     for r in procs:
         if r.exit_code is not None:
-            if (r.role == "server" and r.exit_code == 0 and match_ended
-                    and scn.pass_when == "match_end"):
-                return Outcome("pass", "match_end", r.name, phase)
             return Outcome("exit", "", r.name, phase, code=str(r.exit_code))
 
     if phase == "playing":
@@ -129,10 +132,14 @@ def _desync(roles: dict[str, str], play: list[Sample]) -> str | None:
         theirs = (last_server.get("player_locations") or {}).get(s.name)
         if not mine or not theirs:
             continue
-        if math.dist(mine, theirs) > DESYNC_UNITS:
-            streak[s.name] = streak.get(s.name, 0) + 1
-            if streak[s.name] >= DESYNC_SAMPLES:
-                return s.name
-        else:
-            streak[s.name] = 0
+        try:
+            if math.dist(mine, theirs) > DESYNC_UNITS:
+                streak[s.name] = streak.get(s.name, 0) + 1
+                if streak[s.name] >= DESYNC_SAMPLES:
+                    return s.name
+            else:
+                streak[s.name] = 0
+        except (TypeError, ValueError):
+            # Skip malformed location lists
+            continue
     return None
