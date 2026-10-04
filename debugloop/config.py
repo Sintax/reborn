@@ -12,6 +12,8 @@ STATE_DIR = PKG / "state"
 SCENARIOS_DIR = PKG / "scenarios"
 NATIVE_OUT = PKG / "native"
 LOG_DIR = Path(os.environ["USERPROFILE"]) / "Documents" / "RebornLogs"
+# The game's own crash handler writes POPLAR-*.dmp here.
+GAME_LOGS_DIR = Path(os.environ["USERPROFILE"]) / "Documents" / "My Games" / "Battleborn" / "PoplarGame" / "Logs"
 
 MIN_FREE_MB = 2048
 FIRST_DEBUG_PORT = 18080

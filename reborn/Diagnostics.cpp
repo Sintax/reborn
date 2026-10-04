@@ -37,7 +37,7 @@ namespace Diagnostics {
 
         // The faulting thread copies the exception into these globals before handing off, so the
         // worker never reads memory owned by the faulting thread's stack.
-        struct CrashRequest { DWORD threadId; bool firstChance; unsigned seq; };
+        struct CrashRequest { DWORD threadId; bool firstChance; unsigned seq; unsigned long long ticks; };
         CrashRequest g_request{};
         EXCEPTION_RECORD g_recordCopy;
         CONTEXT g_contextCopy;
@@ -199,6 +199,7 @@ namespace Diagnostics {
               << ",\"thread\":" << r.threadId
               << ",\"game_thread\":" << (r.threadId == g_gameThreadId ? "true" : "false")
               << ",\"first_chance\":" << (r.firstChance ? "true" : "false")
+              << ",\"ticks\":" << r.ticks
               << ",\"dump\":" << JsonString(Narrow(g_instance) + "." + std::to_string(index) + ".dmp")
               << ",\"log_tail\":" << TailJson() << "}";
             WriteJson(base + L".crash.json", j.str());
@@ -219,6 +220,7 @@ namespace Diagnostics {
         // If the wait times out the request is abandoned, but the worker only uses the global copies.
         void Report(EXCEPTION_POINTERS* ep, bool firstChance) {
             static std::mutex oneAtATime;
+            const unsigned long long ticksAtFault = g_ticks;   // before any wait below
             DWORD tid = GetCurrentThreadId();
             if (tid == g_workerThreadId || tid == g_watchdogThreadId) return;
             std::lock_guard lk(oneAtATime);
@@ -235,7 +237,7 @@ namespace Diagnostics {
             g_contextCopy.ContextFlags &= ~(CONTEXT_XSTATE & ~CONTEXT_AMD64);
             g_pointersCopy = { &g_recordCopy, &g_contextCopy };
             unsigned seq = ++g_nextSeq;
-            g_request = { tid, firstChance, seq };
+            g_request = { tid, firstChance, seq, ticksAtFault };
             SetEvent(g_requestEvent);
             while (g_doneSeq != seq) {
                 ULONGLONG now = GetTickCount64();

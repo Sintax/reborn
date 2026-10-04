@@ -76,13 +76,35 @@ namespace Autopilot {
             return 0;
         }
 
-        void EnsureSaveLoaded() {
-            if (Globals::saveFiles.empty()) Globals::saveFiles = Metagame::ReadAllSaves();
-            if (Globals::saveFiles.empty()) {
-                Metagame::CreateNewSave("autopilot", true);
+        const char* kSaveName = "autopilot";   // the autopilot's own save; the user's saves are never used
+
+        int FindSave(const char* name) {
+            for (size_t i = 0; i < Globals::saveFiles.size(); i++)
+                if (Globals::saveFiles[i].name == name) return (int)i;
+            return -1;
+        }
+
+        // Selects the save named "autopilot", creating it if missing. False if that failed.
+        bool EnsureSaveLoaded() {
+            try {
                 Globals::saveFiles = Metagame::ReadAllSaves();
+                int i = FindSave(kSaveName);
+                if (i < 0) {
+                    std::printf("[AUTOPILOT] creating save \"%s\"\n", kSaveName);
+                    Metagame::CreateNewSave(kSaveName, true);   // re-reads Globals::saveFiles
+                    i = FindSave(kSaveName);
+                }
+                if (i < 0) {
+                    std::printf("[AUTOPILOT] save \"%s\" missing after creating it\n", kSaveName);
+                    return false;
+                }
+                Globals::CurrentSaveFile = (unsigned)i;
+                return true;
             }
-            if (Globals::CurrentSaveFile >= Globals::saveFiles.size()) Globals::CurrentSaveFile = 0;
+            catch (const std::exception& e) {
+                std::printf("[AUTOPILOT] could not load saves: %s\n", e.what());
+                return false;
+            }
         }
 
         void ChooseCharacter() {
@@ -97,7 +119,7 @@ namespace Autopilot {
 
         void Launch() {
             const auto& opt = LaunchOptions::Get();
-            EnsureSaveLoaded();
+            if (!EnsureSaveLoaded()) { SetPhase(Phase::MenuReady); return; }   // retried after 5 s
             ChooseCharacter();
             if (!opt.soloMap.empty()) {
                 Globals::amStandalone = true;
@@ -169,7 +191,7 @@ namespace Autopilot {
     }
 
     bool OnStartupComplete() {
-        if (!Active()) return false;
+        if (!Active() || g_phase != Phase::WaitingForMenu) return false;
         g_startupPending = true;   // handled in Tick, outside ProcessEvent
         return true;
     }
@@ -189,10 +211,14 @@ namespace Autopilot {
         case Phase::WaitingForMenu:
             if (g_startupPending) {
                 g_startupPending = false;
-                EnsureSaveLoaded();
-                std::printf("[AUTOPILOT] skipping save picker: using save %u of %zu\n",
-                            Globals::CurrentSaveFile, Globals::saveFiles.size());
-                Hooks::StartupCompletedHook();   // continues to the menu and calls OnMainMenuReady
+                if (EnsureSaveLoaded()) {
+                    std::printf("[AUTOPILOT] skipping save picker: using save \"%s\" (%u of %zu)\n",
+                                kSaveName, Globals::CurrentSaveFile, Globals::saveFiles.size());
+                    Hooks::StartupCompletedHook();   // continues to the menu and calls OnMainMenuReady
+                } else {
+                    std::printf("[AUTOPILOT] no autopilot save; showing the save picker\n");
+                    Overlay::OpenSaveManager();
+                }
             }
             break;
         case Phase::MenuReady:

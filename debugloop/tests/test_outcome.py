@@ -201,3 +201,76 @@ def test_present_unique_id_adds_no_note():
     c = cli(unique_id="01000000000000000000000000000000")
     o = outcome.classify(scn(), pair(1, c=c) + pair(3, c=c), recs(), 900, False)
     assert (o.kind, o.detail) == ("pass", "survived")
+
+
+# --- Fix round 1 -----------------------------------------------------------------------------
+
+def _frozen_c1(ok_until, frozen_until, step=5):
+    """Both answer until ok_until (ticks rising); then the server answers and c1 returns 503."""
+    s = []
+    for i, t in enumerate(range(0, ok_until + 1, step)):
+        s += pair(t, s=srv(ticks=10 + i * 100), c=cli(ticks=10 + i * 100))
+    for t in range(ok_until + step, frozen_until + 1, step):
+        s += [Sample(t, "server", srv(), 200), Sample(t, "c1", None, 503)]
+    return s
+
+def test_freeze_near_the_time_limit_is_not_pass():
+    # Reviewer reproducer: 120 s survive run, freeze at t=80, 503s from 85 to 120 graded pass.
+    o = outcome.classify(scn(limit=120), _frozen_c1(80, 120), recs(), 120, False)
+    assert o.kind == "running"
+
+def test_freeze_near_the_time_limit_ends_as_hang():
+    o = outcome.classify(scn(limit=120), _frozen_c1(80, 150), recs(), 150, False)
+    assert (o.kind, o.process) == ("hang", "c1")
+
+def test_freeze_near_the_time_limit_with_watchdog_report_is_hang_with_frames():
+    r = recs(c1=ProcessRecord("c1", "client", None, [], {"seconds": 60, "frames": ["reborn+0x10"]}, []))
+    o = outcome.classify(scn(limit=120), _frozen_c1(80, 125), r, 125, False)
+    assert (o.kind, o.frame) == ("hang", "reborn+0x10")
+
+def test_overtime_is_capped_at_watchdog_limit_plus_grace():
+    # Even if the samples have not yet shown a long enough freeze, the run may not go on forever.
+    s = _frozen_c1(80, 120) + [Sample(190, "server", srv(), 200)]
+    o = outcome.classify(scn(limit=120), s, recs(), 120 + 60 + outcome.WATCHDOG_GRACE_S, False)
+    assert (o.kind, o.process) == ("hang", "c1")
+
+def test_brief_503_that_recovers_before_the_limit_still_passes():
+    s = _frozen_c1(80, 90) + pair(95) + pair(120)
+    assert outcome.classify(scn(limit=120), s, recs(), 120, False).kind == "pass"
+
+def test_match_end_is_not_pass_while_a_client_is_unresponsive():
+    r = recs(server=ProcessRecord("server", "server", 0, [], None, []))
+    o = outcome.classify(scn("match_end"), _frozen_c1(80, 100), r, 100, True)
+    assert o.kind == "running"
+
+def test_stale_game_thread_fault_does_not_turn_a_later_freeze_into_a_crash():
+    # Reviewer reproducer: a handled first-chance fault at tick 100, the game keeps ticking,
+    # later a real freeze -> must be the hang, with the hang report's frames.
+    rep = {"code": "0xC0000005", "frames": ["battleborn+0x10"], "game_thread": True,
+           "first_chance": True, "ticks": 100}
+    hang = {"seconds": 60, "frames": ["reborn+0xd850a", "battleborn+0xee67af"]}
+    r = recs(c1=ProcessRecord("c1", "client", None, [rep], hang, []))
+    s = pair(1, c=cli(ticks=50)) + pair(5, c=cli(ticks=400)) + [Sample(t, "c1", None, 503) for t in (9, 13, 17)]
+    o = outcome.classify(scn(), s, r, 60, False)
+    assert (o.kind, o.frame) == ("hang", "reborn+0xd850a|battleborn+0xee67af")
+
+def test_game_thread_fault_counts_when_ticks_never_passed_it():
+    rep = {"code": "0xC0000005", "frames": ["reborn+0xd84d4"], "game_thread": True,
+           "first_chance": True, "ticks": 400}
+    r = recs(c1=ProcessRecord("c1", "client", None, [rep], None, []))
+    s = pair(1, c=cli(ticks=50)) + pair(5, c=cli(ticks=400)) + [Sample(t, "c1", None, 503) for t in (9, 13, 17)]
+    assert outcome.classify(scn(), s, r, 60, False).kind == "crash"
+
+def _limit(*args):
+    sc = scn()
+    sc.processes[1].args = list(args)
+    return outcome._watchdog_limit(sc, "c1")
+
+def test_watchdog_limit_follows_the_mods_rules():
+    assert _limit("-rbhangsecs=15") == 15
+    assert _limit("-rbhangsecs=5") == 5 and _limit("-rbhangsecs=3600") == 3600
+    assert _limit("-rbhangsecs=4") == 60 and _limit("-rbhangsecs=3601") == 60
+    assert _limit("-rbhangsecs=abc") == 60 and _limit("-rbhangsecs=15x") == 60
+    assert _limit("-RBHANGSECS=15") == 60            # the mod matches the flag case-sensitively
+    assert _limit("-rbhangsecs=15", "-rbhangsecs=20") == 20   # last one wins
+    assert _limit("-rbhangsecs=15", "-rbhangsecs=2") == 15    # a bad value leaves the earlier one

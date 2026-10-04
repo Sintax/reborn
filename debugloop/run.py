@@ -209,6 +209,7 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
             finally:
                 h.close()
         active.unlink(missing_ok=True)
+        collect_game_dumps(run_dir, t0, config.GAME_LOGS_DIR)
 
     sig = signature.make(o, scn)
     result = RunResult(run_id, scn.name, o, sig, run_dir, round(time.time() - t0, 1))
@@ -217,6 +218,28 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
     if o.kind == "pass":
         prune_dumps_for_pass(result)
     return result
+
+
+def collect_game_dumps(run_dir: Path, since: float, logs_dir: Path) -> list[Path]:
+    """Move the game's own crash dumps written during this run into the run folder, so the
+    run's dump retention covers them. Dumps from before the run are never touched."""
+    moved = []
+    try:
+        candidates = sorted(logs_dir.glob("POPLAR-*.dmp"))
+    except OSError:
+        return moved
+    for p in candidates:
+        try:
+            st = p.stat()
+            born = min(getattr(st, "st_birthtime", st.st_ctime), st.st_mtime)
+            if born < since:
+                continue
+            dest = run_dir / p.name
+            shutil.move(p, dest)
+            moved.append(dest)
+        except OSError as e:
+            print(f"note: could not move game dump {p}: {e}")
+    return moved
 
 
 def prune_dumps_for_pass(r: RunResult) -> None:

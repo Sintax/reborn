@@ -44,6 +44,7 @@ def test_crash_writes_dump_and_report(tmp_path):
     assert (tmp_path / r["dump"]).stat().st_size > 10_000
     assert any("hello from crashme" in line for line in r["log_tail"])
     assert "hello from crashme" in (tmp_path / "crashme.log").read_text()
+    assert r["ticks"] == 1   # crashme ticks once; the harness compares this with later samples
 
 
 def test_unhandled_crash_writes_final_second_chance_report(tmp_path):

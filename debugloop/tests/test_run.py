@@ -31,8 +31,10 @@ def scn(limit=6, two=False):
 
 
 @pytest.fixture(autouse=True)
-def no_foreign_games(monkeypatch):
+def no_foreign_games(monkeypatch, tmp_path):
     monkeypatch.setattr(launch, "find_game_processes", lambda: [])
+    # Never sweep the real game's Logs folder from a test run.
+    monkeypatch.setattr(run.config, "GAME_LOGS_DIR", tmp_path / "no-game-logs")
 
 
 def test_pass(tmp_path):
@@ -192,3 +194,50 @@ def test_passing_run_deletes_dumps(tmp_path):
     (r.run_dir / "x.dmp").write_bytes(b"x")
     run.prune_dumps_for_pass(r)
     assert not list(r.run_dir.glob("*.dmp"))
+
+
+def test_collect_game_dumps_moves_only_dumps_from_this_run(tmp_path):
+    import os, time
+    logs, run_dir = tmp_path / "Logs", tmp_path / "run"
+    logs.mkdir(); run_dir.mkdir()
+    old = logs / "POPLAR-PATCH-87-pc-old.dmp"
+    old.write_bytes(b"old")
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+    since = time.time() - 1
+    new = logs / "POPLAR-PATCH-87-pc-new.dmp"
+    new.write_bytes(b"new")
+    other = logs / "PCLaunch.log"
+    other.write_text("log")
+    moved = run.collect_game_dumps(run_dir, since, logs)
+    assert moved == [run_dir / new.name]
+    assert (run_dir / new.name).read_bytes() == b"new" and not new.exists()
+    assert old.exists() and other.exists()
+
+
+def test_collect_game_dumps_missing_logs_dir_is_fine(tmp_path):
+    assert run.collect_game_dumps(tmp_path, 0, tmp_path / "nope") == []
+
+
+def test_run_sweeps_game_dumps_into_run_folder(tmp_path, monkeypatch):
+    logs = tmp_path / "Logs"
+    logs.mkdir()
+    monkeypatch.setattr(run.config, "GAME_LOGS_DIR", logs)
+    real_start = FakeLauncher.start
+
+    def start_and_dump(self, name, role, args):
+        h = real_start(self, name, role, args)
+        (logs / "POPLAR-x.dmp").write_bytes(b"d")
+        return h
+
+    monkeypatch.setattr(FakeLauncher, "start", start_and_dump)
+    r = run.run_scenario(scn(30), FakeLauncher({"c1": "crash"}), tmp_path / "runs", poll_s=0.5)
+    assert (r.run_dir / "POPLAR-x.dmp").exists() and not (logs / "POPLAR-x.dmp").exists()
+
+
+def test_freeze_at_the_time_limit_runs_over_and_ends_as_hang(tmp_path, monkeypatch):
+    # The fake game stops answering after 2 s; the time limit is 4 s. The runner must not stop
+    # with a pass at 4 s, but keep sampling (up to watchdog limit + grace) and grade a hang.
+    monkeypatch.setattr(run.config, "HANG_SECONDS", 1)
+    r = run.run_scenario(scn(4), FakeLauncher({"c1": "hang"}), tmp_path, poll_s=0.5)
+    assert r.outcome.kind == "hang"
+    assert r.elapsed_s > 4
