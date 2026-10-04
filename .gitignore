@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+debugloop/runs/
+debugloop/state/
+debugloop/native/
+debugloop/ghidra/out/
+__pycache__/
+.pytest_cache/
