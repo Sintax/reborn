@@ -148,6 +148,17 @@ namespace Autopilot {
             SetPhase(Phase::Launching);
         }
 
+        // Battleborn calls PlayerTick natively, never through ProcessEvent, so there is no hook
+        // just before it. Axes written here, after the engine tick, are what the next frame's
+        // PlayerTick consumes (seen live: the pawn walks; the frame leaves them at 0 again).
+        void WriteAxes(APoplarPlayerController* pc) {
+            UPlayerInput* in = pc->PlayerInput;
+            in->aBaseY = 1.0f;
+            in->aStrafe = g_strafe;
+            in->aTurn = g_unstickFor > 0.f ? 1.0f : g_turn;
+            in->aLookUp = 0.f;
+        }
+
         void PlayTick(float dt, APoplarPlayerController* pc) {
             if (!pc->Pawn) {
                 g_hadPawn = false;
@@ -276,20 +287,10 @@ namespace Autopilot {
                 if (opt.testCrash) { g_testFired = true; std::printf("[AUTOPILOT] -rbtestcrash\n"); *(volatile int*)nullptr = 1; }
                 if (opt.testHang) { g_testFired = true; std::printf("[AUTOPILOT] -rbtesthang\n"); Sleep(INFINITE); }
             }
+            if (pc && pc->Pawn && pc->PlayerInput) WriteAxes(pc);
             break;
         default:
             break;
         }
-    }
-
-    void BeforePlayerTick(UObject* controller) {
-        if (!Active() || g_phase != Phase::Playing) return;
-        auto* pc = reinterpret_cast<APoplarPlayerController*>(controller);
-        if (pc != LocalPC() || !pc->PlayerInput || !pc->Pawn) return;
-        UPlayerInput* in = pc->PlayerInput;
-        in->aBaseY = 1.0f;
-        in->aStrafe = g_strafe;
-        in->aTurn = g_unstickFor > 0.f ? 1.0f : g_turn;
-        in->aLookUp = 0.f;
     }
 }

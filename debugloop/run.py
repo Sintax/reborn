@@ -101,7 +101,7 @@ def _preconditions(runs_dir: Path) -> None:
 
 
 def _args(spec, port: int, run_dir: Path, n_clients: int) -> list[str]:
-    a = launch.GAME_BASE_ARGS + list(spec.args) + [
+    a = launch.base_args(spec.role) + list(spec.args) + [
         f"-rbinstance={spec.name}", f"-rbdebugport={port}", f"-rbrundir={run_dir}"]
     if spec.role == "server":
         a.append(f"-rbplayers={n_clients}")

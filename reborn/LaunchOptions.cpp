@@ -62,6 +62,16 @@ namespace LaunchOptions {
         return o;
     }
 
+    std::wstring InstanceArg(const std::wstring& commandLine) {
+        const std::wstring key = L"-rbinstance=";
+        size_t at = commandLine.find(key);
+        if (at == std::wstring::npos) return {};
+        bool quoted = at > 0 && commandLine[at - 1] == L'"';
+        size_t start = at + key.size();
+        size_t end = quoted ? commandLine.find(L'"', start) : commandLine.find_first_of(L" \t", start);
+        return commandLine.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+    }
+
     void InitFromCommandLine() { g_options = Parse(GetCommandLineW()); }
     const Options& Get() { return g_options; }
 }

@@ -28,6 +28,13 @@ int main() {
     CHECK(bad.unknown.size() == 1);
     CHECK(bad.debugPort == 0 && bad.hangSeconds == 60);
 
+    // InstanceArg runs in DllMain, so it reads the raw command line itself (no shell32).
+    CHECK(LaunchOptions::InstanceArg(L"Battleborn.exe -windowed -rbinstance=c1 -rbdebugport=18081") == L"c1");
+    CHECK(LaunchOptions::InstanceArg(L"Battleborn.exe -rbinstance=server") == L"server");
+    CHECK(LaunchOptions::InstanceArg(LR"(Battleborn.exe "-rbinstance=my box" -x)") == L"my box");
+    CHECK(LaunchOptions::InstanceArg(L"Battleborn.exe -windowed").empty());
+    CHECK(LaunchOptions::InstanceArg(L"Battleborn.exe -rbinstance= -x").empty());
+
     std::puts(failures ? "FAIL" : "PASS");
     return failures;
 }

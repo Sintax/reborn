@@ -1,7 +1,5 @@
 #pragma once
 
-class UObject;
-
 namespace Autopilot {
     bool Active();
     void OnMainMenuReady();
@@ -9,6 +7,5 @@ namespace Autopilot {
     // (loads or creates a save and continues to the menu on its next tick) instead of the picker.
     bool OnStartupComplete();
     void Tick(float dt);
-    void BeforePlayerTick(UObject* controller);
     const char* PhaseName();
 }

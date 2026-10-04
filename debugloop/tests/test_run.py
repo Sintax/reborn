@@ -248,3 +248,16 @@ def test_timeline_records_whether_the_process_was_alive(tmp_path):
     rows = [json.loads(l) for l in (r.run_dir / "timeline.jsonl").read_text().splitlines()]
     assert rows[0]["alive"] is True
     assert all("alive" in row for row in rows)
+
+
+def test_multiplayer_args_save_memory_solo_keeps_its_resolution(tmp_path):
+    # Three instances do not fit in this laptop's free RAM at 960x540 (spike S3): the server
+    # renders nothing and clients run at 640x360. Solo is a single instance and stays as it was.
+    s = scn(two=True)
+    server = run._args(s.processes[0], 18080, tmp_path, 1)
+    client = run._args(s.processes[1], 18081, tmp_path, 1)
+    solo = run._args(scn().processes[0], 18080, tmp_path, 0)
+    assert "-nullrhi" in server and "-nullrhi" not in client and "-nullrhi" not in solo
+    assert "-ResX=640" in client and "-ResY=360" in client
+    assert "-ResX=960" not in client and "-ResY=540" not in client
+    assert "-ResX=960" in solo and "-ResY=540" in solo

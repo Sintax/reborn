@@ -400,12 +400,6 @@ namespace Hooks {
     }
 
     void ProcessEventHook(UObject* object, UFunction* function, void* params) {
-        if (Autopilot::Active()) {
-            static UFunction* playerTick = nullptr;
-            if (!playerTick && function->GetFullName().ends_with("PlayerController.PlayerTick")) playerTick = function;
-            if (function == playerTick) Autopilot::BeforePlayerTick(object);
-        }
-
         /*
         if (Globals::amServer && !function->GetFullName().contains("Input") && !function->GetFullName().contains("Timer") && !function->GetFullName().contains("Move")) {
             printf("[PE] %s - %s\n", object->GetFullName().c_str(), function->GetFullName().c_str());

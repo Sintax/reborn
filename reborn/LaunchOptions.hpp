@@ -22,6 +22,9 @@ namespace LaunchOptions {
     };
 
     Options Parse(const std::wstring& commandLine);
+    // The -rbinstance value straight from the raw command line, or "" if absent.
+    // Safe in DllMain: no shell32, no allocation beyond the returned string.
+    std::wstring InstanceArg(const std::wstring& commandLine);
     void InitFromCommandLine();
     const Options& Get();
 }

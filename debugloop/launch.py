@@ -13,6 +13,16 @@ import psutil
 from . import config
 
 GAME_BASE_ARGS = ["-windowed", "-ResX=960", "-ResY=540", "-nosound", "-nomoviestartup", "-NOSPLASH"]
+# Spike S3: three instances at 960x540 push this laptop's free RAM under 2 GB, so in multiplayer
+# the server renders nothing and clients run small.
+CLIENT_RES = ["-ResX=640", "-ResY=360"]
+
+
+def base_args(role: str) -> list[str]:
+    if role == "solo":
+        return list(GAME_BASE_ARGS)
+    a = [x for x in GAME_BASE_ARGS if not x.startswith(("-ResX=", "-ResY="))]
+    return a + (["-nullrhi"] if role == "server" else CLIENT_RES)
 GAME_EXES = ("Battleborn.exe", "Serverborn.exe")
 STEAMID_BASE = 76561197960287930
 LOADER_FILES = ("steamclient_loader_x64.exe", "steamclient64.dll", "steamclient.dll")
