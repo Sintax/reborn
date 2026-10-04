@@ -1,0 +1,183 @@
+# Self-Running Bug Fixer for Battleborn Reborn: Design
+
+Date: 4 October 2026
+Status: waiting for your review
+
+---
+
+## Part 1: The plain-language version
+
+### What this is
+
+A system that keeps playing Battleborn by itself, notices when it breaks, works out why, fixes the mod's code, and checks the fix. It repeats this until the game can be played reliably by two people, with as little help from you as possible.
+
+### What you said you want
+
+- The AI does the work on its own. Human players are hard to find and need rest.
+- Real human play comes later, once the AI has cleared the obvious problems.
+- The top-tier model (Fable 5.1) does the hard thinking; cheaper models do routine chores.
+- The AI may install free debugging tools when it needs them.
+- You review this document, and then the build plan, before anything is built.
+
+### What I assumed (correct me if wrong)
+
+- Everything runs on this laptop (ROG Strix, 16 GB memory), where the game is installed.
+- The AI saves its work on a separate work branch. Nothing is sent to GitHub unless you ask.
+- The first target is co-op story missions with two players, then PvP. Ten-player matches and public servers come in a later project.
+
+### How one round of the loop works
+
+1. **Run a test match.** A script starts the server and one or two copies of the game. The game copies connect by themselves and "play" with a simple autopilot: walk, turn, jump, shoot. The game's own bots fill the empty slots.
+2. **Watch it.** Each copy reports "still alive, here's what I'm doing" every few seconds. A crash, freeze, disconnect, or running past the time limit counts as a failure.
+3. **Collect evidence.** On a crash the game saves a snapshot of its memory at that moment (a "crash dump") and its last log lines. Everything for that match goes into one folder.
+4. **Group it.** Crashes at the same spot in the code count as one bug. Each bug gets a notes page listing what happened, what was tried, and what didn't work, so the AI never repeats a failed idea.
+5. **Diagnose and fix.** Fable 5.1 reads the evidence and the code, works out the cause, and makes the smallest fix that should work.
+6. **Prove it.** Rebuild, then re-run the failing test until it passes several times in a row. Also re-run quick versions of the earlier tests to catch new breakage. Pass: the fix is saved. Fail: the fix is undone and the attempt is written down.
+7. **Stuck rule.** After 5 failed attempts on one bug, the AI parks it, writes a question for you, and moves on to the next problem.
+
+### The goal, as a ladder
+
+Each step must pass reliably before the AI moves to the next one.
+
+| Step | What has to happen | "Reliably" means |
+|---|---|---|
+| 0 | The modded game starts and loads a solo mission | 3 starts in a row |
+| 1 | The server runs and one autopilot player plays 15 minutes on the training map | 3 runs in a row, no crash |
+| 2 | Two autopilot players finish a full co-op story mission | 2 runs in a row |
+| 3 | A PvP match runs to the end with two autopilot players plus bots | 2 runs in a row |
+| 4 | You and your friend play for real | Your call |
+
+Step 4 is the only one that needs people. The AI tells you when step 3 passes.
+
+### What you'll see while it runs
+
+- A short **progress log**: which step it's on, which bugs it found, which it fixed.
+- A **question list**: anything it got stuck on, written in plain language.
+- A **notification on your phone** when a step passes or when it needs you.
+
+### Safety rails
+
+- Code changes go only on the work branch. Your main version is never touched.
+- In the game folder it only adds or replaces the mod's own files, and keeps a backup of anything it replaces. It never changes the game's own data files.
+- It won't start a test if the laptop has less than about 2 GB of free memory. It shuts down every game copy it started when a test ends.
+- It never changes Windows system settings.
+- It only installs free, well-known debugging tools from their official sources.
+
+### What could go wrong
+
+- **The game might not start at all with the mod on this machine.** Step 0 exists to find this out first. If the cause is outside the mod's code, for example the fake-Steam layer, the AI will try the known fixes and then ask you.
+- **Two game copies plus a server might not fit in 16 GB.** The AI measures this early. Fallbacks: low graphics settings, small windows, and running step 2 with one autopilot player plus bots.
+- **Some bugs may be too deep for a quick fix**, like the garbage-collection crashes the original author fought (the engine's routine cleanup of unused memory). The stuck rule keeps those from stalling everything else.
+- **Two copies of the game on one PC may look like the same Steam user.** The plan's first task tests this. The fallback is a second copy of just the small program folder with its own fake-Steam identity.
+
+---
+
+## Part 2: Technical details
+
+### Where things live
+
+| Item | Location |
+|---|---|
+| Mod source (C++) | `reborn/reborn/` (fork `Sintax/reborn`) |
+| New harness code | `reborn/debugloop/` (Python 3.14) |
+| Bug notes, progress log, question list | `reborn/debugloop/bugs/`, `reborn/debugloop/PROGRESS.md`, `reborn/debugloop/QUESTIONS.md` |
+| Loop instructions (Claude Code skill) | `reborn/.claude/skills/bb-autofix/SKILL.md` |
+| Run artifacts (dumps, logs; large, not in git) | `Battleborn-Server/runs/<run-id>/` |
+| Backups of replaced game files | `Battleborn-Server/backups/<timestamp>/` |
+| Game install | `D:\SteamLibrary\steamapps\common\Battleborn\Binaries\Win64` |
+| Work branch | `agent/autofix`, created from `local-dev` |
+
+The two uncommitted edits on `local-dev` become the first commit on `agent/autofix`, because both are needed for local testing. One points the lobby address at `localhost:5000`; the other fixes the inverted loop condition in `MatchLaunchService.cs`.
+
+### Component 1: In-game instrumentation (C++, inside `reborn.dll`)
+
+New files, each with one job:
+
+- **`LaunchOptions.cpp/.hpp`** parses the command line once at startup. Today map and player count are hard-coded in `ServerSettings.cpp`. Defaults keep today's behaviour when a flag is absent.
+  - `-rbinstance=<name>`: names the instance, e.g. `server`, `c1`, `c2`; used in log and dump file names.
+  - `-rbmap=<map>`, `-rbplayers=<n>`: server map and number of players to start.
+  - `-rbconnect=<host:port>`: the client connects automatically once the main menu is up, using the same code path as the overlay's Direct Connect.
+  - `-rbautoplay`: turns on the autopilot.
+  - `-rbdebugport=<port>`: port for the status endpoint (default `0`, meaning off).
+  - `-rbrundir=<path>`: where to write logs and dumps.
+  - `-rbtestcrash=<seconds>`: deliberately crash after N seconds. Used only to self-test the crash capture.
+- **`Diagnostics.cpp/.hpp`**:
+  - Every existing `printf` also goes to `<rundir>/<instance>.log`, with timestamps and a 500-line in-memory ring buffer.
+  - An unhandled-exception filter, plus a vectored handler as backup, writes `<instance>.dmp` with `MiniDumpWriteDump` (MiniDumpWithIndirectlyReferencedMemory, plus thread info). It also writes `<instance>.crash.json` with the exception code, the faulting thread's stack as `module+offset` frames, and the ring buffer.
+  - A watchdog thread detects a frozen game: no engine tick for 20 seconds. It writes a dump and `hang.json` without killing the process.
+- **`DebugServer.cpp/.hpp`**: uses the cpp-httplib copy already in the repo; listens only on `127.0.0.1`.
+  - `GET /state` returns JSON: instance, server/client role, uptime, tick count, last-tick time, current map, connection count with per-connection state, replicated actor count, process memory, and player pawn location and health when there is one.
+  - `POST /exec` runs a console command and returns. This lets the runner and the AI poke a live game.
+  - Requests are queued and handled on the game thread inside the existing `GameEngineTickHook`. Engine calls never run off-thread.
+- **`Autopilot.cpp/.hpp`** (client only, when `-rbautoplay` is set):
+  - Every tick, writes `UPlayerInput` axis fields (`aBaseY`, `aStrafe`, `aTurn`; offsets in `BB/SDK_HEADERS/Engine_classes.hpp`) to walk and turn in a wandering pattern.
+  - Calls `StartFire`/`StopFire` and `Jump` through `ProcessEvent` on a timer.
+  - Respawns when dead and re-sends ready-up where the mode needs it.
+  - Deliberately dumb: its job is to stress replication, not to win.
+  - The wandering pattern is seeded from the run id, so a run can be replayed.
+
+### Component 2: Test runner (Python, `debugloop/`)
+
+- **`scenarios/*.toml`**: one file per test. Fields: which processes to start, flags for each, time limit, pass condition (`survive`, `mission_complete`, `match_end`, or `main_menu_loaded`), and the ladder step it belongs to. Every step gets a short smoke version (≤5 minutes) for regression checks.
+- **`run.py <scenario>`**:
+  1. Checks free memory (refuses below 2 GB) and that no game process is already running.
+  2. Creates `runs/<id>/`.
+  3. Launches the processes. Clients go through the Steam emulator loader; the exact method is settled by Spike S1 below.
+  4. Polls each `/state` every 2 seconds and records a timeline.
+  5. Detects the outcome: process exit, `.dmp` present, `hang.json`, a client's connection dropping to zero, or time limit hit.
+  6. Kills everything it started.
+  7. Writes `result.json`: outcome, signature, artifact paths, peak memory per process.
+  8. Exit code: 0 pass, 1 fail, 2 harness error. A harness error is never counted as a game bug.
+- **Signatures**:
+  - Crash: `crash:<exception code>:<first frame inside Battleborn.exe or reborn.dll as module+offset>`.
+  - Hang: `hang:<module+offset of game thread top frame>`.
+  - Disconnect: `disconnect:<last NETWORKING log line category>`.
+  - Timeout: `timeout:<last state>`.
+- **`analyze.py <run-id>`**: quick automatic triage with the Python `minidump` package: stack, registers, and nearby memory. When available it also runs `cdb -z <dmp> -c "!analyze -v; kb; q"` (WinDbg's command-line debugger). It maps offsets to known names using the hook table in `Init.cpp`, `BB/NameDump.txt`, and the Ghidra project. Writes `triage.md` into the run folder.
+- **`deploy.py`**: copies the freshly built `reborn.dll` and `dxgi.dll` into the game folder. It creates `Serverborn.exe` if missing, after backing up any file it overwrites, then checks the copied file's hash.
+- **`ledger.py`**: creates or updates `bugs/<signature-slug>.md` with status (`open`, `fixing`, `fixed`, `parked`), first and last seen, run ids, attempts (hypothesis, change, result), and the commit that fixed it.
+- Unit tests in `debugloop/tests/` (pytest) for signature bucketing, the outcome detector (fed recorded timelines), the ledger, and the scenario parser. They use fake processes, so they don't need the game.
+
+### Component 3: The loop (Claude Code skill `bb-autofix`, run under `/loop`)
+
+Main session: Opus 5.5. It keeps the state machine and does no deep reasoning itself.
+
+1. Read `debugloop/state.json`: current step, current bug, attempt count. If missing, start at step 0.
+2. Build: MSBuild via VS 2022 Build Tools, `reborn.sln` Release x64. A build failure goes back to whoever made the change.
+3. Deploy, then run the current step's scenario.
+4. **Pass:** count consecutive passes. When the step's threshold is reached, run every lower step's smoke test, move up a step, append to `PROGRESS.md`, and send a phone notification.
+5. **Fail:**
+   1. Run `analyze.py` and update the ledger.
+   2. Dispatch a **Fable 5.1 subagent** with the bug page, `triage.md`, run artifacts, and source paths. Its brief: follow systematic debugging, state one hypothesis, change only `reborn/reborn/*` (and `gamecontroller/` if the cause is there), build cleanly, and return the hypothesis and diff summary. It may use Ghidra and x64dbg through their MCP servers, and launch the game through `run.py` to gather evidence.
+   3. Re-run the failing scenario to the step's threshold, plus lower-step smoke tests. If they all pass, commit on `agent/autofix` with the message `fix(<bug-slug>): <hypothesis>` and mark the bug fixed. Otherwise `git restore` the change, record the attempt, and increment the count.
+   4. After 5 failed attempts, mark the bug `parked`, add an entry to `QUESTIONS.md`, notify you, and switch to the next open bug. If nothing else is open, try a different scenario at the same step, e.g. another map.
+6. Harness errors (exit code 2) go to a **Sonnet 5.5 subagent** that fixes `debugloop/` code only. Three harness errors in a row: stop the loop and notify you.
+7. Keep-awake is requested while the loop runs. All state is on disk, so a fresh session resumes where the last one stopped.
+
+### Tools the AI may install (approved by you on 4 October 2026)
+
+| Tool | Purpose | Source |
+|---|---|---|
+| `minidump` Python package | Read crash dumps without a debugger | PyPI |
+| WinDbg / `cdb` | Full crash analysis | Microsoft (winget `Microsoft.WinDbg`) |
+| Java 21 + Ghidra + GhidraMCP | Decompile game code at crash addresses; one saved project for `Battleborn.exe` | Adoptium, NSA GitHub releases |
+| x64dbg + an MCP plugin | Live debugging when a dump isn't enough | x64dbg GitHub releases, `duty1g/x64dbg-mcp-server` |
+
+### Spikes: questions answered in the first tasks of the plan
+
+- **S1 Launch:** can Battleborn start through `steamclient_loader_x64.exe` with `-seekfreepackagemaps -seekfreeloadingpcconsole` and extra flags in `ExeCommandLine`? Can a second loader instance use a different ini (for `Serverborn.exe`)? If not, does launching the exe directly work with the emulator DLLs in place?
+- **S2 Two identities:** do two client copies on one PC collide on Steam ID? Fallback: a sibling folder `Binaries/Win64_c2/` with copies of the exe, mod and emulator DLLs, and its own `steam_settings` identity. The game's relative paths (`..\..\PoplarGame`) still resolve from there.
+- **S3 Memory:** peak memory of server, one client, and two clients at low settings. This decides whether step 2 uses two autopilot clients or one client plus bots.
+- **S4 Crash capture:** `-rbtestcrash` produces a readable dump and `crash.json`, and the runner classifies it correctly.
+
+### Out of scope for this project
+
+- Ten-player matches, public servers, an installer for other players, the lobby service (`gamecontroller`) beyond what local testing needs, scoreboards, cosmetics.
+- Pushing to GitHub or contacting the Reborn Discord. The AI may draft a message, but you decide whether to send it.
+
+### Success criteria for this project
+
+- Steps 0–3 of the ladder pass at their thresholds with the autopilot.
+- Every fix is a separate commit on `agent/autofix`, linked from a bug page with its evidence.
+- The harness's own unit tests pass.
+- `PROGRESS.md` explains in plain language what was broken and what changed, so you can review the work without reading code.
