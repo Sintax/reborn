@@ -35,6 +35,7 @@ class LoopState:
     bug_phase: str | None = None          # phase the current bug happened in
     bug_elapsed_s: float = 0.0            # how far into the run it happened
     bug_head: str | None = None           # git HEAD the loop expects while the bug is open
+    bug_milestone: int = 0                # how far the join got when the bug opened (outcome.milestone)
 
     @classmethod
     def load(cls, directory: Path = config.STATE_DIR) -> "LoopState":

@@ -47,6 +47,14 @@ def test_pass(tmp_path):
     assert not (tmp_path / "active.json").exists()
 
 
+def test_result_carries_the_milestone(tmp_path):
+    r = run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5)
+    assert r.milestone == 4   # the fake solo game reports autopilot "playing"
+    assert json.loads((r.run_dir / "result.json").read_text())["milestone"] == 4
+    r2 = run.run_scenario(scn(two=True), FakeLauncher(), tmp_path, poll_s=0.5)
+    assert r2.milestone == 5   # a client in play plus a server that saw a connection
+
+
 def test_full_time_run_is_not_graded_as_exit(tmp_path):
     # The runner kills the fake game at the time limit. That kill's exit code (1) must not
     # be read as the game exiting on its own.

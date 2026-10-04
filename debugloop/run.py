@@ -15,7 +15,7 @@ from pathlib import Path
 import psutil
 
 from . import config, launch, scenario, signature
-from .outcome import STARTUP_TIMEOUT_S, Outcome, ProcessRecord, Sample, classify
+from .outcome import STARTUP_TIMEOUT_S, Outcome, ProcessRecord, Sample, classify, milestone
 
 
 class HarnessError(Exception):
@@ -30,6 +30,7 @@ class RunResult:
     signature: str | None
     run_dir: Path
     elapsed_s: float
+    milestone: int = 0   # how far the join got (outcome.milestone); the loop's "got further" test
 
 
 def _get_state(port: int) -> tuple[dict | None, int | None]:
@@ -247,7 +248,8 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
         collect_game_dumps(run_dir, t0, config.GAME_LOGS_DIR)
 
     sig = signature.make(o, scn)
-    result = RunResult(run_id, scn.name, o, sig, run_dir, round(time.time() - t0, 1))
+    result = RunResult(run_id, scn.name, o, sig, run_dir, round(time.time() - t0, 1),
+                       milestone(samples))
     (run_dir / "result.json").write_text(json.dumps(
         {**asdict(result), "run_dir": str(run_dir)}, indent=2, default=str))
     if o.kind == "pass":

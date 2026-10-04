@@ -364,3 +364,62 @@ def test_exited_process_with_no_answer_does_not_hold_a_match_end_pass():
     s = pair(1) + [Sample(t, "server", None, None, alive=False) for t in (3, 5, 7)] + [Sample(7, "c1", cli(), 200)]
     r = recs(server=ProcessRecord("server", "server", 0, [], None, []))
     assert outcome.classify(scn("match_end"), s, r, 8, True).kind == "pass"
+
+
+# --- milestone: how far through the join a run got -------------------------------------------
+
+def test_milestone_empty_is_zero():
+    assert outcome.milestone([]) == 0
+
+
+def test_milestone_follows_the_furthest_autopilot_phase():
+    order = ["off", "waiting_for_menu", "menu_ready", "launching", "character_select", "playing"]
+    got = [outcome.milestone([Sample(1, "c1", {"ticks": 1, "autopilot": ph}, 200)]) for ph in order]
+    assert got == [0, 0, 1, 2, 3, 4]
+
+
+def test_milestone_never_goes_back_when_a_client_regresses():
+    s = [Sample(1, "c1", {"autopilot": "character_select"}, 200),
+         Sample(2, "c1", {"autopilot": "waiting_for_menu"}, 200)]
+    assert outcome.milestone(s) == 3
+
+
+def test_milestone_takes_the_furthest_of_several_clients():
+    s = [Sample(1, "c1", {"autopilot": "launching"}, 200), Sample(1, "c2", {"autopilot": "playing"}, 200)]
+    assert outcome.milestone(s) == 4
+
+
+def test_milestone_unknown_missing_or_bad_phases_count_zero():
+    s = [Sample(1, "c1", {"autopilot": "bogus"}, 200), Sample(2, "c1", {"ticks": 3}, 200),
+         Sample(3, "c1", None, 503), Sample(4, "c1", {"autopilot": None}, 200),
+         Sample(5, "c1", {"autopilot": 7}, 200), Sample(6, "c1", {"autopilot": ["playing"]}, 200)]
+    assert outcome.milestone(s) == 0
+
+
+def test_milestone_connection_adds_one_point():
+    s = [Sample(1, "server", srv(connections=1, player_locations={}), 200),
+         Sample(1, "c1", {"autopilot": "character_select"}, 200)]
+    assert outcome.milestone(s) == 4
+
+
+def test_milestone_connection_from_player_locations_alone():
+    s = [Sample(1, "server", srv(connections=0, player_locations={"u1": [0, 0, 0]}), 200)]
+    assert outcome.milestone(s) == 1
+
+
+def test_milestone_connection_counts_once_and_only_when_seen():
+    s = [Sample(1, "server", srv(connections=0, player_locations={}), 200),
+         Sample(2, "server", srv(connections=2), 200), Sample(3, "server", srv(connections=3), 200)]
+    assert outcome.milestone(s) == 1
+    assert outcome.milestone([Sample(1, "server", srv(connections=0, player_locations={}), 200)]) == 0
+    assert outcome.milestone([Sample(1, "server", {"ticks": 1, "listening": True}, 200)]) == 0
+
+
+def test_milestone_ignores_non_numeric_connections():
+    s = [Sample(1, "server", srv(connections="many", player_locations=None), 200)]
+    assert outcome.milestone(s) == 0
+
+
+def test_milestone_solo_uses_the_solo_autopilot_phase():
+    s = [Sample(1, "game", {"ticks": 5, "autopilot": "playing"}, 200)]
+    assert outcome.milestone(s) == 4

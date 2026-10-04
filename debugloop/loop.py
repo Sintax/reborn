@@ -225,7 +225,7 @@ def _new_failure(st, L, d, scn_name: str, r) -> int:
     L.set_status(bug.signature, "fixing")
     L.save()
     st.current_bug, st.bug_scenario, st.attempts_on_current = bug.signature, scn_name, 0
-    st.bug_phase, st.bug_elapsed_s = r.outcome.phase, r.elapsed_s
+    st.bug_phase, st.bug_elapsed_s, st.bug_milestone = r.outcome.phase, r.elapsed_s, r.milestone
     st.bug_head = _head(d)
     d.triage(r)
     _write_brief(d, st, bug)
@@ -236,7 +236,7 @@ def _new_failure(st, L, d, scn_name: str, r) -> int:
 
 def _close_bug(st) -> None:
     st.current_bug = st.bug_scenario = st.bug_phase = st.bug_head = None
-    st.attempts_on_current, st.bug_elapsed_s = 0, 0.0
+    st.attempts_on_current, st.bug_elapsed_s, st.bug_milestone = 0, 0.0, 0
 
 
 def _regression_run(d):
@@ -447,8 +447,10 @@ def cmd_verify(d: Deps) -> int:
     st.harness_errors_in_row = 0
     if r.outcome.kind == "pass":
         return _fixed(st, L, d, note, ran)
-    later = (PHASE_ORDER.get(r.outcome.phase, 0), r.elapsed_s) > \
-            (PHASE_ORDER.get(st.bug_phase or "startup", 0), st.bug_elapsed_s)
+    # Join milestones first (a multi-stage bug can fail sooner each time yet get further), then the
+    # outcome phase, then time. A bug opened before bug_milestone existed reads 0.
+    later = (r.milestone, PHASE_ORDER.get(r.outcome.phase, 0), r.elapsed_s) > \
+            (st.bug_milestone, PHASE_ORDER.get(st.bug_phase or "startup", 0), st.bug_elapsed_s)
     if r.signature != st.current_bug and later:
         rc = _fixed(st, L, d, f"{note} (got further; next failure {r.signature})", ran)
         if rc != OK:

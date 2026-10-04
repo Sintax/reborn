@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from debugloop import state
 
@@ -32,3 +34,15 @@ def test_old_format_state_file_loads_with_defaults(tmp_path):
     s = state.LoopState.load(tmp_path)
     assert s.current_bug == "timeout:startup" and s.attempts_on_current == 1
     assert s.bug_head is None
+
+
+def test_old_state_file_loads_with_milestone_zero():
+    # The live loop_state.json as it is on disk: it has no bug_milestone field.
+    live = Path(__file__).resolve().parents[1] / "state" / "loop_state.json"
+    assert "bug_milestone" not in live.read_text(encoding="utf-8")
+    assert state.LoopState.load(live.parent).bug_milestone == 0
+
+
+def test_bug_milestone_roundtrips(tmp_path):
+    state.LoopState(current_bug="x", bug_milestone=4).save(tmp_path)
+    assert state.LoopState.load(tmp_path).bug_milestone == 4

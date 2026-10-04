@@ -54,13 +54,14 @@ def deps(tmp_path, outcomes, build_ok=True, status=" M reborn/Hooks.cpp\x00", br
         o = next(it)
         if isinstance(o, Exception):
             raise o
-        kind, sig, phase, elapsed = o
+        kind, sig, phase, elapsed, *rest = o   # optional 5th item: the run's join milestone
         rid = f"r{next(n)}"
         rd = tmp_path / "runs" / rid
         rd.mkdir(parents=True, exist_ok=True)
         if kind != "pass":
             (rd / "crash.dmp").write_text("x")
-        return RunResult(rid, scn.name, Outcome(kind, phase=phase), sig, rd, elapsed)
+        return RunResult(rid, scn.name, Outcome(kind, phase=phase), sig, rd, elapsed,
+                         rest[0] if rest else 0)
 
     def fake_build():
         log.append("build")
@@ -132,6 +133,51 @@ def test_earlier_different_failure_is_regression(tmp_path):
     loop.cmd_next(d)
     assert loop.cmd_verify(d) == 11
     assert LoopState.load(d.state_dir).current_bug == "exit:3"
+
+
+def test_later_milestone_beats_earlier_time(tmp_path):
+    # Each join fix moved the failure further along, but it happened sooner than the old timeout.
+    d = deps(tmp_path, [BUG, ("crash", "crash:0xc0000005:spawn", "startup", 50, 3)])
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 10
+    assert d.git.did("commit")
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug == "crash:0xc0000005:spawn"
+    assert st.bug_milestone == 3 and st.bug_elapsed_s == 50
+    assert Ledger.load(d.state_dir).get("exit:3").status == "fixed"
+
+
+def test_same_milestone_earlier_time_is_still_regression(tmp_path):
+    d = deps(tmp_path, [("exit", "exit:3", "playing", 100, 2), ("exit", "exit:4", "playing", 50, 2)])
+    loop.cmd_next(d)
+    assert LoopState.load(d.state_dir).bug_milestone == 2
+    assert loop.cmd_verify(d) == 11
+    assert LoopState.load(d.state_dir).current_bug == "exit:3"
+    assert not d.git.did("commit")
+
+
+def test_lower_milestone_later_time_is_regression(tmp_path):
+    d = deps(tmp_path, [("exit", "exit:3", "playing", 100, 3), ("exit", "exit:4", "playing", 900, 1)])
+    loop.cmd_next(d)
+    assert loop.cmd_verify(d) == 11
+
+
+def test_old_bug_without_milestone_counts_any_progress_as_further(tmp_path):
+    # The live bug was opened before bug_milestone existed: it loads as 0.
+    d = deps(tmp_path, [("crash", "crash:0xc0000005:spawn", "startup", 50, 1), PASS])   # PASS: step 0 smoke
+    LoopState(step=1, current_bug="timeout:startup", bug_scenario="s1-dojo-1client",
+              bug_phase="startup", bug_elapsed_s=241.8, bug_head="h0").save(d.state_dir)
+    L = Ledger.load(d.state_dir)
+    L.record("timeout:startup", "s1-dojo-1client", "r-old")
+    L.save()
+    f = d.state_dir / "loop_state.json"
+    old = json.loads(f.read_text())
+    del old["bug_milestone"]
+    f.write_text(json.dumps(old))
+    assert "bug_milestone" not in (d.state_dir / "loop_state.json").read_text()
+    d.git.status = " M reborn/Hooks.cpp\x00"
+    assert loop.cmd_verify(d) == 10
+    assert LoopState.load(d.state_dir).bug_milestone == 1
 
 
 def test_forbidden_path_rejected_before_build(tmp_path):

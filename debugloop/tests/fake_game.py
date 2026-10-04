@@ -23,7 +23,7 @@ def main():
             return {"ticks": 5, "listening": True, "map": "Dojo_P", "connections": 9,
                     "player_locations": {}}
         return {"ticks": 5, "has_pawn": True, "connected": True, "map": "Dojo_P",
-                "pawn_location": [0, 0, 0]}
+                "pawn_location": [0, 0, 0], "autopilot": "playing"}
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):

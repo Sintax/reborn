@@ -40,6 +40,29 @@ class Outcome:
     code: str | None = None
 
 
+# Autopilot phases (the `autopilot` field of a client's or solo game's /state), in the order a
+# join goes through them. Anything else (missing, "off", "waiting_for_menu", unknown) scores 0.
+AUTOPILOT_MILESTONE = {"menu_ready": 1, "launching": 2, "character_select": 3, "playing": 4}
+
+
+def milestone(samples: list[Sample]) -> int:
+    """How far a run got, 0-5: the furthest autopilot phase any client (or the solo game) reached,
+    plus one if the server ever reported a connection. Only ever read from the samples, so it
+    does not depend on how the run ended."""
+    best, connected = 0, False
+    for s in samples:
+        st = s.state
+        if not isinstance(st, dict):
+            continue
+        ph = st.get("autopilot")
+        if isinstance(ph, str):
+            best = max(best, AUTOPILOT_MILESTONE.get(ph, 0))
+        n = st.get("connections")
+        if (isinstance(n, int) and not isinstance(n, bool) and n > 0) or st.get("player_locations"):
+            connected = True
+    return best + connected
+
+
 def _ready(role: str, st: dict | None) -> bool:
     if not st or st.get("ticks", 0) <= 0:
         return False
