@@ -1,0 +1,27 @@
+#pragma once
+#include <string>
+#include <vector>
+
+namespace LaunchOptions {
+    struct Options {
+        std::wstring instance = L"game";
+        int debugPort = 0;            // 0 = no debug server
+        std::wstring runDir;          // empty = Documents\RebornLogs\<instance>-<time>
+        bool autopilot = false;
+        std::wstring join;            // client: "IP:PORT" to connect to
+        std::wstring soloMap;         // solo: map to open
+        std::wstring serverMap;       // server: travel URL, e.g. "Dojo_P" or "IceScort_P?SpawnBotsTeamA=4"
+        int players = 0;              // server: players to wait for (0 = keep default)
+        std::string character;        // display name from Constants::CharacterSelectCharacterTable
+        unsigned int seed = 0;
+        int hangSeconds = 60;
+        bool testHang = false;        // freeze the game thread 20 s after play starts
+        bool testCrash = false;       // null write 20 s after play starts
+        std::vector<std::wstring> errors;
+        std::vector<std::wstring> unknown;
+    };
+
+    Options Parse(const std::wstring& commandLine);
+    void InitFromCommandLine();
+    const Options& Get();
+}
