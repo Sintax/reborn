@@ -1,0 +1,22 @@
+name = "s2-algorithm-2clients-smoke"
+step = 2
+smoke = true
+time_limit_s = 300
+pass_when = "survive"
+required_passes = 1
+expect_map = "Caverns_P"
+
+[[process]]
+name = "server"
+role = "server"
+args = ["-rbservermap=Caverns_P"]
+
+[[process]]
+name = "c1"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Rath", "-rbseed=1"]
+
+[[process]]
+name = "c2"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Oscar Mike", "-rbseed=2"]

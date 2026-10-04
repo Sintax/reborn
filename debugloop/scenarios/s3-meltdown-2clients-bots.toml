@@ -1,0 +1,21 @@
+name = "s3-meltdown-2clients-bots"
+step = 3
+time_limit_s = 2400
+pass_when = "match_end"
+required_passes = 2
+expect_map = "IceScort_P"
+
+[[process]]
+name = "server"
+role = "server"
+args = ["-rbservermap=IceScort_P?SpawnBotsTeamA=4?SpawnBotsTeamB=4"]
+
+[[process]]
+name = "c1"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Rath", "-rbseed=1"]
+
+[[process]]
+name = "c2"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Oscar Mike", "-rbseed=2"]

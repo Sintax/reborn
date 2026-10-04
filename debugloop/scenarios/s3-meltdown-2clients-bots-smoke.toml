@@ -1,0 +1,22 @@
+name = "s3-meltdown-2clients-bots-smoke"
+step = 3
+smoke = true
+time_limit_s = 300
+pass_when = "survive"
+required_passes = 1
+expect_map = "IceScort_P"
+
+[[process]]
+name = "server"
+role = "server"
+args = ["-rbservermap=IceScort_P?SpawnBotsTeamA=4?SpawnBotsTeamB=4"]
+
+[[process]]
+name = "c1"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Rath", "-rbseed=1"]
+
+[[process]]
+name = "c2"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Oscar Mike", "-rbseed=2"]

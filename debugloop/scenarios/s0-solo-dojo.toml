@@ -1,0 +1,11 @@
+name = "s0-solo-dojo"
+step = 0
+time_limit_s = 300
+pass_when = "survive"
+required_passes = 3
+expect_map = "Dojo_P"
+
+[[process]]
+name = "solo"
+role = "solo"
+args = ["-rbautopilot", "-rbsolomap=Dojo_P", "-rbcharacter=Rath"]

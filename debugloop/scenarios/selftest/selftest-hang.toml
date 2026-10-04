@@ -1,0 +1,10 @@
+name = "selftest-hang"
+step = 0
+time_limit_s = 180
+pass_when = "survive"
+expect_map = "Dojo_P"
+
+[[process]]
+name = "solo"
+role = "solo"
+args = ["-rbautopilot", "-rbsolomap=Dojo_P", "-rbtesthang", "-rbhangsecs=15"]
