@@ -86,3 +86,11 @@ def test_spam_is_deduplicated_and_capped(tmp_path):
     reports = list(tmp_path.glob("crashme.*.crash.json"))
     assert len(reports) == 4   # first-chance cap; the 5th slot is reserved for the final report
     assert all(json.loads(r.read_text())["first_chance"] for r in reports)
+
+
+def test_debug_server():
+    p = build_and_run("test_debug_server",
+                      [SRC / "tests" / "test_debug_server.cpp", SRC / "DebugServer.cpp",
+                       SRC / "Diagnostics.cpp"])
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "PASS" in p.stdout
