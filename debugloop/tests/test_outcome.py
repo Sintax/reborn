@@ -274,3 +274,93 @@ def test_watchdog_limit_follows_the_mods_rules():
     assert _limit("-RBHANGSECS=15") == 60            # the mod matches the flag case-sensitively
     assert _limit("-rbhangsecs=15", "-rbhangsecs=20") == 20   # last one wins
     assert _limit("-rbhangsecs=15", "-rbhangsecs=2") == 15    # a bad value leaves the earlier one
+
+
+# --- Fix round 2 -----------------------------------------------------------------------------
+
+def scn2(limit=900):
+    text = f'''
+name="t2"
+step=2
+time_limit_s={limit}
+pass_when="match_end"
+expect_map="Dojo_P"
+[[process]]
+name="server"
+role="server"
+args=[]
+[[process]]
+name="c1"
+role="client"
+args=[]
+[[process]]
+name="c2"
+role="client"
+args=[]
+'''
+    return scenario.parse(text, Path("t2.toml"))
+
+def _two_clients_playing(until):
+    s = []
+    for t in range(0, until + 1, 5):
+        s += [Sample(t, "server", srv(connections=2, player_locations={}), 200),
+              Sample(t, "c1", cli(ticks=10 + t), 200), Sample(t, "c2", cli(ticks=10 + t), 200)]
+    return s
+
+def _after_match(ts, c1_status=503):
+    """Server has exited (no answer), c1 silent, c2 back in the menu and disconnected."""
+    s = []
+    for t in ts:
+        s += [Sample(t, "server", None, None, alive=False),
+              Sample(t, "c1", None, c1_status, alive=True),
+              Sample(t, "c2", cli(connected=False, disconnect_reason="lost", map="MenuMap_P"), 200, alive=True)]
+    return s
+
+def _recs2():
+    return [ProcessRecord("server", "server", 0, [], None, []),
+            ProcessRecord("c1", "client", None, [], None, []),
+            ProcessRecord("c2", "client", None, [], None, [])]
+
+def test_match_end_on_hold_ignores_post_match_disconnect():
+    # Reviewer reproducer: server exited 0 with match ended, c1 answers 503, c2 reports
+    # connected=False -> was graded "disconnect client:lost".
+    s = _two_clients_playing(50) + _after_match([55, 60])
+    assert outcome.classify(scn2(), s, _recs2(), 60, True).kind == "running"
+
+def test_match_end_on_hold_passes_once_everyone_answers():
+    s = _two_clients_playing(50) + _after_match([55, 60]) + [Sample(65, "c1", cli(map="MenuMap_P"), 200, alive=True)]
+    o = outcome.classify(scn2(), s, _recs2(), 65, True)
+    assert o.kind == "pass" and o.detail.startswith("match_end")
+
+def test_match_end_on_hold_ends_as_hang():
+    s = _two_clients_playing(50) + _after_match(range(55, 55 + 75, 5))
+    o = outcome.classify(scn2(), s, _recs2(), 130, True)
+    assert (o.kind, o.process) == ("hang", "c1")
+
+def test_match_end_on_hold_hang_at_the_cap():
+    s = _two_clients_playing(50) + _after_match([55, 60])
+    o = outcome.classify(scn2(limit=100), s, _recs2(), 100 + 60 + outcome.WATCHDOG_GRACE_S, True)
+    assert (o.kind, o.process) == ("hang", "c1")
+
+def _timing_out_c1(ok_until, until, step=5):
+    s = []
+    for i, t in enumerate(range(0, ok_until + 1, step)):
+        s += pair(t, c=cli(ticks=10 + i * 100))
+    for t in range(ok_until + step, until + 1, step):
+        s += [Sample(t, "server", srv(), 200, alive=True), Sample(t, "c1", None, None, alive=True)]
+    return s
+
+def test_alive_process_whose_polls_time_out_is_not_pass():
+    o = outcome.classify(scn(limit=120), _timing_out_c1(80, 120), recs(), 120, False)
+    assert o.kind == "running"
+
+def test_alive_process_whose_polls_time_out_ends_as_hang():
+    o = outcome.classify(scn(limit=120), _timing_out_c1(80, 120), recs(), 120 + 60 + outcome.WATCHDOG_GRACE_S, False)
+    assert (o.kind, o.process) == ("hang", "c1")
+    o = outcome.classify(scn(limit=120), _timing_out_c1(80, 150), recs(), 150, False)
+    assert (o.kind, o.process) == ("hang", "c1")
+
+def test_exited_process_with_no_answer_does_not_hold_a_match_end_pass():
+    s = pair(1) + [Sample(t, "server", None, None, alive=False) for t in (3, 5, 7)] + [Sample(7, "c1", cli(), 200)]
+    r = recs(server=ProcessRecord("server", "server", 0, [], None, []))
+    assert outcome.classify(scn("match_end"), s, r, 8, True).kind == "pass"

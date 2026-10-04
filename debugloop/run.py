@@ -162,7 +162,9 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
                 if name not in handles:
                     continue
                 st, code = _get_state(port)
-                s = Sample(round(time.time() - t0, 1), name, st, code)
+                # alive tells "no answer from a running game" (counts as frozen) from "process gone".
+                alive = handles[name].exit_code() is None
+                s = Sample(round(time.time() - t0, 1), name, st, code, alive)
                 samples.append(s)
                 tl.write(json.dumps(asdict(s)) + "\n")
 

@@ -241,3 +241,10 @@ def test_freeze_at_the_time_limit_runs_over_and_ends_as_hang(tmp_path, monkeypat
     r = run.run_scenario(scn(4), FakeLauncher({"c1": "hang"}), tmp_path, poll_s=0.5)
     assert r.outcome.kind == "hang"
     assert r.elapsed_s > 4
+
+
+def test_timeline_records_whether_the_process_was_alive(tmp_path):
+    r = run.run_scenario(scn(4), FakeLauncher({"c1": "exit"}), tmp_path, poll_s=0.5)
+    rows = [json.loads(l) for l in (r.run_dir / "timeline.jsonl").read_text().splitlines()]
+    assert rows[0]["alive"] is True
+    assert all("alive" in row for row in rows)

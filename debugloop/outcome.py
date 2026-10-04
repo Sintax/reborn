@@ -16,7 +16,8 @@ class Sample:
     t: float
     name: str
     state: dict | None
-    http_status: int | None
+    http_status: int | None       # None: no HTTP answer at all (refused or timed out)
+    alive: bool | None = None     # process still running at this poll; None = not recorded
 
 
 @dataclass
@@ -81,20 +82,28 @@ def _missing_unique_id(roles: dict[str, str], play: list[Sample]) -> list[str]:
                    and s.state.get("pawn_location") and not s.state.get("unique_id")})
 
 
-def _not_answering(name: str, samples: list[Sample]) -> bool:
-    """The latest poll was a 503 after the game had ticked: it may be frozen, so no pass yet."""
+def _silent(s: Sample, running: bool) -> bool:
+    """A poll the game did not answer: a 503, or no HTTP answer at all from a process that is
+    still running. A process that has exited is never 'silent', just gone."""
+    if s.http_status == 503:
+        return True
+    return s.http_status is None and running and s.alive is not False
+
+
+def _not_answering(name: str, samples: list[Sample], running: bool) -> bool:
+    """The latest poll went unanswered after the game had ticked: it may be frozen, so no pass yet."""
     mine = [s for s in samples if s.name == name]
-    return (bool(mine) and mine[-1].http_status == 503
+    return (bool(mine) and _silent(mine[-1], running)
             and any(s.state and s.state.get("ticks", 0) > 0 for s in mine))
 
 
-def _unresponsive(name: str, samples: list[Sample]) -> bool:
-    """Last three polls were 503. Before the first tick the game is still loading and answers
-    503 too; the startup timeout covers that."""
+def _unresponsive(name: str, samples: list[Sample], running: bool) -> bool:
+    """Last three polls went unanswered. Before the first tick the game is still loading and
+    answers 503 too; the startup timeout covers that."""
     mine = [s for s in samples if s.name == name]
     ticked = any(s.state and s.state.get("ticks", 0) > 0 for s in mine)
     last = mine[-3:]
-    return ticked and len(last) == 3 and all(s.http_status == 503 for s in last)
+    return ticked and len(last) == 3 and all(_silent(s, running) for s in last)
 
 
 HANG_SECONDS_RANGE = (5, 3600)   # LaunchOptions.cpp: -rbhangsecs outside this is ignored
@@ -129,9 +138,9 @@ def _fault_not_outlived(c: dict, name: str, samples: list[Sample]) -> bool:
     return not any(s.name == name and s.state and s.state.get("ticks", 0) > at for s in samples)
 
 
-def _frozen_past_watchdog(scn: Scenario, name: str, samples: list[Sample]) -> bool:
+def _frozen_past_watchdog(scn: Scenario, name: str, samples: list[Sample], running: bool) -> bool:
     """Unresponsive for longer than the in-game watchdog needs to write its own report (with frames)."""
-    if not _unresponsive(name, samples):
+    if not _unresponsive(name, samples, running):
         return False
     mine = [s for s in samples if s.name == name]
     last_ok = max((s.t for s in mine if s.state and s.state.get("ticks", 0) > 0), default=None)
@@ -143,7 +152,9 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
     phase, start = _phase(scn, samples)
     roles = {p.name: p.role for p in scn.processes}
 
-    unresponsive = {name for name in roles if _unresponsive(name, samples)}
+    # Processes with no exit code yet; a process that exited is never counted as "not answering".
+    running = {r.name for r in procs if r.exit_code is None} | (set(roles) - {r.name for r in procs})
+    unresponsive = {name for name in roles if _unresponsive(name, samples, name in running)}
     # A first-chance report only counts if the process exited with non-zero code: the
     # game (or its anti-tamper) may raise and handle access violations on purpose. A game-thread
     # fault also counts when the game thread then stops: the game's own handler catches the
@@ -166,14 +177,14 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
             return Outcome("hang", f"{r.hang_report.get('seconds')}s", r.name, phase,
                            "|".join(r.hang_report.get("frames", [])) or "unknown")
     for name in roles:
-        if _frozen_past_watchdog(scn, name, samples):
+        if _frozen_past_watchdog(scn, name, samples, name in running):
             return Outcome("hang", "game_thread_unresponsive", name, phase, "unknown")
     # Check for any non-zero exit first (must fail the pass check)
     for r in procs:
         if r.exit_code is not None and r.exit_code != 0:
             return Outcome("exit", "", r.name, phase, code=str(r.exit_code))
     # Never pass while a process may be frozen: keep sampling until the freeze is decided.
-    not_answering = [name for name in roles if _not_answering(name, samples)]
+    not_answering = [name for name in roles if _not_answering(name, samples, name in running)]
     # Check server clean exit (exit 0 + match_ended + pass_when=="match_end")
     # Only if no other process has non-zero exit.
     match_pass = next((r for r in procs if r.role == "server" and r.exit_code == 0 and match_ended
@@ -185,7 +196,9 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
         if r.exit_code is not None and not match_pass:
             return Outcome("exit", "", r.name, phase, code=str(r.exit_code))
 
-    if phase == "playing":
+    if match_pass:
+        pass   # the match is over: post-match disconnects and map changes are expected, not failures
+    elif phase == "playing":
         play = samples[start:]
         n_clients = sum(1 for v in roles.values() if v == "client")
         for s in play:

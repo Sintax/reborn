@@ -84,18 +84,23 @@ namespace Autopilot {
             return -1;
         }
 
+        bool g_triedCreate = false;   // CreateNewSave runs at most once per process
+        bool g_saveGaveUp = false;    // created it and still could not find it: stop launching
+
         // Selects the save named "autopilot", creating it if missing. False if that failed.
         bool EnsureSaveLoaded() {
             try {
                 Globals::saveFiles = Metagame::ReadAllSaves();
                 int i = FindSave(kSaveName);
-                if (i < 0) {
+                if (i < 0 && !g_triedCreate) {
+                    g_triedCreate = true;
                     std::printf("[AUTOPILOT] creating save \"%s\"\n", kSaveName);
                     Metagame::CreateNewSave(kSaveName, true);   // re-reads Globals::saveFiles
                     i = FindSave(kSaveName);
                 }
                 if (i < 0) {
-                    std::printf("[AUTOPILOT] save \"%s\" missing after creating it\n", kSaveName);
+                    if (g_triedCreate) g_saveGaveUp = true;
+                    std::printf("[AUTOPILOT] save \"%s\" not found after creating it; not creating another\n", kSaveName);
                     return false;
                 }
                 Globals::CurrentSaveFile = (unsigned)i;
@@ -119,7 +124,15 @@ namespace Autopilot {
 
         void Launch() {
             const auto& opt = LaunchOptions::Get();
-            if (!EnsureSaveLoaded()) { SetPhase(Phase::MenuReady); return; }   // retried after 5 s
+            if (!EnsureSaveLoaded()) {
+                if (g_saveGaveUp) {
+                    std::printf("[AUTOPILOT] no \"%s\" save; giving up on launching\n", kSaveName);
+                    SetPhase(Phase::Off);
+                } else {
+                    SetPhase(Phase::MenuReady);   // e.g. save folder unreadable: retried after 5 s
+                }
+                return;
+            }
             ChooseCharacter();
             if (!opt.soloMap.empty()) {
                 Globals::amStandalone = true;
