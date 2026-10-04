@@ -78,3 +78,25 @@ def test_known_addresses_skips_comments(tmp_path):
         "  // x = create_inline((void*)(Globals::baseAddress + 0x10), &Hooks::OldHook);\n"
         "y = create_inline((void*)(Globals::baseAddress + 0x20), &Hooks::NewHook);\n")
     assert analyze.known_addresses(tmp_path) == {0x20: "NewHook"}
+
+def test_cdb_symbol_path_is_an_argument_not_a_command(tmp_path, monkeypatch):
+    # Live run 2026-10-04: ".symfix+ <cache>; ..." in -c made cdb take the rest of the command
+    # line as the cache folder, so Windows symbols never loaded ("OS symbols are WRONG").
+    seen = {}
+
+    class P:
+        stdout = "ok"
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        return P()
+
+    monkeypatch.setattr(analyze.subprocess, "run", fake_run)
+    analyze.run_cdb(tmp_path / "x.dmp", cdb=tmp_path / "cdb.exe")
+    args = seen["args"]
+    y = args[args.index("-y") + 1]
+    assert y.lower().startswith("srv*") and "msdl.microsoft.com" in y
+    assert y.endswith(";" + str(analyze.config.WIN64))
+    c = args[args.index("-c") + 1]
+    assert ".symfix" not in c and ".sympath" not in c
+    assert "!analyze -v" in c and c.rstrip().endswith("q")

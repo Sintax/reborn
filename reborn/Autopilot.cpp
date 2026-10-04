@@ -2,6 +2,7 @@
 #include "Constants.hpp"
 #include "Engine.hpp"
 #include "Globals.hpp"
+#include "Hooks.hpp"
 #include "LaunchOptions.hpp"
 #include "Metagame.hpp"
 #include "Overlay.hpp"
@@ -31,6 +32,7 @@ namespace Autopilot {
         bool g_hadPawn = false;           // pawn seen on the previous play tick
         float g_menuTime = 0.f;           // seconds the menu condition has held continuously
         bool g_leftMenu = false;          // Launching: the world has left the menu at least once
+        bool g_startupPending = false;    // startup finished; pick a save and continue on the next tick
         const float kMenuGrace = 2.f;     // menu must hold this long before we call it a real return
         const float kLaunchTimeout = 90.f;
 
@@ -166,6 +168,12 @@ namespace Autopilot {
         SetPhase(Phase::MenuReady);
     }
 
+    bool OnStartupComplete() {
+        if (!Active()) return false;
+        g_startupPending = true;   // handled in Tick, outside ProcessEvent
+        return true;
+    }
+
     void Tick(float dt) {
         if (!Active()) return;
         const auto& opt = LaunchOptions::Get();
@@ -179,6 +187,13 @@ namespace Autopilot {
 
         switch (g_phase) {
         case Phase::WaitingForMenu:
+            if (g_startupPending) {
+                g_startupPending = false;
+                EnsureSaveLoaded();
+                std::printf("[AUTOPILOT] skipping save picker: using save %u of %zu\n",
+                            Globals::CurrentSaveFile, Globals::saveFiles.size());
+                Hooks::StartupCompletedHook();   // continues to the menu and calls OnMainMenuReady
+            }
             break;
         case Phase::MenuReady:
             if (g_phaseTime > 5.f) Launch();

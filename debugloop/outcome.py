@@ -1,11 +1,13 @@
 import math
 from dataclasses import dataclass, field
 
+from . import config
 from .scenario import Scenario
 
 DESYNC_UNITS = 1500
 DESYNC_SAMPLES = 5
 STARTUP_TIMEOUT_S = 240
+WATCHDOG_GRACE_S = 10    # time the watchdog gets to write its dump and report
 
 
 @dataclass
@@ -78,15 +80,51 @@ def _missing_unique_id(roles: dict[str, str], play: list[Sample]) -> list[str]:
                    and s.state.get("pawn_location") and not s.state.get("unique_id")})
 
 
+def _unresponsive(name: str, samples: list[Sample]) -> bool:
+    """Last three polls were 503. Before the first tick the game is still loading and answers
+    503 too; the startup timeout covers that."""
+    mine = [s for s in samples if s.name == name]
+    ticked = any(s.state and s.state.get("ticks", 0) > 0 for s in mine)
+    last = mine[-3:]
+    return ticked and len(last) == 3 and all(s.http_status == 503 for s in last)
+
+
+def _watchdog_limit(scn: Scenario, name: str) -> int:
+    """The in-game freeze limit: -rbhangsecs=N on that process, else the mod's default."""
+    spec = next((p for p in scn.processes if p.name == name), None)
+    for a in (spec.args if spec else []):
+        if a.lower().startswith("-rbhangsecs="):
+            try:
+                return int(a.split("=", 1)[1])
+            except ValueError:
+                pass
+    return config.HANG_SECONDS
+
+
+def _frozen_past_watchdog(scn: Scenario, name: str, samples: list[Sample]) -> bool:
+    """Unresponsive for longer than the in-game watchdog needs to write its own report (with frames)."""
+    if not _unresponsive(name, samples):
+        return False
+    mine = [s for s in samples if s.name == name]
+    last_ok = max((s.t for s in mine if s.state and s.state.get("ticks", 0) > 0), default=None)
+    return last_ok is not None and mine[-1].t - last_ok >= _watchdog_limit(scn, name) + WATCHDOG_GRACE_S
+
+
 def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
               elapsed_s: float, match_ended: bool) -> Outcome:
     phase, start = _phase(scn, samples)
     roles = {p.name: p.role for p in scn.processes}
 
+    unresponsive = {name for name in roles if _unresponsive(name, samples)}
     # A first-chance report only counts if the process exited with non-zero code: the
-    # game (or its anti-tamper) may raise and handle access violations on purpose.
-    crashed = [(r, c) for r in procs for c in r.crash_reports
-               if not c.get("first_chance", False) or (r.exit_code is not None and r.exit_code != 0)]
+    # game (or its anti-tamper) may raise and handle access violations on purpose. A game-thread
+    # fault also counts when the game thread then stops: the game's own handler catches the
+    # fault, logs "Critical error" and sits there without exiting, so no final report comes.
+    def counts(r: ProcessRecord, c: dict) -> bool:
+        if not c.get("first_chance", False) or (r.exit_code is not None and r.exit_code != 0):
+            return True
+        return bool(c.get("game_thread")) and (r.name in unresponsive or r.hang_report is not None)
+    crashed = [(r, c) for r in procs for c in r.crash_reports if counts(r, c)]
     if crashed:
         # Prefer the final (second-chance) report: it is the one that actually killed the process.
         crashed.sort(key=lambda rc: bool(rc[1].get("first_chance", False)))
@@ -98,8 +136,7 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
             return Outcome("hang", f"{r.hang_report.get('seconds')}s", r.name, phase,
                            "|".join(r.hang_report.get("frames", [])) or "unknown")
     for name in roles:
-        last = [s for s in samples if s.name == name][-3:]
-        if len(last) == 3 and all(s.http_status == 503 for s in last):
+        if _frozen_past_watchdog(scn, name, samples):
             return Outcome("hang", "game_thread_unresponsive", name, phase, "unknown")
     # Check for any non-zero exit first (must fail the pass check)
     for r in procs:

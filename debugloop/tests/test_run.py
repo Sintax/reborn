@@ -74,7 +74,8 @@ def test_crash_keeps_dump(tmp_path):
     assert (r.run_dir / "c1.1.dmp").exists()
 
 
-def test_hang_from_503(tmp_path):
+def test_hang_from_503(tmp_path, monkeypatch):
+    monkeypatch.setattr(run.config, "HANG_SECONDS", 1)   # 503s count once the watchdog limit + grace has passed
     r = run.run_scenario(scn(30), FakeLauncher({"c1": "hang"}), tmp_path, poll_s=0.5)
     assert r.outcome.kind == "hang"
 

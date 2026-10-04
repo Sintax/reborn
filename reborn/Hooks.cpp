@@ -720,7 +720,7 @@ namespace Hooks {
             startupCompleteUFunction = UFunction::FindFunction("Function PoplarGame.PoplarPlayerManager.StartupProcessComplete");
 
         if (function == startupCompleteUFunction) {
-            Overlay::OpenSaveManager();
+            if (!Autopilot::OnStartupComplete()) Overlay::OpenSaveManager();
             return;
         }
 

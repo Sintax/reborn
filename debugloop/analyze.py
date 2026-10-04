@@ -72,10 +72,11 @@ def run_cdb(dump: Path, timeout: int = 240, cdb: Path | None = None) -> str:
     if not cdb:
         return "(cdb not found)"
     cache = Path(os.environ["LOCALAPPDATA"]) / "symcache"
-    cmd = (f".symfix+ {cache}; .sympath+ \"{config.WIN64}\"; .reload; "
-           "!analyze -v; .ecxr; kb 30; q")
+    # The symbol path goes in -y: ".symfix+ <dir>" inside -c takes the rest of the line as <dir>.
+    sympath = f"srv*{cache}*https://msdl.microsoft.com/download/symbols;{config.WIN64}"
+    cmd = "!analyze -v; .ecxr; kb 30; q"
     try:
-        p = subprocess.run([str(cdb), "-z", str(dump), "-c", cmd], capture_output=True,
+        p = subprocess.run([str(cdb), "-z", str(dump), "-y", sympath, "-c", cmd], capture_output=True,
                            text=True, timeout=timeout, errors="replace")
         lines = p.stdout.splitlines()
         return "\n".join(lines[-300:])

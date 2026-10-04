@@ -72,10 +72,60 @@ def test_first_chance_report_on_live_process_is_ignored():
     r = recs(c1=ProcessRecord("c1", "client", None, [rep], None, []))
     assert outcome.classify(scn(), pair(1), r, 50, False).kind == "running"
 
-def test_three_503s_is_hang():
+def test_game_thread_fault_then_unresponsive_is_crash():
+    # Live run 2026-10-04: the game's own handler catches the fault, logs "Critical error" and
+    # sits there, so no final report comes and the process never exits.
+    rep = {"code": "0xC0000005", "address": "reborn+0xd84d4",
+           "frames": ["reborn+0xd84d4", "battleborn+0xee67af"], "game_thread": True, "first_chance": True}
+    r = recs(c1=ProcessRecord("c1", "client", None, [rep], None, []))
     s = pair(1) + [Sample(t, "c1", None, 503) for t in (3, 5, 7)]
-    o = outcome.classify(scn(), s, recs(), 60, False)
+    o = outcome.classify(scn(), s, r, 60, False)
+    assert (o.kind, o.process, o.code, o.phase) == ("crash", "c1", "0xC0000005", "playing")
+    assert o.frame == "reborn+0xd84d4|battleborn+0xee67af"
+
+def test_game_thread_fault_then_hang_report_is_crash():
+    rep = {"code": "0xC0000005", "frames": ["battleborn+0x10"], "game_thread": True, "first_chance": True}
+    r = recs(c1=ProcessRecord("c1", "client", None, [rep], {"seconds": 60, "frames": []}, []))
+    assert outcome.classify(scn(), pair(1), r, 60, False).kind == "crash"
+
+def test_other_thread_fault_then_unresponsive_stays_hang():
+    rep = {"code": "0xC0000005", "frames": ["battleborn+0x10"], "game_thread": False, "first_chance": True}
+    r = recs(c1=ProcessRecord("c1", "client", None, [rep], None, []))
+    s = pair(1) + [Sample(t, "c1", None, 503) for t in range(3, 3 + 72, 4)]
+    assert outcome.classify(scn(), s, r, 80, False).kind == "hang"
+
+def test_503s_past_the_watchdog_limit_is_hang():
+    s = pair(1) + [Sample(t, "c1", None, 503) for t in range(3, 3 + 72, 4)]
+    o = outcome.classify(scn(), s, recs(), 80, False)
     assert o.kind == "hang" and o.frame == "unknown"
+
+def test_503s_wait_for_the_watchdog_report():
+    # Live run 2026-10-04: with -rbhangsecs=15 the runner gave up after 15 s of 503s and killed
+    # the game a moment before the watchdog wrote its hang report.
+    s = pair(1) + [Sample(t, "c1", None, 503) for t in (6, 11, 16)]
+    assert outcome.classify(scn(), s, recs(), 20, False).kind == "running"
+
+def test_watchdog_limit_comes_from_rbhangsecs():
+    sc = scn()
+    sc.processes[1].args = ["-rbhangsecs=15"]
+    s = pair(1) + [Sample(t, "c1", None, 503) for t in range(6, 6 + 28, 4)]
+    assert outcome.classify(sc, s, recs(), 40, False).kind == "hang"
+    s = pair(1) + [Sample(t, "c1", None, 503) for t in range(6, 6 + 16, 4)]
+    assert outcome.classify(sc, s, recs(), 30, False).kind == "running"
+
+def test_503s_before_first_tick_are_still_loading_not_hang():
+    # Live run 2026-10-04: the game answers 503 while it loads, before its loop has ticked once.
+    s = [Sample(t, "c1", None, 503) for t in (6, 11, 16)]
+    assert outcome.classify(scn(), s, recs(), 17, False).kind == "running"
+
+def test_503s_after_ticking_while_loading_is_hang():
+    s = [Sample(2, "c1", cli(has_pawn=False, ticks=5), 200)] + [Sample(t, "c1", None, 503) for t in range(6, 6 + 72, 4)]
+    assert outcome.classify(scn(), s, recs(), 80, False).kind == "hang"
+
+def test_never_ticking_game_times_out_in_startup():
+    s = [Sample(t, "c1", None, 503) for t in range(0, 250, 5)]
+    o = outcome.classify(scn(), s, recs(), outcome.STARTUP_TIMEOUT_S, False)
+    assert (o.kind, o.phase) == ("timeout", "startup")
 
 def test_client_disconnect_in_play():
     s = pair(1) + pair(3, c=cli(connected=False, disconnect_reason="timeout"))
