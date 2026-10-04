@@ -56,6 +56,15 @@ def test_unhandled_crash_writes_final_second_chance_report(tmp_path):
     assert (tmp_path / last["dump"]).stat().st_size > 10_000
 
 
+def test_fault_at_address_zero_is_deduplicated(tmp_path):
+    p = subprocess.run([str(_crashme()), "null", str(tmp_path)], capture_output=True, text=True,
+                       timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    reports = list(tmp_path.glob("crashme.*.crash.json"))
+    assert len(reports) == 1
+    assert json.loads(reports[0].read_text())["first_chance"] is True
+
+
 def test_hang_writes_hang_report(tmp_path):
     proc = subprocess.Popen([str(_crashme()), "hang", str(tmp_path)])
     try:

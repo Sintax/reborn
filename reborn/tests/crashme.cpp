@@ -1,4 +1,4 @@
-// Usage: crashme <mode> <rundir>   mode = crash | hang | spam
+// Usage: crashme <mode> <rundir>   mode = crash | hang | spam | null
 #include "../Diagnostics.hpp"
 #include <Windows.h>
 #include <cstdio>
@@ -10,12 +10,23 @@ template <int N> void TryFault() {
     __try { Fault<N>(); } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 
+// Call through a null pointer: the fault address is 0.
+void NullCalls() {
+    void (*fn)() = nullptr;
+    for (int i = 0; i < 4; i++) { __try { fn(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+}
+
 int wmain(int argc, wchar_t** argv) {
     if (argc < 3) return 2;
     std::wstring mode = argv[1];
     Diagnostics::Init(argv[2], L"crashme", 5);
     Diagnostics::NoteTick();
     std::printf("hello from crashme\n");
+    if (mode == L"null") {
+        NullCalls();
+        Sleep(500);
+        return 0;
+    }
     if (mode == L"crash") {
         Fault<0>();
     } else if (mode == L"hang") {

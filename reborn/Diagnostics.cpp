@@ -139,7 +139,11 @@ namespace Diagnostics {
         }
 
         std::string TailJson() {
-            auto lines = RecentLines();
+            // try_lock: the worker must never block on a lock the faulting thread might hold.
+            std::unique_lock lk(g_linesMutex, std::try_to_lock);
+            if (!lk.owns_lock()) return "[]";
+            std::vector<std::string> lines(g_lines.begin(), g_lines.end());
+            lk.unlock();
             size_t start = lines.size() > 50 ? lines.size() - 50 : 0;
             std::string s = "[";
             for (size_t i = start; i < lines.size(); i++) {
@@ -227,6 +231,8 @@ namespace Diagnostics {
             }
             g_recordCopy = *ep->ExceptionRecord;
             g_contextCopy = *ep->ContextRecord;
+            // The copy has no extended-state area, so drop the flag that says it does.
+            g_contextCopy.ContextFlags &= ~(CONTEXT_XSTATE & ~CONTEXT_AMD64);
             g_pointersCopy = { &g_recordCopy, &g_contextCopy };
             unsigned seq = ++g_nextSeq;
             g_request = { tid, firstChance, seq };
@@ -243,7 +249,8 @@ namespace Diagnostics {
             if (!IsFatal(ep->ExceptionRecord->ExceptionCode)) return EXCEPTION_CONTINUE_SEARCH;
             DWORD tid = GetCurrentThreadId();
             if (tid == g_workerThreadId || tid == g_watchdogThreadId) return EXCEPTION_CONTINUE_SEARCH;
-            unsigned long long addr = (unsigned long long)ep->ExceptionRecord->ExceptionAddress;
+            // Slots hold address+1 so that 0 can mean "empty" and a fault at address 0 is still deduplicated.
+            unsigned long long addr = (unsigned long long)ep->ExceptionRecord->ExceptionAddress + 1;
             bool claimed = false;
             for (auto& slot : g_slots) {
                 unsigned long long expected = 0;
@@ -257,7 +264,8 @@ namespace Diagnostics {
 
         // Always writes its own final report (first_chance=false), even for an address already reported.
         LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
-            Report(ep, false);
+            static std::atomic<bool> reported{ false };
+            if (!reported.exchange(true)) Report(ep, false);   // one final report per process
             return g_previousFilter ? g_previousFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
         }
 
