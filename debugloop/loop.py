@@ -264,24 +264,35 @@ def _revert_fix(st, L, d, fix: str, r, note: str) -> int:
                                      f"(triage: {triage}). Note was: {note}", diff=diff)
 
 
-def _fixed(st, L, d, note: str, ran=frozenset()) -> int:
-    """Commit the fix, check step 0 still passes, close the bug. `ran` holds the scenarios this
-    verify already ran and judged, so step 0's smoke test is not run (and judged) twice."""
-    sig = st.current_bug
+def _commit_fix(st, L, d, subject: str, note: str, ran) -> tuple[bool, int | None, str, str | None]:
+    """Commit the fix and check step 0 still passes. `ran` holds the scenarios this verify already
+    ran and judged, so step 0's smoke test is not run (and judged) twice.
+    Returns (committed, revert_rc, note, smoke_err). revert_rc is set when the fix broke step 0 and
+    was reverted: the caller returns it as is. committed is False when there was nothing to commit."""
+    if not _has_changes(d):
+        return False, None, note, None
+    d.git(["add", "-A", "--", *[p for p in _touched(d) if p.startswith(ALLOWED)]])
+    d.git(["commit", "-m", f"{subject}\n\n{note}\n\n"
+                           "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"])
+    fix = st.bug_head = _head(d)
+    st.save(d.state_dir)
     smoke_err = None
-    if _has_changes(d):
-        d.git(["add", "-A", "--", *[p for p in _touched(d) if p.startswith(ALLOWED)]])
-        d.git(["commit", "-m", f"fix: {sig} [bb-autofix]\n\n{note}\n\n"
-                               "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"])
-        fix = st.bug_head = _head(d)
-        st.save(d.state_dir)
-        if REGRESSION_SCENARIO not in ran:
-            broke, smoke_err = _regression_run(d)
-            if broke is not None:
-                return _revert_fix(st, L, d, fix, broke, note)
-            if smoke_err:
-                note += f" (step 0 smoke check could not run: {smoke_err})"
-    else:
+    if REGRESSION_SCENARIO not in ran:
+        broke, smoke_err = _regression_run(d)
+        if broke is not None:
+            return True, _revert_fix(st, L, d, fix, broke, note), note, None
+        if smoke_err:
+            note += f" (step 0 smoke check could not run: {smoke_err})"
+    return True, None, note, smoke_err
+
+
+def _fixed(st, L, d, note: str, ran=frozenset()) -> int:
+    """Commit the fix, check step 0 still passes, close the bug."""
+    sig = st.current_bug
+    committed, rc, note, smoke_err = _commit_fix(st, L, d, f"fix: {sig} [bb-autofix]", note, ran)
+    if rc is not None:
+        return rc
+    if not committed:
         note += " (passed with no code change - may be flaky)"
     L.set_status(sig, "fixed", note)
     L.save()
@@ -292,6 +303,33 @@ def _fixed(st, L, d, note: str, ran=frozenset()) -> int:
     if smoke_err:
         return _harness_error(st, d, f"step 0 smoke check after the fix could not run: {smoke_err}")
     return OK
+
+
+def _progress_on_same_bug(st, L, d, r, note: str, ran) -> int | None:
+    """The run failed with the same signature but joined further (a higher milestone). Commit the
+    fix, keep the bug open with a fresh attempt budget. None when there is no change to commit:
+    the caller then counts an ordinary failed attempt."""
+    if not _has_changes(d):
+        return None
+    sig, old = st.current_bug, st.bug_milestone
+    committed, rc, note, smoke_err = _commit_fix(
+        st, L, d, f"fix: {sig} progress to milestone {r.milestone} [bb-autofix]", note, ran)
+    if rc is not None:
+        return rc
+    st.attempts_on_current = 0
+    st.bug_milestone, st.bug_phase, st.bug_elapsed_s = r.milestone, r.outcome.phase, r.elapsed_s
+    _record_failed_run(d, L, r)
+    L.set_status(sig, "fixing", f"progress: reached milestone {r.milestone} in run {r.run_id}; "
+                                f"attempts reset. Fix note: {note}")
+    L.save()
+    d.triage(r)
+    _write_brief(d, st, L.get(sig))
+    st.save(d.state_dir)
+    _clear_note(d)
+    print(f"PROGRESS {sig}: milestone {old} -> {r.milestone}; committed {st.bug_head[:12]}, attempts reset")
+    if smoke_err:
+        return _harness_error(st, d, f"step 0 smoke check after the fix could not run: {smoke_err}")
+    return FIX_NEEDED
 
 
 def _attempt_failed(st, L, d, why: str, diff: str | None = None) -> int:
@@ -456,6 +494,12 @@ def cmd_verify(d: Deps) -> int:
         if rc != OK:
             return rc
         return _new_failure(st, L, d, r.scenario, r)
+    if r.signature == st.current_bug and r.milestone > st.bug_milestone:
+        # A timeout keeps the same signature however far the join got, so the milestone is the
+        # only sign of progress. Time or phase alone do not count.
+        rc = _progress_on_same_bug(st, L, d, r, note, ran)
+        if rc is not None:
+            return rc
     _record_failed_run(d, L, r)
     triage = d.triage(r)
     if r.signature == st.current_bug:

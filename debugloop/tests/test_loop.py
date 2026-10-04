@@ -609,3 +609,106 @@ def test_progress_whose_fix_breaks_step0_is_reverted_and_no_new_bug_opens(tmp_pa
     assert loop.cmd_verify(d) == 11
     assert d.git.did("revert")
     assert LoopState.load(d.state_dir).current_bug == "exit:3"
+
+
+# --- same bug, but the join got further (a timeout keeps its signature at every milestone) ---
+
+def _opened_at_milestone(tmp_path, outcomes, milestone=1, **kw):
+    """Step 1, bug exit:3 opened at `milestone`; `outcomes` are the verify runs (smoke first)."""
+    d = deps(tmp_path, [("exit", "exit:3", "startup", 240, milestone), *outcomes], **kw)
+    _step1(d)
+    assert loop.cmd_next(d) == 10
+    return d
+
+
+def test_same_bug_higher_milestone_is_progress(tmp_path, capsys):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "startup", 240, 4), PASS])
+    st = LoopState.load(d.state_dir)
+    scn, st.attempts_on_current = st.bug_scenario, 3
+    st.save(d.state_dir)
+    capsys.readouterr()
+    assert loop.cmd_verify(d) == 10
+    commit = next(c for c in d.git.calls if c[0] == "commit")
+    assert "fix: exit:3 progress to milestone 4 [bb-autofix]" in commit[2]
+    assert commit[2].rstrip().endswith("Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>")
+    assert not d.git.did("stash") and not d.git.did("revert")
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug == "exit:3" and st.bug_scenario == scn
+    assert st.attempts_on_current == 0 and st.bug_milestone == 4
+    assert st.bug_phase == "startup" and st.bug_elapsed_s == 240
+    assert st.bug_head == d.git.head
+    bug = Ledger.load(d.state_dir).get("exit:3")
+    assert bug.status == "fixing" and "progress: reached milestone 4 in run" in bug.notes[-1]
+    assert "attempts reset" in bug.notes[-1]
+    assert "Attempt: 1 of 5" in (d.state_dir / "brief.md").read_text()
+    assert not (d.state_dir / "attempt_note.md").exists()
+    assert d.triaged[-1] == bug.runs[-1]
+    assert f"PROGRESS exit:3: milestone 1 -> 4; committed {d.git.head[:12]}, attempts reset" in \
+        capsys.readouterr().out
+
+
+def test_same_bug_progress_keeps_the_scenario_and_the_next_verify_works(tmp_path):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "startup", 240, 4), PASS,
+                                        PASS, PASS, PASS])
+    scn = LoopState.load(d.state_dir).bug_scenario
+    assert loop.cmd_verify(d) == 10
+    assert LoopState.load(d.state_dir).bug_scenario == scn
+    assert loop.cmd_verify(d) == 0
+    assert Ledger.load(d.state_dir).get("exit:3").status == "fixed"
+
+
+def test_same_bug_same_milestone_later_time_is_still_a_failed_attempt(tmp_path):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "playing", 900, 1)], milestone=1)
+    assert loop.cmd_verify(d) == 11
+    assert not d.git.did("commit")
+    st = LoopState.load(d.state_dir)
+    assert st.attempts_on_current == 1 and st.bug_milestone == 1
+
+
+def test_same_bug_lower_milestone_is_a_failed_attempt(tmp_path):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "playing", 900, 1)], milestone=3)
+    assert loop.cmd_verify(d) == 11
+    assert not d.git.did("commit")
+
+
+def test_same_bug_higher_milestone_whose_fix_breaks_step0_is_reverted(tmp_path):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "startup", 240, 4),
+                                        ("exit", "exit:7", "playing", 30)])
+    assert loop.cmd_verify(d) == 11
+    assert d.git.did("commit") and d.git.did("revert")
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug == "exit:3" and st.attempts_on_current == 1
+    assert st.bug_milestone == 1, "a reverted fix does not move the bug's milestone"
+    assert st.bug_head == d.git.head
+    bug = Ledger.load(d.state_dir).get("exit:3")
+    assert bug.status == "fixing" and "fix broke step 0 smoke" in bug.notes[-1]
+
+
+def test_same_bug_progress_on_the_last_attempt_is_not_a_give_up(tmp_path):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "startup", 240, 4), PASS])
+    st = LoopState.load(d.state_dir)
+    st.attempts_on_current = loop.MAX_ATTEMPTS - 1
+    st.save(d.state_dir)
+    assert loop.cmd_verify(d) == 10
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug == "exit:3" and st.attempts_on_current == 0
+    assert Ledger.load(d.state_dir).get("exit:3").status == "fixing"
+
+
+def test_same_bug_higher_milestone_with_no_change_to_commit_is_a_failed_attempt(tmp_path):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "startup", 240, 4)])
+    d.git.status = ""
+    assert loop.cmd_verify(d) == 11
+    assert not d.git.did("commit")
+    st = LoopState.load(d.state_dir)
+    assert st.attempts_on_current == 1 and st.bug_milestone == 1
+
+
+def test_same_bug_progress_whose_step0_check_cannot_run_is_a_harness_error(tmp_path):
+    d = _opened_at_milestone(tmp_path, [PASS, ("exit", "exit:3", "startup", 240, 4),
+                                        run.HarnessError("port busy")])
+    assert loop.cmd_verify(d) == 2
+    assert d.git.did("commit") and not d.git.did("revert")
+    st = LoopState.load(d.state_dir)
+    assert st.current_bug == "exit:3" and st.attempts_on_current == 0 and st.bug_milestone == 4
+    assert st.harness_errors_in_row == 1

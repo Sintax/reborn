@@ -37,7 +37,7 @@ Run `python -m debugloop.loop verify` in the background with a 110-minute timeou
 | Exit | Do |
 |---|---|
 | 0 | Fixed and committed. End the iteration. |
-| 10 | Progress: fixed one bug, a new later one is open. Go back to section 2 in this same iteration (at most 3 fix cycles per iteration). |
+| 10 | Progress: either fixed one bug and a new later one is open, or the same bug got further (the output says `PROGRESS`: the fix was committed, the join reached a higher milestone, and the attempt count is reset). Go back to section 2 in this same iteration (at most 3 fix cycles per iteration). |
 | 11 | Attempt failed (brief now has the reason). Go back to section 2 (at most 3 fix cycles per iteration). |
 | 5 | Gave up on this bug. Push-notify "Gave up on bug <signature> after 5 tries". End the iteration. |
 | 2 / 3 | As in section 1. |
