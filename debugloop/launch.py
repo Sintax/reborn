@@ -63,10 +63,21 @@ def _sha(p: Path) -> str:
 
 
 def ensure_identity(name: str, exe_name: str, args: list[str], win64: Path = config.WIN64) -> Path:
+    loader = win64 / LOADER_FILES[0]
+    blocked_hint = (f"{loader} is {{}}; antivirus (Windows Defender) often quarantines this "
+                    "Steam emulator loader - restore or allow it in Windows Security, then retry")
+    if not loader.exists():
+        raise RuntimeError(blocked_hint.format("missing"))
     d = win64 / "rb_ids" / name
     (d / "steam_settings").mkdir(parents=True, exist_ok=True)
     for f in LOADER_FILES:
-        if (win64 / f).exists() and _sha(win64 / f) != _sha(d / f):
+        try:
+            changed = (win64 / f).exists() and _sha(win64 / f) != _sha(d / f)
+        except OSError as e:
+            if f == LOADER_FILES[0]:
+                raise RuntimeError(blocked_hint.format(f"unreadable ({e.strerror})")) from e
+            raise
+        if changed:
             shutil.copy2(win64 / f, d / f)
     if (win64 / "steam_settings").is_dir():
         shutil.copytree(win64 / "steam_settings", d / "steam_settings", dirs_exist_ok=True)

@@ -71,6 +71,7 @@ Step 4 is the only one that needs people. The AI tells you when step 3 passes.
 - **Two game copies plus a server might not fit in 16 GB.** The AI measures this early. Fallbacks: low graphics settings, small windows, and running step 2 with one autopilot player plus bots.
 - **Some bugs may be too deep for a quick fix**, like the garbage-collection crashes the original author fought (the engine's routine cleanup of unused memory). The stuck rule keeps those from stalling everything else.
 - **Two copies of the game on one PC may look like the same Steam user.** The plan's first task tests this. The fallback is a second copy of just the small program folder with its own fake-Steam identity.
+- **Windows Defender quarantines the fake-Steam launcher.** Seen on 4 October 2026 (Task 14): the first live run read `steamclient_loader_x64.exe` to copy it into the per-player folder, and Defender flagged it ("Trojan:Win32/Wacatac.H!ml", a machine-learning guess that commonly hits this tool) and removed it from the game folder. Nothing can launch until you restore it, or allow it, in Windows Security. The AI is not allowed to change security settings, so this one is yours. The runner now stops with a plain message naming the file instead of a cryptic "Invalid argument". Each per-player folder gets its own copy of the launcher, so a folder exclusion for the game folder (or for `rb_ids`) is the durable fix.
 
 ---
 
