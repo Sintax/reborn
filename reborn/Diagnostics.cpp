@@ -10,7 +10,6 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
-#include <set>
 #include <sstream>
 #include <thread>
 #pragma comment(lib, "dbghelp.lib")
@@ -22,19 +21,30 @@ namespace Diagnostics {
         std::atomic<long long> g_lastTickMs{ 0 };
         std::atomic<unsigned long long> g_ticks{ 0 };
         std::atomic<DWORD> g_gameThreadId{ 0 };
-        DWORD g_workerThreadId = 0;
+        std::atomic<DWORD> g_workerThreadId{ 0 };
 
         std::mutex g_linesMutex;
         std::deque<std::string> g_lines;
         constexpr size_t kMaxLines = 300;
 
-        std::mutex g_crashMutex;
-        std::set<unsigned long long> g_seenAddresses;
-        int g_reports = 0;
+        // First-chance reports are deduplicated by address in a lock-free slot table (no heap, no mutex
+        // on the faulting thread). The last of kMaxReports is kept for the final, unhandled report.
         constexpr int kMaxReports = 5;
+        constexpr int kFirstChanceSlots = kMaxReports - 1;
+        std::atomic<unsigned long long> g_slots[kFirstChanceSlots];
+        std::atomic<int> g_reports{ 0 };
+        std::atomic<DWORD> g_watchdogThreadId{ 0 };
 
-        struct CrashRequest { EXCEPTION_POINTERS* ep; DWORD threadId; bool firstChance; };
+        // The faulting thread copies the exception into these globals before handing off, so the
+        // worker never reads memory owned by the faulting thread's stack.
+        struct CrashRequest { DWORD threadId; bool firstChance; unsigned seq; };
         CrashRequest g_request{};
+        EXCEPTION_RECORD g_recordCopy;
+        CONTEXT g_contextCopy;
+        EXCEPTION_POINTERS g_pointersCopy;
+        std::atomic<bool> g_busy{ false };      // a request is owned by the worker
+        std::atomic<unsigned> g_doneSeq{ 0 };
+        unsigned g_nextSeq = 0;
         HANDLE g_requestEvent = nullptr, g_doneEvent = nullptr;
         LPTOP_LEVEL_EXCEPTION_FILTER g_previousFilter = nullptr;
 
@@ -170,20 +180,17 @@ namespace Diagnostics {
         }
 
         void HandleCrash(const CrashRequest& r) {
-            int index;
-            {
-                std::lock_guard lk(g_crashMutex);
-                index = ++g_reports;
-            }
+            EXCEPTION_POINTERS* ep = &g_pointersCopy;
+            int index = ++g_reports;
             std::wstring base = g_runDir + L"\\" + g_instance + L"." + std::to_wstring(index);
-            WriteDump(base + L".dmp", r.ep, r.threadId);
+            WriteDump(base + L".dmp", ep, r.threadId);
             DWORD64 frames[32];
-            int n = WalkStack(*r.ep->ContextRecord, frames, 32);
+            int n = WalkStack(*ep->ContextRecord, frames, 32);
             char code[16];
-            std::snprintf(code, sizeof code, "0x%08lX", r.ep->ExceptionRecord->ExceptionCode);
+            std::snprintf(code, sizeof code, "0x%08lX", ep->ExceptionRecord->ExceptionCode);
             std::ostringstream j;
             j << "{\"code\":\"" << code << "\""
-              << ",\"address\":" << JsonString(FormatAddress((DWORD64)r.ep->ExceptionRecord->ExceptionAddress))
+              << ",\"address\":" << JsonString(FormatAddress((DWORD64)ep->ExceptionRecord->ExceptionAddress))
               << ",\"frames\":" << FramesJson(frames, n)
               << ",\"thread\":" << r.threadId
               << ",\"game_thread\":" << (r.threadId == g_gameThreadId ? "true" : "false")
@@ -196,44 +203,66 @@ namespace Diagnostics {
         void CrashWorker() {
             for (;;) {
                 WaitForSingleObject(g_requestEvent, INFINITE);
-                HandleCrash(g_request);
+                CrashRequest r = g_request;
+                HandleCrash(r);
+                g_doneSeq = r.seq;
+                g_busy = false;
                 SetEvent(g_doneEvent);
             }
         }
 
         // The dump is written from a separate thread: MiniDumpWriteDump is unreliable on the faulting thread.
+        // If the wait times out the request is abandoned, but the worker only uses the global copies.
         void Report(EXCEPTION_POINTERS* ep, bool firstChance) {
             static std::mutex oneAtATime;
-            if (GetCurrentThreadId() == g_workerThreadId) return;
+            DWORD tid = GetCurrentThreadId();
+            if (tid == g_workerThreadId || tid == g_watchdogThreadId) return;
             std::lock_guard lk(oneAtATime);
-            g_request = { ep, GetCurrentThreadId(), firstChance };
+            ULONGLONG deadline = GetTickCount64() + 30000;
+            bool expected = false;
+            while (!g_busy.compare_exchange_strong(expected, true)) {   // previous request still running
+                if (GetTickCount64() > deadline) return;
+                Sleep(10);
+                expected = false;
+            }
+            g_recordCopy = *ep->ExceptionRecord;
+            g_contextCopy = *ep->ContextRecord;
+            g_pointersCopy = { &g_recordCopy, &g_contextCopy };
+            unsigned seq = ++g_nextSeq;
+            g_request = { tid, firstChance, seq };
             SetEvent(g_requestEvent);
-            WaitForSingleObject(g_doneEvent, 30000);
+            while (g_doneSeq != seq) {
+                ULONGLONG now = GetTickCount64();
+                if (now >= deadline) return;
+                WaitForSingleObject(g_doneEvent, (DWORD)(deadline - now));
+            }
         }
 
+        // No heap allocation and no locks here: this runs on the faulting thread.
         LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* ep) {
             if (!IsFatal(ep->ExceptionRecord->ExceptionCode)) return EXCEPTION_CONTINUE_SEARCH;
-            {
-                std::lock_guard lk(g_crashMutex);
-                if (g_reports >= kMaxReports) return EXCEPTION_CONTINUE_SEARCH;
-                if (!g_seenAddresses.insert((unsigned long long)ep->ExceptionRecord->ExceptionAddress).second)
-                    return EXCEPTION_CONTINUE_SEARCH;
+            DWORD tid = GetCurrentThreadId();
+            if (tid == g_workerThreadId || tid == g_watchdogThreadId) return EXCEPTION_CONTINUE_SEARCH;
+            unsigned long long addr = (unsigned long long)ep->ExceptionRecord->ExceptionAddress;
+            bool claimed = false;
+            for (auto& slot : g_slots) {
+                unsigned long long expected = 0;
+                if (slot.compare_exchange_strong(expected, addr)) { claimed = true; break; }
+                if (expected == addr) return EXCEPTION_CONTINUE_SEARCH;   // already reported
             }
+            if (!claimed) return EXCEPTION_CONTINUE_SEARCH;               // first-chance slots used up
             Report(ep, true);
             return EXCEPTION_CONTINUE_SEARCH;
         }
 
+        // Always writes its own final report (first_chance=false), even for an address already reported.
         LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
-            bool room;
-            {
-                std::lock_guard lk(g_crashMutex);
-                room = g_reports < kMaxReports + 1;   // always room for the final, second-chance report
-            }
-            if (room) Report(ep, false);
+            Report(ep, false);
             return g_previousFilter ? g_previousFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
         }
 
         void Watchdog() {
+            g_watchdogThreadId = GetCurrentThreadId();
             for (;;) {
                 Sleep(1000);
                 if (g_ticks == 0 || MillisSinceLastTick() < g_hangSeconds * 1000LL) continue;
@@ -296,7 +325,8 @@ namespace Diagnostics {
     }
 
     void NoteTick() {
-        if (g_gameThreadId == 0) g_gameThreadId = GetCurrentThreadId();
+        DWORD expected = 0;
+        g_gameThreadId.compare_exchange_strong(expected, GetCurrentThreadId());
         g_lastTickMs = NowMs();
         ++g_ticks;
     }

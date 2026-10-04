@@ -58,6 +58,15 @@ def test_crash_wins_over_exit():
     o = outcome.classify(scn(), pair(1), r, 50, False)
     assert o.kind == "crash" and o.process == "c1" and o.code == "0xC0000005"
 
+def test_second_chance_report_preferred_over_first_chance():
+    first = {"code": "0xC0000005", "address": "battleborn+0x10", "frames": ["battleborn+0x10"],
+             "first_chance": True}
+    last = {"code": "0xC0000374", "address": "ntdll+0x99", "frames": ["ntdll+0x99"],
+            "first_chance": False}
+    r = recs(c1=ProcessRecord("c1", "client", 3, [first, last], None, []))
+    o = outcome.classify(scn(), pair(1), r, 50, False)
+    assert o.kind == "crash" and o.frame == "ntdll+0x99" and o.code == "0xC0000374"
+
 def test_first_chance_report_on_live_process_is_ignored():
     rep = {"code": "0xC0000005", "frames": ["battleborn+0x10"], "first_chance": True}
     r = recs(c1=ProcessRecord("c1", "client", None, [rep], None, []))

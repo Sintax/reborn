@@ -66,6 +66,8 @@ def classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
     crashed = [(r, c) for r in procs for c in r.crash_reports
                if not c.get("first_chance", False) or (r.exit_code is not None and r.exit_code != 0)]
     if crashed:
+        # Prefer the final (second-chance) report: it is the one that actually killed the process.
+        crashed.sort(key=lambda rc: bool(rc[1].get("first_chance", False)))
         r, c = crashed[0]
         return Outcome("crash", c.get("address", ""), r.name, phase,
                        "|".join(c.get("frames", [])) or "unknown", c.get("code"))

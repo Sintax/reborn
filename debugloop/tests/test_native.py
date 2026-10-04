@@ -1,4 +1,6 @@
+import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -23,10 +25,6 @@ def test_launch_options():
     assert "PASS" in p.stdout
 
 
-import json
-import time
-
-
 def _crashme():
     res = build.build_native("crashme", [SRC / "tests" / "crashme.cpp", SRC / "Diagnostics.cpp"],
                              OUT, [f'/I"{SRC}"'])
@@ -48,6 +46,16 @@ def test_crash_writes_dump_and_report(tmp_path):
     assert "hello from crashme" in (tmp_path / "crashme.log").read_text()
 
 
+def test_unhandled_crash_writes_final_second_chance_report(tmp_path):
+    subprocess.run([str(_crashme()), "crash", str(tmp_path)], capture_output=True, timeout=60)
+    reports = sorted(tmp_path.glob("crashme.*.crash.json"))
+    assert len(reports) == 2, list(tmp_path.iterdir())
+    first, last = (json.loads(r.read_text()) for r in reports)
+    assert first["first_chance"] is True and last["first_chance"] is False
+    assert first["address"] == last["address"]
+    assert (tmp_path / last["dump"]).stat().st_size > 10_000
+
+
 def test_hang_writes_hang_report(tmp_path):
     proc = subprocess.Popen([str(_crashme()), "hang", str(tmp_path)])
     try:
@@ -67,5 +75,5 @@ def test_spam_is_deduplicated_and_capped(tmp_path):
                        timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     reports = list(tmp_path.glob("crashme.*.crash.json"))
-    assert len(reports) == 5
+    assert len(reports) == 4   # first-chance cap; the 5th slot is reserved for the final report
     assert all(json.loads(r.read_text())["first_chance"] for r in reports)
