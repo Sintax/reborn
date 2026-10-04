@@ -155,6 +155,11 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="ServerSettings.hpp" />
     <ClInclude Include="Utils.hpp" />
+    <ClInclude Include="LaunchOptions.hpp" />
+    <ClInclude Include="Diagnostics.hpp" />
+    <ClInclude Include="DebugServer.hpp" />
+    <ClInclude Include="GameState.hpp" />
+    <ClInclude Include="Autopilot.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BB\GameDefines.cpp" />
@@ -190,6 +195,11 @@
     <ClCompile Include="safetyhook.cpp" />
     <ClCompile Include="ServerSettings.cpp" />
     <ClCompile Include="Zydis.c" />
+    <ClCompile Include="LaunchOptions.cpp" />
+    <ClCompile Include="Diagnostics.cpp" />
+    <ClCompile Include="DebugServer.cpp" />
+    <ClCompile Include="GameState.cpp" />
+    <ClCompile Include="Autopilot.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

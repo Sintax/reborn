@@ -6,6 +6,10 @@
 #include "Engine.hpp"
 #include "Networking.hpp"
 #include "Overlay.hpp"
+#include "Diagnostics.hpp"
+#include "DebugServer.hpp"
+#include "Autopilot.hpp"
+#include "GameState.hpp"
 
 namespace Hooks {
     SafetyHookInline ProcessRemoteFunction;
@@ -89,6 +93,9 @@ namespace Hooks {
 
     void GameEngineTickHook(UGameEngine* engine, float DeltaTime) {
         GameEngineTick.call<void>(engine, DeltaTime);
+        Diagnostics::NoteTick();
+        DebugServer::Pump();
+        Autopilot::Tick(DeltaTime);
 
         if (Globals::amServer) {
             /*
@@ -310,6 +317,7 @@ namespace Hooks {
             SDKUtils::GetLastOfClass<UWillowProfile>()->bDirty = true;
         }
         SDKUtils::GetLastOfClass<UPoplarPressStartGFxMovie>()->ContinueToMenu();
+        Autopilot::OnMainMenuReady();
     }
 
     void MainPanelClickedHook(uint32_t PanelId) {
@@ -392,6 +400,12 @@ namespace Hooks {
     }
 
     void ProcessEventHook(UObject* object, UFunction* function, void* params) {
+        if (Autopilot::Active()) {
+            static UFunction* playerTick = nullptr;
+            if (!playerTick && function->GetFullName().ends_with("PlayerController.PlayerTick")) playerTick = function;
+            if (function == playerTick) Autopilot::BeforePlayerTick(object);
+        }
+
         /*
         if (Globals::amServer && !function->GetFullName().contains("Input") && !function->GetFullName().contains("Timer") && !function->GetFullName().contains("Move")) {
             printf("[PE] %s - %s\n", object->GetFullName().c_str(), function->GetFullName().c_str());
@@ -842,6 +856,7 @@ namespace Hooks {
             a1->EffectiveNumPlayers = ServerSettings::NumPlayersToStart;
 
             ServerNetworking::InitListen();
+            GameState::SetListening(true);
         }
 
         return ret;

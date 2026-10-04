@@ -1,4 +1,5 @@
 #include "Init.hpp"
+#include "LaunchOptions.hpp"
 
 namespace Init {
     void Globals() {
@@ -182,6 +183,15 @@ namespace Init {
                 });
 
             FetchGameCoordinatorConfig();
+        }
+
+        {
+            const auto& opt = LaunchOptions::Get();
+            if (!ServerSettings::amRunningWithGameCoordinator && !opt.serverMap.empty()) {
+                ServerSettings::MapString = _wcsdup((L"open " + opt.serverMap).c_str());
+                std::printf("[OPTIONS] server map %ls\n", ServerSettings::MapString);
+            }
+            if (opt.players > 0) ServerSettings::NumPlayersToStart = opt.players;
         }
     }
 }

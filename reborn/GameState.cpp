@@ -28,7 +28,15 @@ namespace GameState {
 
         nlohmann::json Loc(AActor* a) { return { a->Location.X, a->Location.Y, a->Location.Z }; }
 
-        std::string ToStd(const FString& s) { return s.ToString(); }   // FString::ToString() is the SDK helper
+        // Hex of all 16 RawId bytes. The server sets RawId[0] per LAN player (Hooks.cpp) and the
+        // field replicates, so server and client render the same player the same way.
+        std::string UniqueIdString(const FUniqueNetId& id) {
+            if (!id.bHasValue) return "";
+            static const char* hex = "0123456789abcdef";
+            std::string out;
+            for (uint8_t b : id.RawId) { out += hex[b >> 4]; out += hex[b & 0xF]; }
+            return out;
+        }
 
         std::string DisconnectReason() {
             std::string line = Diagnostics::LastLineContaining("Failure");
@@ -64,8 +72,10 @@ namespace GameState {
             for (APoplarPlayerController* pc : SDKUtils::GetAllOfClass<APoplarPlayerController>()) {
                 if (!pc || IsDefault(pc) || !pc->Player) continue;
                 connections++;
-                if (pc->Pawn && pc->PlayerReplicationInfo)
-                    locs[ToStd(pc->PlayerReplicationInfo->PlayerName)] = Loc(pc->Pawn);
+                if (pc->Pawn && pc->PlayerReplicationInfo) {
+                    std::string key = UniqueIdString(pc->PlayerReplicationInfo->UniqueId);
+                    if (!key.empty()) locs[key] = Loc(pc->Pawn);
+                }
             }
             j["listening"] = g_listening.load();
             j["connections"] = connections;
@@ -75,6 +85,9 @@ namespace GameState {
             APoplarPlayerController* pc = SDKUtils::GetLastOfClass<APoplarPlayerController>();
             bool hasPawn = pc && !IsDefault(pc) && pc->Pawn;
             j["has_pawn"] = hasPawn;
+            std::string uid = (pc && !IsDefault(pc) && pc->PlayerReplicationInfo)
+                ? UniqueIdString(pc->PlayerReplicationInfo->UniqueId) : "";
+            j["unique_id"] = uid.empty() ? nlohmann::json(nullptr) : nlohmann::json(uid);
             j["pawn_location"] = hasPawn ? Loc(pc->Pawn) : nlohmann::json(nullptr);
             j["pawn_health"] = hasPawn ? pc->Pawn->GetHealth() : 0.0f;
             bool inMenu = map.empty() || map.find("MenuMap") != std::string::npos;

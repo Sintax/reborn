@@ -136,7 +136,9 @@ def _desync(roles: dict[str, str], play: list[Sample]) -> str | None:
         if roles.get(s.name) != "client" or not s.state or not last_server:
             continue
         mine = s.state.get("pawn_location")
-        theirs = (last_server.get("player_locations") or {}).get(s.name)
+        # The server keys player_locations by each player's UniqueId; fall back to the instance name.
+        key = s.state.get("unique_id") or s.name
+        theirs = (last_server.get("player_locations") or {}).get(key)
         if not mine or not theirs:
             continue
         try:

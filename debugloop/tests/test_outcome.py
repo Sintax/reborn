@@ -89,6 +89,19 @@ def test_desync_needs_five_samples():
     s += pair(11, c=far)
     assert outcome.classify(scn(), s, recs(), 60, False).kind == "desync"
 
+def test_desync_looks_up_server_location_by_unique_id():
+    uid = "01000000000000000000000000000000"
+    server = srv(player_locations={uid: [0, 0, 0]})   # server keys by UniqueId, not instance name
+    far = cli(unique_id=uid, pawn_location=[2000, 0, 0])
+    s = [x for t in range(6) for x in pair(1 + 2 * t, s=server, c=far)]
+    assert outcome.classify(scn(), s, recs(), 60, False).kind == "desync"
+
+def test_desync_unique_id_mismatch_is_not_compared():
+    server = srv(player_locations={"01000000000000000000000000000000": [0, 0, 0]})
+    far = cli(unique_id="02000000000000000000000000000000", pawn_location=[2000, 0, 0])
+    s = [x for t in range(6) for x in pair(1 + 2 * t, s=server, c=far)]
+    assert outcome.classify(scn(), s, recs(), 60, False).kind == "running"
+
 def test_startup_timeout():
     s = [Sample(1, "server", srv(), 200), Sample(1, "c1", cli(has_pawn=False), 200)]
     o = outcome.classify(scn(), s, recs(), 241, False)

@@ -9,6 +9,10 @@
 #include "BB/SdkHeaders.hpp"
 #include "safetyhook.hpp"
 #include "httplib.h"
+#include "LaunchOptions.hpp"
+#include "Diagnostics.hpp"
+#include "DebugServer.hpp"
+#include "GameState.hpp"
 
 #include "Init.hpp"
 #include "Globals.hpp"
@@ -17,6 +21,14 @@
 void MainThread() {
     Init::Globals();
     Init::Console();
+    LaunchOptions::InitFromCommandLine();
+    {
+        const auto& opt = LaunchOptions::Get();
+        Diagnostics::Init(opt.runDir, opt.instance, opt.hangSeconds);
+        for (auto& e : opt.errors) std::printf("[LAUNCH] bad value: %ls\n", e.c_str());
+        for (auto& u : opt.unknown) std::printf("[LAUNCH] unknown flag: %ls\n", u.c_str());
+        if (opt.debugPort) DebugServer::Start(opt.debugPort, GameState::SnapshotJson, GameState::Exec);
+    }
     Init::Hooks();
 
     while (!Globals::GetGWorld()) {
