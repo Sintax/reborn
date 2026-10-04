@@ -11,7 +11,7 @@ Work from the repo root `C:\Users\djsin\Documents\GitHub\Battleborn-Server\rebor
 
 ## 1. Run the next test
 
-Run `python -m debugloop.loop next` (timeout: 45 minutes; run it in the background and wait for the notification if your tool limit is shorter). Act on the exit code:
+Run `python -m debugloop.loop next` in the background with a 110-minute timeout, and wait for the notification. It builds and deploys the current code before the test, so it can take a while. Act on the exit code:
 
 | Exit | Meaning | Do |
 |---|---|---|
@@ -20,18 +20,19 @@ Run `python -m debugloop.loop next` (timeout: 45 minutes; run it in the backgrou
 | 3 | stopped | Read the `STOPPED:` line in the command output. For harness-error stops it is also shown by `python -m debugloop.loop status`. If the reason is harness errors with a Python traceback, go to section 4. If the reason is the wrong branch or uncommitted changes, push-notify the reason and stop the loop. Never switch branches, stash or commit to fix this yourself. Otherwise push-notify the reason and stop the loop. |
 | 4 | ladder done | Push-notify "Steps 0-3 pass. Ready for human players." Stop the loop. |
 | 10 | bug found | Go to section 2. |
+| any other exit code | unexpected | Push-notify the last 20 lines of the output and stop the loop. |
 
 ## 2. Fix (Fable subagent)
 
 Dispatch one subagent with the Agent tool, `model: "fable"`, `subagent_type: "general-purpose"`, foreground. Prompt:
 
-> You are fixing one bug in the Battleborn Reborn mod (C++ DLL injected into a 2016 Unreal Engine 3 game) or its C# lobby server. Repo: `C:\Users\djsin\Documents\GitHub\Battleborn-Server\reborn`. Read `debugloop/state/brief.md` first, then the triage file it names, then the run folder logs. Use the superpowers:systematic-debugging skill: form a hypothesis from the evidence before editing. Follow every rule in the brief. Edit only files under `reborn/` (never `reborn/BB/`) or `gamecontroller/`. Never edit `debugloop/`. Do not commit; the loop commits. Make the smallest change that plausibly fixes the root cause; prefer guarding the exact failing path over broad rewrites. Build with `python -m debugloop.loop build` until BUILD OK. Write your note to `debugloop/state/attempt_note.md`. If you are certain the bug cannot be fixed from mod code, write why in the note and run `python -m debugloop.loop giveup`. Reply with 3 lines: hypothesis, change, confidence.
+> You are fixing one bug in the Battleborn Reborn mod (C++ DLL injected into a 2016 Unreal Engine 3 game) or its C# lobby server. Repo: `C:\Users\djsin\Documents\GitHub\Battleborn-Server\reborn`. Read `debugloop/state/brief.md` first, then the triage file it names, then the run folder logs. Use the superpowers:systematic-debugging skill: form a hypothesis from the evidence before editing. Follow every rule in the brief. Edit only files under `reborn/` (never `reborn/BB/`) or `gamecontroller/`. Never edit `debugloop/`. Do not commit; the loop commits. Make the smallest change that plausibly fixes the root cause; prefer guarding the exact failing path over broad rewrites. Build with `python -m debugloop.loop build` until BUILD OK; run it in the background with a 110-minute timeout and wait for it. Write your note to `debugloop/state/attempt_note.md`. If you are certain the bug cannot be fixed from mod code, write why in the note and run `python -m debugloop.loop giveup`. Reply with 3 lines: hypothesis, change, confidence.
 
-If the fixer reports it ran `giveup`, push-notify "Gave up on bug <signature>: <reason from attempt_note.md>" and end the iteration without running verify.
+If the fixer reports it ran `giveup` and the output said `STOPPED`, handle it like exit 3 in section 1. If the fixer reports it ran `giveup` otherwise, push-notify "Gave up on bug <signature>: <reason from attempt_note.md>" and end the iteration without running verify.
 
 ## 3. Verify
 
-Run `python -m debugloop.loop verify` (timeout 45 minutes, background if needed).
+Run `python -m debugloop.loop verify` in the background with a 110-minute timeout, and wait for the notification.
 
 | Exit | Do |
 |---|---|
@@ -40,6 +41,7 @@ Run `python -m debugloop.loop verify` (timeout 45 minutes, background if needed)
 | 11 | Attempt failed (brief now has the reason). Go back to section 2 (at most 3 fix cycles per iteration). |
 | 5 | Gave up on this bug. Push-notify "Gave up on bug <signature> after 5 tries". End the iteration. |
 | 2 / 3 | As in section 1. |
+| any other exit code | Push-notify the last 20 lines of the output and stop the loop. |
 
 ## 4. Harness repair (Sonnet subagent)
 

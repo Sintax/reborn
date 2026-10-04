@@ -97,15 +97,23 @@ Step 4 is the only one that needs people. The AI tells you when step 3 passes.
 
 ### Where things live
 
+*Updated 4 Oct after the final review to match the code.* A path starting `reborn/` is inside this repo (`Battleborn-Servereborn`).
+
 | Item | Location |
 |---|---|
 | Mod source (C++) | `reborn/reborn/` (fork `Sintax/reborn`) |
-| New harness code | `reborn/debugloop/` (Python 3.14) |
-| Bug notes, progress log, question list | `reborn/debugloop/bugs/`, `reborn/debugloop/PROGRESS.md`, `reborn/debugloop/QUESTIONS.md` |
+| Harness code and its tests | `reborn/debugloop/`, `reborn/debugloop/tests/` (Python 3.14, pytest) |
+| Test scenarios | `reborn/debugloop/scenarios/*.toml`; self-tests in `scenarios/selftest/` |
+| Loop state (not in git) | `reborn/debugloop/state/`: `loop_state.json` (step, open bug, attempts), `ledger.json` and `ledger.md` (every bug, its status and history), `brief.md` (the fixer's brief), `attempt_note.md` (the fixer's note), `attempts/<bug-slug>/<n>.diff` (each failed attempt's diff) |
+| Notes the fixer reads first | `reborn/docs/notes/` |
 | Loop instructions (Claude Code skill) | `reborn/.claude/skills/bb-autofix/SKILL.md` |
-| Run artifacts (dumps, logs; large, not in git) | `Battleborn-Server/runs/<run-id>/` |
-| Backups of replaced game files | `Battleborn-Server/backups/<timestamp>/` |
-| Game install | `D:\SteamLibrary\steamapps\common\Battleborn\Binaries\Win64` |
+| Run artifacts (dumps, logs, `timeline.jsonl`, `result.json`, `triage.md`; not in git) | `reborn/debugloop/runs/<run-id>/`; the runner's own record of started processes is `runs/active.json` |
+| The game's own crash dumps | `Documents\My Games\Battleborn\PoplarGame\Logs\POPLAR-*.dmp`, moved into the run folder after each run |
+| Game install | `D:\SteamLibrary\steamapps\common\Battleborn\Binaries\Win64` (set `BB_GAME_DIR` to the `Battleborn` folder to change it) |
+| Backups of replaced game files | `<game>\Binaries\Win64\rb_backups\<file>.<timestamp>` |
+| Per-instance fake-Steam folders | `<game>\Binaries\Win64\rb_ids\<instance>\` |
+| Ghidra function list | `reborn/debugloop/ghidra/out/battleborn_functions.json` |
+| Failed attempts' code | `git stash` entries named `bb-autofix failed attempt <n> <bug>` |
 | Work branch | `agent/autofix`, created from `local-dev` |
 
 The two uncommitted edits on `local-dev` become the first commit on `agent/autofix`, because both are needed for local testing. One points the lobby address at `localhost:5000`; the other fixes the inverted loop condition in `MatchLaunchService.cs`.
@@ -114,18 +122,19 @@ The two uncommitted edits on `local-dev` become the first commit on `agent/autof
 
 New files, each with one job:
 
-- **`LaunchOptions.cpp/.hpp`** parses the command line once at startup. Today map and player count are hard-coded in `ServerSettings.cpp`. Defaults keep today's behaviour when a flag is absent.
+- **`LaunchOptions.cpp/.hpp`** parses the command line once at startup. Today map and player count are hard-coded in `ServerSettings.cpp`. Defaults keep today's behaviour when a flag is absent. *Updated 4 Oct after the final review: these are the flag names the code uses.*
   - `-rbinstance=<name>`: names the instance, e.g. `server`, `c1`, `c2`; used in log and dump file names.
-  - `-rbmap=<map>`, `-rbplayers=<n>`: server map and number of players to start.
-  - `-rbconnect=<host:port>`: the client connects automatically once the main menu is up, using the same code path as the overlay's Direct Connect.
-  - `-rbautoplay`: turns on the autopilot.
-  - `-rbdebugport=<port>`: port for the status endpoint (default `0`, meaning off).
+  - `-rbservermap=<map>`: server map, with any `?Option=value` URL options, e.g. `IceScort_P?SpawnBotsTeamA=4`.
+  - `-rbplayers=<n>`: number of players the server waits for (1-10).
+  - `-rbjoin=<host:port>`: the client connects automatically once the main menu is up, using the same code path as the overlay's Direct Connect.
+  - `-rbautopilot`: turns on the autopilot.
+  - `-rbdebugport=<port>`: port for the status endpoint (1024-65535; absent means off). The runner gives each instance its own port from 18080 up.
   - `-rbrundir=<path>`: where to write logs and dumps.
-  - `-rbtestcrash=<seconds>` / `-rbtesthang=<seconds>`: deliberately crash or freeze after N seconds. Used only to self-test the crash and hang capture.
+  - `-rbtestcrash` / `-rbtesthang`: switches (no value) that crash or freeze the game thread about 20 seconds after play starts. Used only to self-test the crash and hang capture.
   - `-rbsolomap=<map>`: client starts that map in solo mode, used for step 0.
-  - `-rbcharacter=<index>`: which character the autopilot locks in.
+  - `-rbcharacter=<name>`: which character the autopilot locks in, by display name, e.g. `Rath` or `Oscar Mike`.
   - `-rbseed=<n>`: seed for the wandering pattern.
-  - `-rbhangsecs=<n>`: freeze threshold.
+  - `-rbhangsecs=<n>`: freeze threshold in seconds (5-3600, default 60).
 - **`Diagnostics.cpp/.hpp`**:
   - Every existing `printf` also goes to `<rundir>/<instance>.log`, with timestamps and a 500-line in-memory ring buffer.
   - An unhandled-exception filter, plus a vectored handler as backup, writes `<instance>.dmp` with `MiniDumpWriteDump` (MiniDumpWithIndirectlyReferencedMemory, plus thread info). It also writes `<instance>.crash.json` with the exception code, the faulting thread's stack as `module+offset` frames, and the ring buffer.
@@ -136,7 +145,7 @@ New files, each with one job:
   - `GET /state` returns JSON: instance, server/client role, uptime, tick count, last-tick time, current map, connection count with per-connection state, replicated actor count, process memory, and player pawn location and health when there is one.
   - `POST /exec` runs a console command and returns. This lets the runner and the AI poke a live game.
   - Requests are queued and handled on the game thread inside the existing `GameEngineTickHook`. Engine calls never run off-thread.
-- **`Autopilot.cpp/.hpp`** (client only, when `-rbautoplay` is set):
+- **`Autopilot.cpp/.hpp`** (client only, when `-rbautopilot` is set):
   - Every tick, writes `UPlayerInput` axis fields (`aBaseY`, `aStrafe`, `aTurn`; offsets in `BB/SDK_HEADERS/Engine_classes.hpp`) to walk and turn in a wandering pattern.
   - Calls `StartFire`/`StopFire` and `Jump` through `ProcessEvent` on a timer.
   - Respawns when dead and re-sends ready-up where the mode needs it.
@@ -164,14 +173,14 @@ New files, each with one job:
   - Timeout: `timeout:<last state>`.
 - **`analyze.py <run-id>`**: quick automatic triage with the Python `minidump` package: stack, registers, and nearby memory. When available it also runs `cdb -z <dmp> -c "!analyze -v; kb; q"` (WinDbg's command-line debugger). It maps offsets to known names using the hook table in `Init.cpp`, `BB/NameDump.txt`, and the Ghidra project. Writes `triage.md` into the run folder.
 - **`deploy.py`**: copies the freshly built `reborn.dll` and `dxgi.dll` into the game folder. It creates `Serverborn.exe` if missing, after backing up any file it overwrites, then checks the copied file's hash.
-- **`ledger.py`**: creates or updates `bugs/<signature-slug>.md` with status (`open`, `fixing`, `fixed`, `parked`), first and last seen, run ids, attempts (hypothesis, change, result), and the commit that fixed it.
+- **`ledger.py`**: keeps every bug in `debugloop/state/ledger.json`, with a readable table in `ledger.md`: status (`open`, `fixing`, `fixed`, `gave_up`), first and last seen, run ids, attempt count, and dated notes for each attempt.
 - Unit tests in `debugloop/tests/` (pytest) for signature bucketing, the outcome detector (fed recorded timelines), the ledger, and the scenario parser. They use fake processes, so they don't need the game.
 
 ### Component 3: The loop (Claude Code skill `bb-autofix`, run under `/loop`)
 
 Main session: Opus 5.5. It keeps the state machine and does no deep reasoning itself.
 
-1. Read `debugloop/state.json`: current step, current bug, attempt count. If missing, start at step 0.
+1. Read `debugloop/state/loop_state.json`: current step, current bug, attempt count. If missing, start at step 0.
 2. Build: MSBuild via VS 2022 Build Tools, `reborn.sln` Release x64. A build failure goes back to whoever made the change.
 3. Deploy, then run the current step's scenario.
 4. **Pass:** count consecutive passes. When the step's threshold is reached, run every lower step's smoke test, move up a step, append to `PROGRESS.md`, and send a phone notification.
