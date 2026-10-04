@@ -17,11 +17,11 @@ namespace gamecontroller.Services
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            while (stoppingToken.IsCancellationRequested)
+            while (!stoppingToken.IsCancellationRequested)
             {
                 await CheckAndLaunchMatches();
 
-                await Task.Delay(1000);
+                await Task.Delay(1000, stoppingToken);
             }
         }
 

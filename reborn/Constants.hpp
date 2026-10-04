@@ -5,7 +5,7 @@
 #include <unordered_map>
 
 namespace Constants {
-    const std::string GameCoordinatorEndpoint = "gc.bereborn.dev:5000";
+    const std::string GameCoordinatorEndpoint = "localhost:5000";
 
     const std::vector<std::string> CharacterSelectCharacterTable = {
         "Alani",
