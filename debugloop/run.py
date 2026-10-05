@@ -14,7 +14,7 @@ from pathlib import Path
 
 import psutil
 
-from . import config, launch, scenario, signature
+from . import config, launch, scenario, screenshot, signature
 from .outcome import STARTUP_TIMEOUT_S, Outcome, ProcessRecord, Sample, classify, milestone
 
 
@@ -158,7 +158,11 @@ def _report(p: Path, fallback: dict) -> dict:
     return {"unreadable": p.name, **fallback}
 
 
-def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: float = 2.0) -> RunResult:
+def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: float = 2.0,
+                 shots=None) -> RunResult:
+    # Screenshots only of games this runner really launched (fake launchers use made-up pids).
+    if shots is None and launcher is None:
+        shots = screenshot.capture_all
     launcher = launcher or launch.RealLauncher()
     preconditions(runs_dir, len(scn.processes))
     base_id = f"{datetime.now():%Y%m%d-%H%M%S}-{scn.name}"
@@ -183,6 +187,14 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
     samples: list[Sample] = []
     active = runs_dir / "active.json"
     t0 = time.time()
+    next_shot = [screenshot.SHOT_EVERY_S]
+
+    def take_shots(label: str):
+        if shots:
+            try:
+                shots({n: h.pid for n, h in handles.items()}, run_dir, label)
+            except Exception:
+                pass   # a missing picture must never fail a run
 
     def save_active():
         pids = {n: _identity(h.pid) or {"pid": h.pid} for n, h in handles.items()}
@@ -231,8 +243,12 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
                 (run_dir / f"{sp.name}.log").exists()
                 and "Match ended" in (run_dir / f"{sp.name}.log").read_text(errors="replace")
                 for sp in servers)
+            if elapsed >= next_shot[0]:
+                take_shots(f"{int(elapsed):04d}s")
+                next_shot[0] += screenshot.SHOT_EVERY_S
             o = classify(scn, samples, _records(scn, handles, run_dir, killed), elapsed, match_ended)
             if o.kind != "running":
+                take_shots(f"{int(elapsed):04d}s-final")
                 break
             time.sleep(poll_s)
     except (RuntimeError, OSError) as e:

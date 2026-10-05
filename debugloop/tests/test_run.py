@@ -301,3 +301,27 @@ def test_preconditions_free_ports_pass(tmp_path, monkeypatch):
     s.close()
     monkeypatch.setattr(run.config, "FIRST_DEBUG_PORT", port)
     run.preconditions(tmp_path, 1)
+
+
+def test_screenshots_every_interval_and_at_the_end(tmp_path, monkeypatch):
+    monkeypatch.setattr(run.screenshot, "SHOT_EVERY_S", 2)
+    taken = []
+    r = run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5,
+                         shots=lambda pids, d, label: taken.append((sorted(pids), label)))
+    assert r.outcome.kind == "pass", r.outcome
+    labels = [lbl for _, lbl in taken]
+    assert labels[-1].endswith("-final") and len(labels) >= 3
+    assert all(names == ["c1"] for names, _ in taken)
+
+
+def test_screenshot_failure_never_fails_a_run(tmp_path):
+    def boom(*_):
+        raise RuntimeError("no window")
+    r = run.run_scenario(scn(), FakeLauncher(), tmp_path, poll_s=0.5, shots=boom)
+    assert r.outcome.kind == "pass", r.outcome
+
+
+def test_capture_without_a_window_is_false(tmp_path):
+    from debugloop import screenshot
+    assert screenshot.capture(0, tmp_path / "x.jpg") is False
+    assert not (tmp_path / "x.jpg").exists()
