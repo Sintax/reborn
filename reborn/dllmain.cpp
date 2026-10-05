@@ -49,7 +49,10 @@ namespace {
     void AllowSeveralInstances() {
         std::wstring instance = LaunchOptions::InstanceArg(GetCommandLineW());
         if (instance.empty()) return;
-        g_instanceMutex = std::wstring(kSingleInstanceMutex) + L"_" + instance;
+        // The process id keeps a copy from the previous run that is still closing (the loop starts
+        // the next run seconds later, same instance name) from blocking this one.
+        g_instanceMutex = std::wstring(kSingleInstanceMutex) + L"_" + instance + L"_" +
+                          std::to_wstring(GetCurrentProcessId());
         void* target = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateMutexW");
         if (target) g_createMutexW = safetyhook::create_inline(target, &CreateMutexWHook);
     }
