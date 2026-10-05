@@ -1,6 +1,6 @@
 ---
 name: bb-autofix
-description: One iteration of the Battleborn autonomous debug loop - run the game test, and if it finds a bug, have a Fable subagent fix it and verify. Run as `/loop /bb-autofix`.
+description: One iteration of the Battleborn autonomous debug loop - run the game test, and if it finds a bug, have the bb-fixer subagent fix it and verify. Run as `/loop /bb-autofix`.
 ---
 
 # bb-autofix: one loop iteration
@@ -22,11 +22,16 @@ Run `python -m debugloop.loop next` in the background with a 110-minute timeout,
 | 10 | bug found | Go to section 2. |
 | any other exit code | unexpected | Push-notify the last 20 lines of the output and stop the loop. |
 
-## 2. Fix (Fable subagent)
+## 2. Fix (bb-fixer subagent: Opus, high effort)
 
-Dispatch one subagent with the Agent tool, `model: "fable"`, `subagent_type: "general-purpose"`, foreground. Prompt:
+Dispatch one subagent with the Agent tool, `subagent_type: "bb-fixer"`, foreground, with no `model` override. Its rules live in `.claude/agents/bb-fixer.md`.
 
-> You are fixing one bug in the Battleborn Reborn mod (C++ DLL injected into a 2016 Unreal Engine 3 game) or its C# lobby server. Repo: `C:\Users\djsin\Documents\GitHub\Battleborn-Server\reborn`. Read `debugloop/state/brief.md` first, then the triage file it names, then the run folder logs. Use the superpowers:systematic-debugging skill: form a hypothesis from the evidence before editing. Follow every rule in the brief. Edit only files under `reborn/` (never `reborn/BB/`) or `gamecontroller/`. Never edit `debugloop/`. Do not commit; the loop commits. Make the smallest change that plausibly fixes the root cause; prefer guarding the exact failing path over broad rewrites. Build with `python -m debugloop.loop build` until BUILD OK; run it in the background with a 110-minute timeout and wait for it. Write your note to `debugloop/state/attempt_note.md`. If you are certain the bug cannot be fixed from mod code, write why in the note and run `python -m debugloop.loop giveup`. Reply with 3 lines: hypothesis, change, confidence.
+Prompt: "Fix the bug in `debugloop/state/brief.md`." Then add short controller context:
+- what the last run's logs showed (quote the key lines);
+- which earlier attempt diff to start from, if any (`debugloop/state/attempts/<bug>/`, newest by time);
+- the current milestone and what the next one looks like.
+
+Escalation: if the same stage has failed 3 attempts in a row and the last run's logs taught nothing new, dispatch the next attempt with `model: "fable"` (same subagent type). Use Fable only for that one attempt, then go back to the default.
 
 If the fixer reports it ran `giveup` and the output said `STOPPED`, handle it like exit 3 in section 1. If the fixer reports it ran `giveup` otherwise, push-notify "Gave up on bug <signature>: <reason from attempt_note.md>" and end the iteration without running verify.
 
@@ -37,8 +42,8 @@ Run `python -m debugloop.loop verify` in the background with a 110-minute timeou
 | Exit | Do |
 |---|---|
 | 0 | Fixed and committed. End the iteration. |
-| 10 | Progress: either fixed one bug and a new later one is open, or the same bug got further (the output says `PROGRESS`: the fix was committed, the join reached a higher milestone, and the attempt count is reset). Go back to section 2 in this same iteration (at most 3 fix cycles per iteration). |
-| 11 | Attempt failed (brief now has the reason). Go back to section 2 (at most 3 fix cycles per iteration). |
+| 10 | Progress: either fixed one bug and a new later one is open, or the same bug got further (the output says `PROGRESS`: the fix was committed, the join reached a higher milestone, and the attempt count is reset). Go back to section 2 in this same iteration (at most 2 fix cycles per iteration). |
+| 11 | Attempt failed (brief now has the reason). Go back to section 2 (at most 2 fix cycles per iteration). |
 | 5 | Gave up on this bug. Push-notify "Gave up on bug <signature> after 5 tries". End the iteration. |
 | 2 / 3 | As in section 1. |
 | any other exit code | Push-notify the last 20 lines of the output and stop the loop. |
@@ -50,3 +55,7 @@ Only when the loop stopped on harness errors with a Python traceback in `debuglo
 ## Every iteration ends with
 
 One line to the user: step, passes in a row, open bug (if any), what happened.
+
+## Usage budget
+
+Each fix attempt costs a lot of usage. Run at most 2 fix cycles per iteration, then schedule the next iteration instead of continuing. If the user says they are near their usage limit, finish the current step and stop the loop; the loop's saved state lets the next session pick up where this one stopped.
