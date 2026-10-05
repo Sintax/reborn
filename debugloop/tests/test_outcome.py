@@ -498,3 +498,20 @@ def test_falling_off_a_ledge_now_and_then_is_normal():
 def test_fell_signature_names_the_map():
     from debugloop import signature
     assert signature.make(outcome.Outcome("fell", "c1", "c1", "playing"), scn()) == "fell:Dojo_P"
+
+
+def test_dead_player_is_not_a_desync():
+    s = []
+    for t in range(0, 20, 2):
+        s += pair(t)
+    for t in range(20, 40, 2):
+        s += [Sample(t, "server", srv(player_locations={"c1": [0, 0, -1000 * t]}), 200),
+              Sample(t, "c1", cli(pawn_health=0.0, pawn_location=[0, 0, -9000]), 200)]
+    assert outcome.classify(scn(), s, recs(), 40, False).kind == "running"
+
+def test_live_player_far_from_server_is_still_a_desync():
+    s = []
+    for t in range(0, 30, 2):
+        s += [Sample(t, "server", srv(player_locations={"c1": [9000, 0, 0]}), 200),
+              Sample(t, "c1", cli(pawn_health=500.0), 200)]
+    assert outcome.classify(scn(), s, recs(), 30, False).kind == "desync"

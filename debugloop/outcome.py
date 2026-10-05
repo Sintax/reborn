@@ -326,6 +326,12 @@ def _desync(roles: dict[str, str], play: list[Sample]) -> str | None:
         theirs = (last_server.get("player_locations") or {}).get(key)
         if not mine or not theirs:
             continue
+        # A dead player's body is not kept in step: the client's corpse stays put while the
+        # server's copy can keep falling (run 20261005-105110, "Death Recap" on screen).
+        health = s.state.get("pawn_health")
+        if isinstance(health, (int, float)) and health <= 0:
+            streak[s.name] = 0
+            continue
         try:
             if math.dist(mine, theirs) > DESYNC_UNITS:
                 streak[s.name] = streak.get(s.name, 0) + 1
