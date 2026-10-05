@@ -464,3 +464,15 @@ def test_disconnect_before_the_match_ends_still_fails():
     s += [Sample(6, "server", srv(connections=0, match_over=True), 200)]
     o = outcome.classify(scn(), s, recs(), 7, True)
     assert o.kind == "disconnect" and o.detail == "client:lost"
+
+
+def test_client_reporting_match_over_stops_desync_checks():
+    # Run 20261005-044519: c1 showed DEFEAT and its pawn stopped while the server's copy kept
+    # moving for ~10 s before the server logged "Match ended" -> was graded desync.
+    s = []
+    for t in range(0, 20, 2):
+        s += pair(t)
+    for t in range(20, 40, 2):
+        s += [Sample(t, "server", srv(player_locations={"c1": [5000 + 300 * t, 0, 0]}), 200),
+              Sample(t, "c1", cli(match_over=True), 200)]
+    assert outcome.classify(scn(), s, recs(), 40, False).kind == "running"

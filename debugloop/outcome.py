@@ -262,9 +262,10 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
 
 def _before_match_end(roles: dict[str, str], play: list[Sample]) -> list[Sample]:
     """Samples up to the server's last report from before the match ended. After the game ends the
-    match the server drops everyone and clients go back to the menu, which is not a failure."""
-    over = next((s.t for s in play if roles.get(s.name) == "server" and s.state
-                 and s.state.get("match_over")), None)
+    match the server drops everyone and clients go back to the menu, which is not a failure.
+    Any process can say the match is over: a client shows Victory/Defeat (and stops its pawn)
+    several seconds before the server logs "Match ended"."""
+    over = next((s.t for s in play if s.state and s.state.get("match_over")), None)
     if over is None:
         return play
     last_running = max((s.t for s in play if roles.get(s.name) == "server" and s.state
