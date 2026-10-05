@@ -730,7 +730,14 @@ namespace Hooks {
                 Globals::ShutdownTimer -= DeltaTime;
 
                 if (Globals::ShutdownTimer <= 0.0f) {
-                    exit(0);
+                    // exit() runs static destructors and atexit handlers while the engine's other
+                    // threads still use them, and the process then dies with 0xC0000409 instead of 0.
+                    // Flush the log, give the tee thread a moment to drain it, and end the process
+                    // without running destructors.
+                    std::cout << "[GAME] Shutting down after match end (exit code 0)" << std::endl;
+                    std::fflush(stdout);
+                    Sleep(500);
+                    TerminateProcess(GetCurrentProcess(), 0);
                 }
             }
 
