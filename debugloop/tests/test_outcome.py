@@ -402,14 +402,30 @@ def test_milestone_connection_adds_one_point():
     assert outcome.milestone(s) == 4
 
 
-def test_milestone_connection_from_player_locations_alone():
+def test_milestone_server_player_location_counts_connection_and_spawn():
     s = [Sample(1, "server", srv(connections=0, player_locations={"u1": [0, 0, 0]}), 200)]
-    assert outcome.milestone(s) == 1
+    assert outcome.milestone(s) == 2
+
+
+def test_milestone_server_spawned_pawn_beats_connection_alone():
+    # The live case: the client sits in character select; the server has spawned its pawn.
+    base = Sample(1, "c1", {"autopilot": "character_select"}, 200)
+    no_pawn = [base, Sample(1, "server", srv(connections=1, player_locations={}), 200)]
+    pawn = [base, Sample(2, "server", srv(connections=1, player_locations={"0100": [1, 2, 3]}), 200)]
+    assert outcome.milestone(no_pawn) == 4 and outcome.milestone(pawn) == 5
+
+
+def test_milestone_spawn_point_only_from_the_server():
+    s = [Sample(1, "c1", {"autopilot": "playing", "player_locations": {"u1": [0, 0, 0]}}, 200)]
+    assert outcome.milestone(s) == 5   # playing + connection; a client's locations are no spawn proof
+    s = [Sample(1, "srv2", {"role": "server", "player_locations": {"u1": [0, 0, 0]}}, 200)]
+    assert outcome.milestone(s) == 2
 
 
 def test_milestone_connection_counts_once_and_only_when_seen():
     s = [Sample(1, "server", srv(connections=0, player_locations={}), 200),
-         Sample(2, "server", srv(connections=2), 200), Sample(3, "server", srv(connections=3), 200)]
+         Sample(2, "server", srv(connections=2, player_locations={}), 200),
+         Sample(3, "server", srv(connections=3, player_locations={}), 200)]
     assert outcome.milestone(s) == 1
     assert outcome.milestone([Sample(1, "server", srv(connections=0, player_locations={}), 200)]) == 0
     assert outcome.milestone([Sample(1, "server", {"ticks": 1, "listening": True}, 200)]) == 0

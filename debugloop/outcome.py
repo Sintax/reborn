@@ -46,10 +46,11 @@ AUTOPILOT_MILESTONE = {"menu_ready": 1, "launching": 2, "character_select": 3, "
 
 
 def milestone(samples: list[Sample]) -> int:
-    """How far a run got, 0-5: the furthest autopilot phase any client (or the solo game) reached,
-    plus one if the server ever reported a connection. Only ever read from the samples, so it
-    does not depend on how the run ended."""
-    best, connected = 0, False
+    """How far a run got, 0-6: the furthest autopilot phase any client (or the solo game) reached,
+    plus one if the server ever reported a connection, plus one if the server ever reported a
+    player location (it spawned a pawn for a joined player, which the client may not see yet).
+    Only ever read from the samples, so it does not depend on how the run ended."""
+    best, connected, spawned = 0, False, False
     for s in samples:
         st = s.state
         if not isinstance(st, dict):
@@ -58,9 +59,12 @@ def milestone(samples: list[Sample]) -> int:
         if isinstance(ph, str):
             best = max(best, AUTOPILOT_MILESTONE.get(ph, 0))
         n = st.get("connections")
-        if (isinstance(n, int) and not isinstance(n, bool) and n > 0) or st.get("player_locations"):
+        locs = st.get("player_locations")
+        if (isinstance(n, int) and not isinstance(n, bool) and n > 0) or locs:
             connected = True
-    return best + connected
+        if isinstance(locs, dict) and locs and (s.name == "server" or st.get("role") == "server"):
+            spawned = True
+    return best + connected + spawned
 
 
 def _ready(role: str, st: dict | None) -> bool:
