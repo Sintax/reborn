@@ -399,6 +399,57 @@ namespace ServerNetworking {
         return nullptr;
     }
 
+    // UNetDriver::ClientConnections, TArray<UNetConnection*> at driver+0x70 (count +0x70, data +0x78):
+    // UTcpNetDriver::TickDispatch appends every accepted connection there (battleborn+0xc22234) and
+    // looks incoming packets up in it (battleborn+0xc224c0). UNetConnection::CleanUp takes a closed
+    // connection out of it, and the object is freed soon after. A ServerPlayer keeps its connection
+    // pointer after that: the NotifyDisconnect hook never fires on the server, and TickNetServer's
+    // state check needs connection->Actor, which CleanUp has already cleared. At match end both
+    // clients left, their connections were freed, and the next DestroyActor walked the freed
+    // connection's channel table (crash:0xc0000005:reborn>battleborn+0x401e66, run 20261005-054440:
+    // GetActorChannelForActor read channel 0x1). So only a connection still in this list is used.
+    bool IsLiveConnection(UNetConnection* connection) {
+        if (!connection || !Globals::netDriver)
+            return false;
+        auto* list = reinterpret_cast<TArray<UNetConnection*>*>(reinterpret_cast<uintptr_t>(Globals::netDriver) + 0x70);
+        if (!list->ArrayData)
+            return false;
+        for (int i = 0; i < list->ArrayCount; i++) {
+            if (list->ArrayData[i] == connection)
+                return true;
+        }
+        return false;
+    }
+
+    void ForgetClosedConnections(const char* where) {
+        if (!Globals::netDriver)
+            return;
+        for (Globals::ServerPlayer& serverPlayer : Globals::ServerPlayers) {
+            if (serverPlayer.Connection && !IsLiveConnection(serverPlayer.Connection)) {
+                printf("[NETWORKING] %s's connection %p was closed (no longer in the net driver's connection list, noticed in %s); forgetting it\n",
+                    serverPlayer.Name.c_str(), (void*)serverPlayer.Connection, where);
+                serverPlayer.Connection = nullptr;
+            }
+        }
+    }
+
+    // A channel queued for closing is only touched while a live player connection still holds it
+    // (compared by pointer, so a channel freed with its connection is never read).
+    bool IsChannelOnLiveConnection(UActorChannel* channel) {
+        if (!channel)
+            return false;
+        for (Globals::ServerPlayer& serverPlayer : Globals::ServerPlayers) {
+            UNetConnection* connection = serverPlayer.Connection;
+            if (!connection || !IsLiveConnection(connection))
+                continue;
+            for (UChannel* ch : connection->Channels) {
+                if (ch == channel)
+                    return true;
+            }
+        }
+        return false;
+    }
+
     std::vector<AActor*> BuildConsiderList(AWorldInfo* WorldInfo, UNetDriver* NetDriver) {
         std::vector<AActor*> copiedNetworkObjectList;
         std::vector<AActor*> ret = std::vector<AActor*>();
@@ -480,6 +531,8 @@ namespace ServerNetworking {
 
         if (!worldInfo)
             worldInfo = SDKUtils::GetLastOfClass<AWorldInfo>();
+
+        ForgetClosedConnections("TickNetServer");
 
         std::vector<AActor*> actors = BuildConsiderList(worldInfo, NetDriver);
 
@@ -616,7 +669,7 @@ namespace ServerNetworking {
 
                 Globals::channelsToClose.pop_back();
 
-                if (ch && ch->Connection && ch->Actor) {
+                if (IsChannelOnLiveConnection(ch) && ch->Connection && ch->Actor) {
                     reinterpret_cast<void (*)(UActorChannel* channel)>(Globals::baseAddress + 0x0613050)(ch);
                     (*(reinterpret_cast<void(**)(UActorChannel*)>(*(__int64*)ch + 0x210)))(ch);
                 }

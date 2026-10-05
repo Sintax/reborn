@@ -177,6 +177,145 @@ namespace Hooks {
         return out;
     }
 
+    // --- Player pawns with no collision component -------------------------------------------------
+    //
+    // s3 run 20261005-054440: one player's pawn had CollisionComponent and CylinderComponent both None
+    // on the server AND on that player's own client, for every respawn, so it fell through the map
+    // ~70 times; the other player's pawn of the same archetype (GD_ModernSoldier_Streaming.Player.
+    // Pawn_ModernSoldier) had its 43x85 cylinder and walked. The earlier passing run had the same
+    // spawn flow; it differed in the bot line-up (this run had a ModernSoldier bot, loaded while the
+    // players' class switched to ModernSoldier). Not proven why. CollisionDiag says what the pawn,
+    // its archetype and any other object of the archetype's name hold; FixPawnCollision then gives
+    // the pawn a cylinder: the one in its Components array if there is one, else a copy of a pawn
+    // archetype's CylinderComponent template (its own archetype first), attached with
+    // Actor.AttachComponent and set as CylinderComponent and CollisionComponent.
+    const uint64_t kPendingKill = 0x2000000000000000ull;
+
+    bool IsArchetypeObject(UObject* o) {
+        // An archetype lives in its content package, never in the world's map package.
+        UWorld* world = Globals::GetGWorld();
+        return o && OutermostObject(o) && (!world || OutermostPackageName(o) != OutermostPackageName(world))
+            && o->GetFullName().find("Default__") == std::string::npos;
+    }
+
+    std::string CollisionDiag(APawn* p) {
+        char buf[768];
+        UObject* arch = p->ObjectArchetype;
+        APawn* archPawn = (arch && arch->IsA(APawn::StaticClass())) ? reinterpret_cast<APawn*>(arch) : nullptr;
+        UObject* archPkg = OutermostObject(arch);
+        snprintf(buf, sizeof buf, "archetype %s (%p, flags 0x%llx, package %p flags 0x%llx, cylinder %p, collision %p)",
+            FullNameOrNone(arch).c_str(), (void*)arch, arch ? (unsigned long long)arch->ObjectFlags : 0ull,
+            (void*)archPkg, archPkg ? (unsigned long long)archPkg->ObjectFlags : 0ull,
+            archPawn ? (void*)archPawn->CylinderComponent : nullptr, archPawn ? (void*)archPawn->CollisionComponent : nullptr);
+        std::string s = buf;
+        s += " | components " + std::to_string(p->Components.ArrayCount) + ":";
+        for (int i = 0; p->Components.ArrayData && i < p->Components.ArrayCount && i < 24; i++) {
+            UActorComponent* c = p->Components.ArrayData[i];
+            s += " " + (c && c->Class ? c->Class->GetName() : std::string("None"));
+        }
+        if (arch) {
+            std::string name = arch->GetFullName();
+            int others = 0;
+            for (APoplarPlayerPawn* o : SDKUtils::GetAllOfClass<APoplarPlayerPawn>()) {
+                if (!o || (UObject*)o == arch || o->GetFullName() != name) continue;
+                snprintf(buf, sizeof buf, " | another %s at %p (flags 0x%llx, package %p, cylinder %p)", name.c_str(), (void*)o,
+                    (unsigned long long)o->ObjectFlags, (void*)OutermostObject(o), (void*)o->CylinderComponent);
+                s += buf;
+                others++;
+            }
+            if (!others) s += " | no other object has the archetype's name";
+        }
+        return s;
+    }
+
+    UCylinderComponent* FindCylinderTemplate(APawn* p, std::string& from) {
+        APawn* archPawn = (p->ObjectArchetype && p->ObjectArchetype->IsA(APawn::StaticClass())) ? reinterpret_cast<APawn*>(p->ObjectArchetype) : nullptr;
+        if (archPawn && archPawn->CylinderComponent) {
+            from = "its archetype " + archPawn->GetFullName();
+            return archPawn->CylinderComponent;
+        }
+        std::string wanted = p->ObjectArchetype ? p->ObjectArchetype->GetFullName() : std::string();
+        APoplarPlayerPawn* fallback = nullptr;
+        for (APoplarPlayerPawn* o : SDKUtils::GetAllOfClass<APoplarPlayerPawn>()) {
+            if (!o || (APawn*)o == p || (o->ObjectFlags & kPendingKill) || !o->CylinderComponent || !IsArchetypeObject(o)) continue;
+            if (o->GetFullName() == wanted) {
+                from = "another object named like its archetype, " + wanted;
+                return o->CylinderComponent;
+            }
+            if (!fallback) fallback = o;
+        }
+        if (fallback) {
+            from = "player archetype " + fallback->GetFullName();
+            return fallback->CylinderComponent;
+        }
+        return nullptr;
+    }
+
+    void FixPawnCollision(APawn* p, const char* who) {
+        printf("[FLOOR] %s's pawn %s (%p) has no collision component: %s\n", who, FullNameOrNone(p).c_str(), (void*)p, CollisionDiag(p).c_str());
+
+        for (int i = 0; p->Components.ArrayData && i < p->Components.ArrayCount; i++) {
+            UActorComponent* c = p->Components.ArrayData[i];
+            if (c && c->IsA(UCylinderComponent::StaticClass())) {
+                p->CylinderComponent = reinterpret_cast<UCylinderComponent*>(c);
+                p->CollisionComponent = reinterpret_cast<UCylinderComponent*>(c);
+                printf("[FLOOR] fixed %s's pawn %p: its Components array held %s (r %.0f h %.0f); set it as CylinderComponent and CollisionComponent\n",
+                    who, (void*)p, c->GetName().c_str(), p->CylinderComponent->CollisionRadius, p->CylinderComponent->CollisionHeight);
+                return;
+            }
+        }
+
+        std::string from;
+        UCylinderComponent* tmpl = FindCylinderTemplate(p, from);
+        if (!tmpl) {
+            printf("[FLOOR] could not fix %s's pawn %p: no pawn archetype with a CylinderComponent found\n", who, (void*)p);
+            return;
+        }
+        UCylinderComponent* cyl = reinterpret_cast<UCylinderComponent*>(Engine::ScuffedDuplicateObject(tmpl, p));
+        if (!cyl || !cyl->IsA(UCylinderComponent::StaticClass())) {
+            printf("[FLOOR] could not fix %s's pawn %p: copying %s from %s failed\n", who, (void*)p, FullNameOrNone(tmpl).c_str(), from.c_str());
+            return;
+        }
+        p->CylinderComponent = cyl;
+        p->CollisionComponent = cyl;
+        p->AttachComponent(cyl);
+        printf("[FLOOR] fixed %s's pawn %p: attached a copy of %s from %s (r %.0f h %.0f, collide %u block %u); collision now %s, components %i\n",
+            who, (void*)p, FullNameOrNone(tmpl).c_str(), from.c_str(), cyl->CollisionRadius, cyl->CollisionHeight,
+            (unsigned)cyl->CollideActors, (unsigned)cyl->BlockActors, NameOrNone(p->CollisionComponent).c_str(), p->Components.ArrayCount);
+    }
+
+    // Every engine tick (a new pawn starts falling at once): the server checks each joined player's
+    // pawn, a client its own. Each pawn is looked at once.
+    void FixPlayerPawnCollision() {
+        static std::map<void*, APawn*> handled;   // controller -> last pawn looked at
+        auto check = [](APlayerController* pc, const char* who) {
+            if (!pc || (pc->ObjectFlags & kPendingKill)) return;
+            APawn* p = pc->Pawn;
+            if (!p || handled[pc] == p) return;
+            if ((p->ObjectFlags & kPendingKill) || p->bDeleteMe || p->bTearOff) return;
+            if (p->CollisionComponent || p->CylinderComponent) { handled[pc] = p; return; }
+            handled[pc] = p;
+            FixPawnCollision(p, who);
+        };
+
+        if (Globals::amServer) {
+            for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+                if (sp.Connection && sp.Connection->Actor)
+                    check(sp.Connection->Actor, sp.Name.c_str());
+            }
+            return;
+        }
+
+        // Client: a fresh lookup each time (a cached controller can be freed by a map change), four
+        // times a second; the server corrects any fall in between once its own copy has a cylinder.
+        static unsigned long long next = 0;
+        unsigned long long now = GetTickCount64();
+        if (now < next) return;
+        next = now + 250;
+        if (APoplarPlayerController* local = SDKUtils::GetLocalPlayerController())
+            check(local, "local player");
+    }
+
     // Every LevelStreaming object of the current map (found through the object list, not the
     // WorldInfo layout), as "Name loaded/visible should-load/should-visible block".
     std::vector<std::pair<std::string, std::string>> StreamingLevelStates() {
@@ -822,6 +961,9 @@ namespace Hooks {
 
     void GameEngineTickHook(UGameEngine* engine, float DeltaTime) {
         GameEngineTick.call<void>(engine, DeltaTime);
+        if (Globals::amServer && Globals::netDriver) // before the queued tasks below use a player's connection
+            ServerNetworking::ForgetClosedConnections("engine tick");
+        FixPlayerPawnCollision();
         Diagnostics::NoteTick();
         DebugServer::Pump();
         Autopilot::Tick(DeltaTime);
@@ -1705,6 +1847,8 @@ namespace Hooks {
 
     bool DestroyActorHook(UWorld* world, AActor* actor, bool force) {
         if (Globals::netDriver) {
+            // A connection closed earlier in this engine tick is freed already (see IsLiveConnection).
+            ServerNetworking::ForgetClosedConnections("DestroyActor");
             for (const Globals::ServerPlayer& serverPlayer: Globals::ServerPlayers) {
                 UNetConnection* connection = serverPlayer.Connection;
 

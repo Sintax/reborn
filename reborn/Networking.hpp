@@ -31,6 +31,12 @@ namespace ServerNetworking {
 
     UActorChannel* GetActorChannelForActor(AActor* actor, UNetConnection* connection);
 
+    bool IsLiveConnection(UNetConnection* connection);
+
+    void ForgetClosedConnections(const char* where);
+
+    bool IsChannelOnLiveConnection(UActorChannel* channel);
+
     std::vector<AActor*> BuildConsiderList(AWorldInfo* WorldInfo, UNetDriver* NetDriver);
 
     uint8_t GetConnectionState(UNetConnection* connection);
