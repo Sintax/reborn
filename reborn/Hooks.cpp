@@ -39,6 +39,372 @@ namespace Hooks {
         return nullptr;
     }
 
+    // --- Server-side pawn spawn for remote players --------------------------------------------
+    //
+    // Since the July-2025 "start of match refactor" the server only records a character selection
+    // after Login and leaves the spawn to the game's own character-select flow. That flow never
+    // runs here: the match goes SetTournamentMode -> PlayerSetup -> WarmUp -> InProgress with no
+    // PoplarCharacterSelectManager, StartHumans() runs before the controller exists, and nothing
+    // ever gives the remote controller a pawn. The last build with working two-player play
+    // (commit 102958b) called eventSwitchPoplarPlayerClass + ServerRestartPlayer itself, long after
+    // login. Doing that 1-28 s after login (always still in PlayerSetup) produced no pawn, silently.
+    //
+    // A remote player has gates that solo play does not: the server's record of which on-demand
+    // packages that client has loaded (HasClientLoadedOnDemandPackageFor, normally filled by the
+    // client's ServerUpdateOnDemandPackageStatus RPC), the player class applied on the PRI
+    // (SwitchToPendingPlayerClass, which the engine itself calls in solo), a team, and the match
+    // state. This satisfies each of them, keeps trying through WarmUp and InProgress, and logs every
+    // gate so the next run says which one refuses if the pawn still does not appear.
+
+    bool IsLiveObject(UObject* o) {
+        return o && !(o->ObjectFlags & 0x2000000000000000) && o->GetFullName().find("Default__") == std::string::npos;
+    }
+
+    int ServerMatchState() {
+        APoplarGameReplicationInfo* gri = nullptr;
+        for (APoplarGameReplicationInfo* g : SDKUtils::GetAllOfClass<APoplarGameReplicationInfo>())
+            if (IsLiveObject(g)) gri = g;
+        return gri ? (int)gri->CurrentMatchState.State : -1;
+    }
+
+    UObject* OutermostObject(UObject* o) {
+        while (o && o->Outer) o = o->Outer;
+        return o;
+    }
+
+    std::string OutermostPackageName(UObject* o) {
+        o = OutermostObject(o);
+        return o ? o->GetName() : std::string();
+    }
+
+    // "Class Pkg.Sub.Obj" -> "Pkg.Sub.Obj", the form StaticFindObject/StaticLoadObject take.
+    std::string ObjectPath(UObject* o) {
+        std::string full = o ? o->GetFullName() : std::string();
+        size_t space = full.find(' ');
+        return space == std::string::npos ? full : full.substr(space + 1);
+    }
+
+    const char* NameOrNone(UObject* o) {
+        static std::string s;
+        s = o ? o->GetName() : "none";
+        return s.c_str();
+    }
+
+    // "applied class": AWillowPlayerStateInfo::PlayerClass on the controller's PSI. "NO-PSI" when the
+    // controller has no player state info at all, which earlier attempts also printed as "none".
+    const char* AppliedClassName(APoplarPlayerStateInfo* psi) {
+        static std::string s;
+        s = !psi ? "NO-PSI" : (psi->PlayerClass ? psi->PlayerClass->GetName() : "none");
+        return s.c_str();
+    }
+
+    // --- Server spawn trace -------------------------------------------------------------------
+    // While a remote player is being spawned, log every event the engine routes through ProcessEvent
+    // on that player's controller, PRI, PSI, meta PRI, the game info and the GRI, with the arguments
+    // of the class-selection calls. Script-to-script calls do not pass through here, but every
+    // engine->script event, every RPC the server runs and every call the mod makes does, so the
+    // trace shows which selection step runs, with what class, and in what order.
+    bool spawnTraceOn = false;
+    int spawnTraceLines = 0;
+    unsigned long long spawnTraceDeadline = 0;   // GetTickCount64() ms; covers login -> WarmUp
+    const int kSpawnTraceMaxLines = 400;
+
+    void StartSpawnTrace(float seconds) {
+        spawnTraceOn = true;
+        spawnTraceLines = 0;
+        spawnTraceDeadline = GetTickCount64() + static_cast<unsigned long long>(seconds * 1000.0f);
+        printf("[TRACE] spawn trace on for %.0f s\n", seconds);
+    }
+
+    void SpawnTrace(UObject* object, UFunction* function, void* params) {
+        if (!spawnTraceOn || !object || !function) return;
+        if (GetTickCount64() > spawnTraceDeadline) { spawnTraceOn = false; printf("[TRACE] spawn trace off (time)\n"); return; }
+        if (!(object->IsA(APlayerController::StaticClass()) || object->IsA(APlayerReplicationInfo::StaticClass())
+            || object->IsA(APlayerStateInfo::StaticClass()) || object->IsA(AGameInfo::StaticClass())
+            || object->IsA(AGameReplicationInfo::StaticClass()) || object->IsA(APoplarMetaPlayerReplicationInfo::StaticClass())
+            || object->IsA(APawn::StaticClass())))
+            return;
+
+        std::string fn = function->GetName();
+        // Per-tick noise.
+        static const char* skip[] = { "Tick", "Timer", "PlayerMove", "ServerMove", "Input", "Camera", "ViewTarget", "UpdateRotation", "Rep_", "Replicat", "Hud", "HUD", "Debug", "Audio" };
+        for (const char* s : skip) if (fn.find(s) != std::string::npos) return;
+
+        if (spawnTraceLines >= kSpawnTraceMaxLines) {
+            if (spawnTraceLines == kSpawnTraceMaxLines) { spawnTraceLines++; printf("[TRACE] cap reached, trace off\n"); spawnTraceOn = false; }
+            return;
+        }
+        spawnTraceLines++;
+
+        std::string extra;
+        if (params) {
+            if (fn == "SwitchPoplarPlayerClass")      extra = std::string(" nameId=") + NameOrNone(reinterpret_cast<APoplarPlayerController_eventSwitchPoplarPlayerClass_Params*>(params)->NewPlayerClassNameId);
+            else if (fn == "SwitchPlayerClass")       extra = std::string(" class=") + NameOrNone(reinterpret_cast<APoplarPlayerController_eventSwitchPlayerClass_Params*>(params)->NewPlayerClass);
+            else if (fn == "SetPendingPoplarClassSwitch") extra = std::string(" class=") + NameOrNone(reinterpret_cast<APoplarPlayerController_execSetPendingPoplarClassSwitch_Params*>(params)->NewPlayerClass);
+            else if (fn == "ServerSelectCharacter") {
+                auto* p = reinterpret_cast<APoplarPlayerController_eventServerSelectCharacter_Params*>(params);
+                extra = std::string(" character=") + NameOrNone(p->SelectedCharacter) + " lockIn=" + (p->bLockIn ? "1" : "0");
+            }
+            else if (fn == "ServerPlayerSelectClass") {
+                auto* p = reinterpret_cast<APoplarPlayerController_execServerPlayerSelectClass_Params*>(params);
+                std::wstring w = p->ClassPath.ArrayCount > 0 ? std::wstring(p->ClassPath.c_str()) : L"";
+                extra = " path=" + std::string(w.begin(), w.end());
+            }
+            else if (fn == "ClientApplyPendingPlayerClass") extra = std::string(" nameId=") + NameOrNone(reinterpret_cast<APoplarPlayerController_execClientApplyPendingPlayerClass_Params*>(params)->ThePlayerClassNameId);
+            else if (fn == "ServerUpdateOnDemandPackageStatus" || fn == "UpdateOnDemandPackageStatus") {
+                auto* p = reinterpret_cast<AWillowPlayerController_execServerUpdateOnDemandPackageStatus_Params*>(params);
+                std::wstring w = p->PackageString.ArrayCount > 0 ? std::wstring(p->PackageString.c_str()) : L"";
+                extra = " package=" + std::string(w.begin(), w.end()) + " loaded=" + (p->bIsLoaded ? "1" : "0");
+            }
+        }
+        if (object->IsA(APoplarPlayerController::StaticClass())) {
+            APoplarPlayerController* pc = reinterpret_cast<APoplarPlayerController*>(object);
+            extra += std::string(" [pending=") + NameOrNone(pc->PendingPlayerClass) + " applied=" + AppliedClassName(pc->PoplarPSI) + " pawn=" + NameOrNone(pc->Pawn) + "]";
+        }
+        printf("[TRACE] %s %s.%s%s\n", object->Class ? object->Class->GetName().c_str() : "?", object->GetName().c_str(), fn.c_str(), extra.c_str());
+    }
+
+    // One-time: where the natives behind the spawn gates live, so a failing gate can be decompiled.
+    void LogSpawnNativeAddresses() {
+        static bool done = false;
+        if (done) return;
+        done = true;
+        const char* names[] = {
+            "Function PoplarGame.PoplarPlayerReplicationInfo.AreRequirementsMetToSpawnCharacter",
+            "Function PoplarGame.PoplarPlayerController.HasClientLoadedOnDemandPackageFor",
+            "Function WillowGame.WillowPlayerController.UpdateOnDemandPackageStatus",
+            "Function WillowGame.WillowPlayerController.ServerUpdateOnDemandPackageStatus",
+            "Function PoplarGame.PoplarPlayerController.ServerPlayerSelectClass",
+        };
+        for (const char* n : names) {
+            UFunction* f = UFunction::FindFunction(n);
+            if (!f) { printf("[SPAWN] native %s: not found\n", n); continue; }
+            uintptr_t func = *reinterpret_cast<uintptr_t*>(reinterpret_cast<char*>(f) + 0x110);   // UFunction::Func, the pointer ProcessEvent calls
+            printf("[SPAWN] native %s at battleborn+0x%llx (iNative %u)\n", n, (unsigned long long)(func - Globals::baseAddress), (unsigned)f->iNative);
+        }
+    }
+
+    const int kSpawnAttemptMax = 40;   // every 3 s: covers PlayerSetup -> WarmUp -> InProgress (about 60 s after login)
+
+    // Game thread only. Looks the controller up through the connection each time, since the pointer
+    // captured at login is not kept alive by anything.
+    void SpawnPawnForServerPlayer(UNetConnection* connection, int attempt) {
+        if (!Globals::amServer) return;
+
+        auto again = [connection, attempt] {
+            if (attempt < kSpawnAttemptMax)
+                Engine::RunOnGameThreadAfter(3.0f, [connection, attempt] { SpawnPawnForServerPlayer(connection, attempt + 1); });
+            else
+                printf("[SPAWN] giving up after %i attempts\n", attempt);
+        };
+
+        Globals::ServerPlayer* sp = ConnectionToServerPlayer(connection);
+        if (!sp || !sp->Connection || !sp->Connection->Actor) {
+            printf("[SPAWN] attempt %i: connection gone, giving up\n", attempt);
+            return;
+        }
+
+        APlayerController* base = sp->Connection->Actor;
+        if (!IsLiveObject(base) || !base->IsA(APoplarPlayerController::StaticClass())) {
+            printf("[SPAWN] attempt %i: %s has no live PoplarPlayerController, giving up\n", attempt, sp->Name.c_str());
+            return;
+        }
+        APoplarPlayerController* pc = reinterpret_cast<APoplarPlayerController*>(base);
+
+        if (pc->Pawn) {
+            printf("[SPAWN] %s already has pawn %s (match state %i)\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str(), ServerMatchState());
+            return;
+        }
+
+        APoplarGameInfo* gi = SDKUtils::GetLastOfClass<APoplarGameInfo>();
+        APoplarPlayerReplicationInfo* pri = pc->MyPoplarPRI ? pc->MyPoplarPRI : reinterpret_cast<APoplarPlayerReplicationInfo*>(pc->PlayerReplicationInfo);
+        if (!gi || !pri) {
+            printf("[SPAWN] attempt %i: %s has no %s yet, retrying\n", attempt, sp->Name.c_str(), gi ? "PRI" : "GameInfo");
+            again();
+            return;
+        }
+
+        APoplarPlayerStateInfo* psi = pc->PoplarPSI;   // holds the applied class (AWillowPlayerStateInfo::PlayerClass)
+
+        LogSpawnNativeAddresses();
+
+        // 1. Work with the pending class the server itself settled on. Every selection that goes
+        //    through the game's own rules (the client's lock-in, ServerSelectCharacter at login,
+        //    ServerPlayerSelectClass) comes back as Class_ModernSoldier for this player: the remote
+        //    player's meta PRI owns no characters, so the server substitutes the default hero.
+        //    Attempts 2-4 forced the pending class back to RocketHawk every 3 s and then tried to
+        //    apply a class the server had just refused; none of them ever ran SwitchToPendingPlayerClass
+        //    with the server's own choice and the package gate fixed for *that* class. Accept the
+        //    default (a pawn of any class is what this stage needs) and only seed a pending class when
+        //    there is none at all.
+        if (!pc->PendingPlayerClass && sp->Character) {
+            pc->eventSwitchPoplarPlayerClass(sp->Character);
+            printf("[SPAWN] attempt %i: %s had no pending class; SwitchPoplarPlayerClass(%s) -> %s\n", attempt, sp->Name.c_str(),
+                sp->Character->GetName().c_str(), NameOrNone(pc->PendingPlayerClass));
+        }
+        UPlayerClassDefinition* classDef = pc->PendingPlayerClass;
+
+        {
+            APoplarMetaPlayerReplicationInfo* meta = pri->GetMetaPRI();
+            printf("[SPAWN] attempt %i: %s state objects: PoplarPSI %s, Controller.PSI %s, PSI class %s, PRI.PoplarPSI %s, MetaPRI %s (meta class %s, static entitlements %i), PRI.CharacterSelectionState %u\n",
+                attempt, sp->Name.c_str(), psi ? psi->GetFullName().c_str() : "NONE", pc->PSI ? pc->PSI->GetName().c_str() : "NONE",
+                pc->PlayerStateInfoClass ? pc->PlayerStateInfoClass->GetName().c_str() : "none",
+                pri->PoplarPSI ? pri->PoplarPSI->GetName().c_str() : "NONE",
+                meta ? meta->GetName().c_str() : "NONE", (meta && meta->PlayerClass) ? meta->PlayerClass->GetName().c_str() : "none",
+                meta ? meta->NumStaticEntitlements : -1, (unsigned)pri->CharacterSelectionState);
+        }
+
+        // 2. A team, or FindPlayerStart has nothing to pick from.
+        if (!pri->Team) {
+            uint8_t team = gi->PickTeam(0, pri->UniqueId);
+            bool changed = gi->ChangeTeam(pc, team, true);
+            printf("[SPAWN] attempt %i: %s had no team; PickTeam -> %u, ChangeTeam -> %s, team now %s\n", attempt, sp->Name.c_str(),
+                (unsigned)team, changed ? "yes" : "no", pri->Team ? pri->Team->GetName().c_str() : "none");
+        }
+
+        // 3. The server only applies a class whose on-demand package it believes the client has
+        //    loaded. HasClientLoadedOnDemandPackageFor (battleborn+0x1184810, PoplarPlayerController
+        //    vtable slot 0x3c18) is, for a remote player:
+        //      Player->ClientHasLoadedPackagesFor(obj)   (UNetConnection slot 0x2a8, battleborn+0x61b5f0:
+        //          every on-demand package the object needs must be in the connection's loaded-package
+        //          list at +0x6048 AND PackageMap->SupportsPackage(pkg))
+        //      && PackageMap->SupportsObject(obj).
+        //    The character's GD_*_Streaming package loads on the server at character selection, after
+        //    the package maps were built at listen time, and this server never gets the client's
+        //    NMT_Have that would mark it present, so the package-map half fails no matter what the
+        //    loaded-package list says (attempt 3 only wrote the list). Check and fix each piece.
+        UObject* pkgObj = classDef ? OutermostObject(classDef) : nullptr;
+        std::string pkg = pkgObj ? pkgObj->GetName() : std::string();
+        bool clientHasPackage = classDef ? pc->HasClientLoadedOnDemandPackageFor(classDef) : false;
+        if (classDef && !clientHasPackage) {
+            UNetConnection* conn = sp->Connection;
+            bool inList = ServerNetworking::ConnectionHasOnDemandPackage(conn, pkgObj);
+            bool supportsPkg = ServerNetworking::PackageMapSupportsPackage(conn, pkgObj);
+            bool supportsObj = ServerNetworking::PackageMapSupportsObject(conn, classDef);
+            printf("[SPAWN] attempt %i: package gate for %s before fix: %s in client's loaded list %s, package map (%s) supports package %s, supports class %s, client loaded list: %s\n",
+                attempt, sp->Name.c_str(), pkg.c_str(), inList ? "yes" : "no", conn && conn->PackageMap ? conn->PackageMap->GetName().c_str() : "none",
+                supportsPkg ? "yes" : "no", supportsObj ? "yes" : "no", ServerNetworking::OnDemandPackageListString(conn).c_str());
+
+            std::wstring wpkg(pkg.begin(), pkg.end());
+            if (attempt == 1) {
+                pc->eventClientLoadOnDemandPackage(FString(wpkg.c_str()));
+                printf("[SPAWN] attempt %i: asked %s's client to load package %s\n", attempt, sp->Name.c_str(), pkg.c_str());
+            }
+
+            if (!inList) {
+                // The engine's own path first (it refuses when it cannot find the package file).
+                pc->UpdateOnDemandPackageStatus(FString(wpkg.c_str()), true);
+                inList = ServerNetworking::ConnectionHasOnDemandPackage(conn, pkgObj);
+                if (inList) {
+                    printf("[SPAWN] attempt %i: UpdateOnDemandPackageStatus recorded %s as loaded for %s's client\n", attempt, pkg.c_str(), sp->Name.c_str());
+                }
+                else {
+                    ServerNetworking::MarkOnDemandPackageLoaded(conn, pkgObj);
+                    inList = ServerNetworking::ConnectionHasOnDemandPackage(conn, pkgObj);
+                    printf("[SPAWN] attempt %i: UpdateOnDemandPackageStatus did not record %s (its package-file lookup refused it); added it to the connection's list directly -> %s\n",
+                        attempt, pkg.c_str(), inList ? "yes" : "no");
+                }
+            }
+
+            if (!supportsPkg || !supportsObj) {
+                ServerNetworking::RefreshServerPackageMaps(conn);
+                supportsPkg = ServerNetworking::PackageMapSupportsPackage(conn, pkgObj);
+                supportsObj = ServerNetworking::PackageMapSupportsObject(conn, classDef);
+            }
+
+            clientHasPackage = pc->HasClientLoadedOnDemandPackageFor(classDef);
+            printf("[SPAWN] attempt %i: package gate for %s after fix: %s in client's loaded list %s, package map supports package %s, supports class %s -> HasClientLoadedOnDemandPackageFor %s\n",
+                attempt, sp->Name.c_str(), pkg.c_str(), inList ? "yes" : "no", supportsPkg ? "yes" : "no", supportsObj ? "yes" : "no", clientHasPackage ? "yes" : "no");
+        }
+
+        // The gates, before touching anything else.
+        bool requirementsMet = pri->AreRequirementsMetToSpawnCharacter();
+        bool canRestart = gi->PlayerCanRestart(pc);
+        AActor* start = gi->FindPlayerStart(pc, 255, FString());
+        printf("[SPAWN] attempt %i for %s on %s: match state %i, controller state %s, pending class %s (name id %s), applied class %s, team %s, "
+            "spectator %u/%u, char select state %u, client has package %s: %s, requirements met %s, PlayerCanRestart %s, FindPlayerStart %s, bDelayedStart %u\n",
+            attempt, sp->Name.c_str(), pc->GetName().c_str(), ServerMatchState(), pc->GetStateName().ToString().c_str(),
+            NameOrNone(classDef), pc->PendingPlayerClassNameId ? pc->PendingPlayerClassNameId->GetName().c_str() : "none",
+            AppliedClassName(psi),
+            pri->Team ? pri->Team->GetName().c_str() : "none",
+            (unsigned)pri->bOnlySpectator, (unsigned)pri->bIsSpectator, (unsigned)pri->CharacterSelectionState,
+            pkg.c_str(), clientHasPackage ? "yes" : "no", requirementsMet ? "yes" : "no", canRestart ? "yes" : "no",
+            start ? start->GetName().c_str() : "none", (unsigned)gi->bDelayedStart);
+
+        // 4. Apply the class the way the engine does in solo play (it calls SwitchToPendingPlayerClass
+        //    on the controller through ProcessEvent; that is what the standalone hook below sees).
+        if (classDef && !(psi && psi->PlayerClass)) {
+            pc->SwitchToPendingPlayerClass();
+            printf("[SPAWN] attempt %i: SwitchToPendingPlayerClass -> applied class %s, requirements met %s, pawn %s\n", attempt,
+                AppliedClassName(psi),
+                pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no", pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
+            if (pc->Pawn) {
+                printf("[SPAWN] %s got pawn %s from SwitchToPendingPlayerClass\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
+                return;
+            }
+
+            // 4b. The handler the client's own RPC reaches once its package is loaded:
+            //     ServerPlayerSelectClass (native, battleborn+0x1184b90 via slot 0x3c40) resolves the
+            //     class by path, sets it on the PRI and starts the server's async pawn-data load whose
+            //     completion event is SwitchPoplarPlayerClass (-> SwitchToPendingPlayerClass on a later
+            //     tick, which the next attempt will see). It also drops the PRI's CharacterSelectionState
+            //     to 3, which AreRequirementsMetToSpawnCharacter wants at 4, so re-lock afterwards.
+            //     Attempt 1 stays clean (gate fix + SwitchToPendingPlayerClass only) so the trace shows
+            //     what the server does on its own; the fallbacks start on attempt 2 and always name
+            //     the class the server currently has pending, never one it already refused.
+            if (!(psi && psi->PlayerClass) && clientHasPackage && attempt >= 2) {
+                std::string path = ObjectPath(classDef);
+                std::wstring wpath(path.begin(), path.end());
+                uint8_t stateBefore = static_cast<uint8_t>(pri->CharacterSelectionState);
+                pc->ServerPlayerSelectClass(FString(wpath.c_str()), FString());
+                printf("[SPAWN] attempt %i: ServerPlayerSelectClass(%s) -> applied class %s, pending class %s, selection state %u -> %u, pawn %s\n", attempt, path.c_str(),
+                    AppliedClassName(psi), NameOrNone(pc->PendingPlayerClass),
+                    (unsigned)stateBefore, (unsigned)pri->CharacterSelectionState, pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
+                if (static_cast<uint8_t>(pri->CharacterSelectionState) < stateBefore && sp->Character) {
+                    pc->eventServerSelectCharacter(sp->Character, sp->OptionalSkin, sp->OptionalTaunt, true);
+                    printf("[SPAWN] attempt %i: re-locked %s -> selection state %u, requirements met %s\n", attempt, sp->Character->GetName().c_str(),
+                        (unsigned)pri->CharacterSelectionState, pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no");
+                }
+                if (pc->Pawn) {
+                    printf("[SPAWN] %s got pawn %s from ServerPlayerSelectClass\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
+                    return;
+                }
+            }
+
+            // 4c. The script event that applies a class outright (fallback, attempt 2 on; uses whatever
+            //     class is pending now, since ServerPlayerSelectClass may just have changed it).
+            if (!(psi && psi->PlayerClass) && attempt >= 2 && pc->PendingPlayerClass) {
+                classDef = pc->PendingPlayerClass;
+                pc->eventSwitchPlayerClass(classDef);
+                printf("[SPAWN] attempt %i: SwitchPlayerClass(%s) -> applied class %s, pawn %s\n", attempt, classDef->GetName().c_str(),
+                    AppliedClassName(psi), pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
+                if (pc->Pawn) {
+                    printf("[SPAWN] %s got pawn %s from SwitchPlayerClass\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
+                    return;
+                }
+            }
+        }
+
+        // 5. What the old working build did next.
+        pc->ServerRestartPlayer();
+        if (pc->Pawn) {
+            printf("[SPAWN] %s got pawn %s from ServerRestartPlayer\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
+            return;
+        }
+
+        // 6. ServerRestartPlayer refused (PlayerCanRestart): ask the game info directly.
+        gi->eventRestartPlayer(pc);
+        if (pc->Pawn) {
+            printf("[SPAWN] %s got pawn %s from GameInfo.RestartPlayer\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
+            return;
+        }
+
+        printf("[SPAWN] attempt %i: still no pawn for %s (applied class %s, requirements met %s, client has package %s, controller state %s)\n", attempt, sp->Name.c_str(),
+            AppliedClassName(psi), pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no",
+            (classDef && pc->HasClientLoadedOnDemandPackageFor(classDef)) ? "yes" : "no", pc->GetStateName().ToString().c_str());
+        again();
+    }
+
     void WorldControlMessageHook(UWorld* world, UNetConnection* connection, uint8_t message, void* inbunch) {
         static int messagesLogged = 0;
         if (messagesLogged < 40) { messagesLogged++; printf("[NETWORKING] control message %u\n", (unsigned)message); }
@@ -233,6 +599,20 @@ namespace Hooks {
 
                             APoplarPlayerController* pc = (APoplarPlayerController*)(SDKUtils::GetLastOfClass<AGameInfo>()->eventLogin(*portalString, *optionsString, *netID, err));//reinterpret_cast<APoplarPlayerController * (__thiscall*)(UWorld * world, UPlayer * player, ENetRole RemoteRole, FURL * url, FUniqueNetId * netID, FString * err, uint8_t InNetPlayerIndex)>(Globals::baseAddress + 0x03ef7b0)(theWorld, connection, ENetRole::ROLE_AutonomousProxy, &theURL, &netID, &err, 0);
 
+                            if (!pc) {
+                                printf("[NETWORKING] Login failed for %s: %ls\n", serverPlayer.Name.c_str(), err.ArrayCount > 0 ? err.c_str() : L"(no error text)");
+                                continue;
+                            }
+
+                            printf("[NETWORKING] Logged in %s as %s (match state %i)\n", serverPlayer.Name.c_str(), pc->GetFullName().c_str(), ServerMatchState());
+
+                            StartSpawnTrace(75.0f);
+
+                            // The client's copy of this native RPC never leaves the client (the SDK
+                            // clears FUNC_Native, so ProcessEvent runs it locally); called here it
+                            // runs here, which is what the server's setup phase waits for.
+                            pc->ServerSetHasReceivedEntitlements();
+
                             pc->eventServerSelectCharacter(serverPlayer.Character, serverPlayer.OptionalSkin, serverPlayer.OptionalTaunt, true);
 
                             if (serverPlayer.OptionalSkin)
@@ -287,6 +667,11 @@ namespace Hooks {
                             SDKUtils::GetLastOfClass<AGameInfo>()->eventPostLogin(pc);
 
                             serverPlayer.shouldReplicateTo = true;
+
+                            // Nothing else spawns this player's pawn (see SpawnPawnForServerPlayer). Give the
+                            // controller one tick to settle after PostLogin, then spawn it ourselves.
+                            UNetConnection* spawnConnection = serverPlayer.Connection;
+                            Engine::RunOnGameThreadAfter(1.0f, [spawnConnection] { SpawnPawnForServerPlayer(spawnConnection, 1); });
                         }
                     }
                 }
@@ -437,6 +822,27 @@ namespace Hooks {
         }
         */
 
+        if (Globals::amServer && spawnTraceOn) SpawnTrace(object, function, params);
+
+        // The client's lock-in (Overlay::LockInCharacter) sends ServerSelectCharacter with no character,
+        // which the server resolves to the default class (Class_ModernSoldier) and so keeps undoing the
+        // character we assigned at login. Substitute the server-assigned character.
+        static UFunction* serverSelectCharacterUFunction = nullptr;
+
+        if (!serverSelectCharacterUFunction)
+            serverSelectCharacterUFunction = UFunction::FindFunction("Function PoplarGame.PoplarPlayerController.ServerSelectCharacter");
+
+        if (Globals::amServer && Globals::netDriver && function == serverSelectCharacterUFunction && params) {
+            auto* selectParams = reinterpret_cast<APoplarPlayerController_eventServerSelectCharacter_Params*>(params);
+            if (!selectParams->SelectedCharacter) {
+                Globals::ServerPlayer* serverPlayer = ConnectionToServerPlayer((UNetConnection*)reinterpret_cast<APlayerController*>(object)->Player);
+                if (serverPlayer && serverPlayer->Character) {
+                    selectParams->SelectedCharacter = serverPlayer->Character;
+                    printf("[SPAWN] %s's lock-in named no character; using %s\n", serverPlayer->Name.c_str(), serverPlayer->Character->GetName().c_str());
+                }
+            }
+        }
+
         static UFunction* characterSelectUFunction = nullptr;
 
         if (!characterSelectUFunction)
@@ -560,6 +966,26 @@ namespace Hooks {
             characterPossesionStandaloneUFunction = UFunction::FindFunction("Function PoplarGame.PoplarPlayerController.SwitchToPendingPlayerClass");
 
         if (function == characterPossesionStandaloneUFunction) {
+            // Server: show what the script does with the pending class, whoever called it (the engine's
+            // own class-switch callback or SpawnPawnForServerPlayer), and whether the gate it checks
+            // (HasClientLoadedOnDemandPackageFor) holds at that moment.
+            if (Globals::amServer && Globals::netDriver && !Globals::amStandalone) {
+                APoplarPlayerController* ppc = reinterpret_cast<APoplarPlayerController*>(object);
+                static int logged = 0;
+                if (logged < 60) {
+                    logged++;
+                    UPlayerClassDefinition* pending = ppc->PendingPlayerClass;
+                    printf("[SPAWN] SwitchToPendingPlayerClass on %s: before: pending %s, applied %s, client has package %s, PRI selection state %u\n",
+                        ppc->GetName().c_str(), NameOrNone(pending), AppliedClassName(ppc->PoplarPSI),
+                        pending ? (ppc->HasClientLoadedOnDemandPackageFor(pending) ? "yes" : "no") : "n/a",
+                        ppc->MyPoplarPRI ? (unsigned)ppc->MyPoplarPRI->CharacterSelectionState : 99u);
+                    ProcessEvent.call<void>(object, function, params);
+                    printf("[SPAWN] SwitchToPendingPlayerClass on %s: after: pending %s, applied %s, pawn %s\n",
+                        ppc->GetName().c_str(), NameOrNone(ppc->PendingPlayerClass), AppliedClassName(ppc->PoplarPSI), NameOrNone(ppc->Pawn));
+                    return;
+                }
+            }
+
             if (Globals::amStandalone && !Globals::didStandaloneCharacterInitialization) { // Standalone Character Initialization
                 APoplarPlayerController* ppc = reinterpret_cast<APoplarPlayerController*>(object);
 

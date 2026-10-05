@@ -15,6 +15,18 @@ namespace ServerNetworking {
 
     void LogConnectionPackageMap(UNetConnection* connection);
 
+    bool PackageMapSupportsObject(UNetConnection* connection, UObject* object);
+
+    bool PackageMapSupportsPackage(UNetConnection* connection, UObject* package);
+
+    void RefreshServerPackageMaps(UNetConnection* connection);
+
+    bool ConnectionHasOnDemandPackage(UNetConnection* connection, UObject* package);
+
+    void MarkOnDemandPackageLoaded(UNetConnection* connection, UObject* package);
+
+    std::string OnDemandPackageListString(UNetConnection* connection);
+
     UActorChannel* GetActorChannelForActor(AActor* actor, UNetConnection* connection);
 
     std::vector<AActor*> BuildConsiderList(AWorldInfo* WorldInfo, UNetDriver* NetDriver);

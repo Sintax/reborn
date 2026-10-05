@@ -186,6 +186,103 @@ namespace ServerNetworking {
             PackageMapSupportsObject(connection, AWorldInfo::StaticClass()) ? "yes" : "no");
     }
 
+    // UPackageMap::SupportsPackage (slot 0x218): the per-package half of the check
+    // UNetConnection makes for on-demand packages (battleborn+0x61b5f0, slot 0x2a8).
+    bool PackageMapSupportsPackage(UNetConnection* connection, UObject* package) {
+        void* packageMap = connection ? connection->PackageMap : nullptr;
+        if (!packageMap || !package)
+            return false;
+
+        void** vtable = *reinterpret_cast<void***>(packageMap);
+        return reinterpret_cast<bool (*)(void*, UObject*)>(vtable[0x218 / 8])(packageMap, package);
+    }
+
+    // The same three steps BuildServerMasterMap does, for any package map: pick up packages that
+    // were loaded after the map was built (a character's GD_*_Streaming package only loads on the
+    // server when that character is selected, long after listen), mark them present on the
+    // remote side (this server never processes the client's NMT_Have, see BuildServerMasterMap),
+    // and recompute the name->index map that SupportsObject/SupportsPackage search.
+    int RefreshPackageMap(void* mapObject, const char* label) {
+        uintptr_t map = reinterpret_cast<uintptr_t>(mapObject);
+        if (!map)
+            return 0;
+
+        void** vtable = *reinterpret_cast<void***>(map);
+        int before = *reinterpret_cast<int*>(map + 0x58);
+
+        reinterpret_cast<void (*)(void*)>(vtable[0x238 / 8])(mapObject); // UPackageMap::AddNetPackages; packages already listed are skipped
+
+        int numPackages = *reinterpret_cast<int*>(map + 0x58);
+        uintptr_t list = *reinterpret_cast<uintptr_t*>(map + 0x60);
+        int marked = 0;
+        for (int i = 0; i < numPackages && list; i++) {
+            uintptr_t info = list + static_cast<uintptr_t>(i) * 0x50;
+            int localGeneration = *reinterpret_cast<int*>(info + 0x24);
+            if (localGeneration > 0) {
+                *reinterpret_cast<int*>(info + 0x28) = localGeneration; // RemoteGeneration
+                marked++;
+            }
+        }
+
+        reinterpret_cast<void (*)(void*)>(vtable[0x230 / 8])(mapObject); // UPackageMap::Compute
+
+        printf("[NETWORKING] %s package map refreshed: %i -> %i packages, %i marked present remotely, %i in the name map\n",
+            label, before, numPackages, marked, *reinterpret_cast<int*>(map + 0x68));
+        return numPackages - before;
+    }
+
+    void RefreshServerPackageMaps(UNetConnection* connection) {
+        if (Globals::netDriver) {
+            uintptr_t masterMap = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(Globals::netDriver) + 0x90); // UNetDriver::MasterMap
+            RefreshPackageMap(reinterpret_cast<void*>(masterMap), "master");
+        }
+        if (connection && connection->PackageMap)
+            RefreshPackageMap(connection->PackageMap, "connection");
+    }
+
+    // UNetConnection keeps the on-demand packages a client has reported loaded as a TArray<FName>
+    // at +0x6048 ({Num, Max, Data}); ServerUpdateOnDemandPackageStatus (battleborn+0xe65c30)
+    // adds to it and the connection's on-demand check (battleborn+0x61b5f0) searches it.
+    static TArray<FName>* OnDemandPackageList(UNetConnection* connection) {
+        return connection ? reinterpret_cast<TArray<FName>*>(reinterpret_cast<char*>(connection) + 0x6048) : nullptr;
+    }
+
+    bool ConnectionHasOnDemandPackage(UNetConnection* connection, UObject* package) {
+        TArray<FName>* list = OnDemandPackageList(connection);
+        if (!list || !package || !list->ArrayData)
+            return false;
+
+        for (int i = 0; i < list->ArrayCount; i++) {
+            if (list->ArrayData[i].FNameEntryId == package->Name.FNameEntryId && list->ArrayData[i].InstanceNumber == package->Name.InstanceNumber)
+                return true;
+        }
+        return false;
+    }
+
+    void MarkOnDemandPackageLoaded(UNetConnection* connection, UObject* package) {
+        TArray<FName>* list = OnDemandPackageList(connection);
+        if (!list || !package)
+            return;
+
+        // TArray<FName>::AddUniqueItem (battleborn+0x949f0), the call UpdateOnDemandPackageStatus
+        // itself makes, so the array grows through the engine's allocator.
+        reinterpret_cast<int (*)(void*, const FName*)>(Globals::baseAddress + 0x0949f0)(list, &package->Name);
+    }
+
+    std::string OnDemandPackageListString(UNetConnection* connection) {
+        TArray<FName>* list = OnDemandPackageList(connection);
+        if (!list)
+            return "(no connection)";
+
+        std::string s;
+        for (int i = 0; i < list->ArrayCount && list->ArrayData && i < 40; i++) {
+            if (i) s += ", ";
+            s += list->ArrayData[i].ToString();
+        }
+        if (list->ArrayCount > 40) s += ", ...";
+        return s.empty() ? "(empty)" : s;
+    }
+
     void InitListen() {
         ForceAcceptConnections();
 
