@@ -439,3 +439,28 @@ def test_milestone_ignores_non_numeric_connections():
 def test_milestone_solo_uses_the_solo_autopilot_phase():
     s = [Sample(1, "game", {"ticks": 5, "autopilot": "playing"}, 200)]
     assert outcome.milestone(s) == 4
+
+
+# A match the game ends by its own rules (e.g. lost to minions) is a normal end in a survive run.
+def _match_lost_at(t_end):
+    s = []
+    for t in range(0, t_end, 2):
+        s += pair(t)
+    s += [Sample(t_end, "server", srv(connections=0, player_locations={}, match_over=True), 200),
+          Sample(t_end, "c1", cli(connected=False, disconnect_reason="lost", map="MenuMap_P"), 200)]
+    return s
+
+def test_survive_run_waits_after_the_game_ends_the_match():
+    o = outcome.classify(scn(), _match_lost_at(470), recs(), 471, True)
+    assert o.kind == "running"
+
+def test_survive_run_passes_when_the_game_ends_the_match():
+    r = recs(server=ProcessRecord("server", "server", 0, [], None, []))
+    o = outcome.classify(scn(), _match_lost_at(470), r, 482, True)
+    assert o.kind == "pass" and o.detail.startswith("match_end")
+
+def test_disconnect_before_the_match_ends_still_fails():
+    s = pair(0) + pair(2, c=cli(connected=False, disconnect_reason="lost")) + pair(4)
+    s += [Sample(6, "server", srv(connections=0, match_over=True), 200)]
+    o = outcome.classify(scn(), s, recs(), 7, True)
+    assert o.kind == "disconnect" and o.detail == "client:lost"

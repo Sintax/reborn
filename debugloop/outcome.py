@@ -212,10 +212,11 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
             return Outcome("exit", "", r.name, phase, code=str(r.exit_code))
     # Never pass while a process may be frozen: keep sampling until the freeze is decided.
     not_answering = [name for name in roles if _not_answering(name, samples, name in running)]
-    # Check server clean exit (exit 0 + match_ended + pass_when=="match_end")
+    # Check server clean exit (exit 0 + match_ended). A match the game ends by its own rules (won,
+    # or lost to minions) is a normal end for every scenario, not only pass_when="match_end".
     # Only if no other process has non-zero exit.
-    match_pass = next((r for r in procs if r.role == "server" and r.exit_code == 0 and match_ended
-                       and scn.pass_when == "match_end"), None)
+    match_pass = next((r for r in procs if r.role == "server" and r.exit_code == 0 and match_ended),
+                      None)
     if match_pass and not not_answering:
         return Outcome("pass", "match_end", match_pass.name, phase)
     # Check for any zero exit (a match-end pass on hold for a silent client waits below instead)
@@ -226,7 +227,7 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
     if match_pass:
         pass   # the match is over: post-match disconnects and map changes are expected, not failures
     elif phase == "playing":
-        play = samples[start:]
+        play = _before_match_end(roles, samples[start:])
         n_clients = sum(1 for v in roles.values() if v == "client")
         for s in play:
             if not s.state:
@@ -257,6 +258,18 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
             return Outcome("pass", "survived", None, phase)
         return Outcome("timeout", "", None, phase)
     return Outcome("running", "", None, phase)
+
+
+def _before_match_end(roles: dict[str, str], play: list[Sample]) -> list[Sample]:
+    """Samples up to the server's last report from before the match ended. After the game ends the
+    match the server drops everyone and clients go back to the menu, which is not a failure."""
+    over = next((s.t for s in play if roles.get(s.name) == "server" and s.state
+                 and s.state.get("match_over")), None)
+    if over is None:
+        return play
+    last_running = max((s.t for s in play if roles.get(s.name) == "server" and s.state
+                        and not s.state.get("match_over") and s.t < over), default=None)
+    return [s for s in play if last_running is not None and s.t <= last_running]
 
 
 def _desync(roles: dict[str, str], play: list[Sample]) -> str | None:
