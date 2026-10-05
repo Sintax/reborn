@@ -476,3 +476,25 @@ def test_client_reporting_match_over_stops_desync_checks():
         s += [Sample(t, "server", srv(player_locations={"c1": [5000 + 300 * t, 0, 0]}), 200),
               Sample(t, "c1", cli(match_over=True), 200)]
     assert outcome.classify(scn(), s, recs(), 40, False).kind == "running"
+
+
+def _falling_client(fall_every_s, until):
+    """Pair samples where c1 drops 9000 units below its start every fall_every_s seconds."""
+    s = []
+    for t in range(0, until, 2):
+        low = t > 10 and (t % fall_every_s) < 6
+        loc = [0, 0, -12000 if low else -3000]
+        s += pair(t, s=srv(player_locations={"c1": loc}), c=cli(pawn_location=loc))
+    return s
+
+def test_player_who_keeps_falling_fails_the_run():
+    o = outcome.classify(scn(), _falling_client(30, 200), recs(), 200, False)
+    assert (o.kind, o.process) == ("fell", "c1")
+
+def test_falling_off_a_ledge_now_and_then_is_normal():
+    o = outcome.classify(scn(), _falling_client(400, 900), recs(), 900, False)
+    assert o.kind == "pass", o
+
+def test_fell_signature_names_the_map():
+    from debugloop import signature
+    assert signature.make(outcome.Outcome("fell", "c1", "c1", "playing"), scn()) == "fell:Dojo_P"

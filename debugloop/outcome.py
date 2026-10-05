@@ -7,6 +7,11 @@ from .scenario import Scenario
 
 DESYNC_UNITS = 1500
 DESYNC_SAMPLES = 5
+# A player who keeps falling out of the world (no floor or no collision) dies and respawns about
+# every 30 s. Stepping off a ledge now and then is normal; this many falls this fast is not.
+FALL_UNITS = 5000
+FALL_COUNT = 4
+FALL_WINDOW_S = 300
 STARTUP_TIMEOUT_S = 240
 WATCHDOG_GRACE_S = 10    # time the watchdog gets to write its dump and report
 
@@ -237,6 +242,9 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
                 return Outcome("disconnect", f"client:{cat}", s.name, phase)
             if roles.get(s.name) == "server" and s.state.get("connections", n_clients) < n_clients:
                 return Outcome("disconnect", "server:dropped", s.name, phase)
+        f = _keeps_falling(roles, play)
+        if f:
+            return Outcome("fell", f, f, phase)
         d = _desync(roles, play)
         if d:
             return Outcome("desync", d, d, phase)
@@ -271,6 +279,33 @@ def _before_match_end(roles: dict[str, str], play: list[Sample]) -> list[Sample]
     last_running = max((s.t for s in play if roles.get(s.name) == "server" and s.state
                         and not s.state.get("match_over") and s.t < over), default=None)
     return [s for s in play if last_running is not None and s.t <= last_running]
+
+
+def _keeps_falling(roles: dict[str, str], play: list[Sample]) -> str | None:
+    """A player whose pawn drops FALL_UNITS below where it first stood, FALL_COUNT times within
+    FALL_WINDOW_S: the floor is missing for them (seen on Meltdown, run 20261005-054440)."""
+    start: dict[str, float] = {}
+    below: dict[str, bool] = {}
+    falls: dict[str, list[float]] = {}
+    for s in play:
+        if roles.get(s.name) not in ("client", "solo") or not s.state:
+            continue
+        loc = s.state.get("pawn_location")
+        if not loc:
+            continue
+        try:
+            z = float(loc[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        start.setdefault(s.name, z)
+        low = z < start[s.name] - FALL_UNITS
+        if low and not below.get(s.name):
+            times = [t for t in falls.get(s.name, []) if s.t - t <= FALL_WINDOW_S] + [s.t]
+            falls[s.name] = times
+            if len(times) >= FALL_COUNT:
+                return s.name
+        below[s.name] = low
+    return None
 
 
 def _desync(roles: dict[str, str], play: list[Sample]) -> str | None:
