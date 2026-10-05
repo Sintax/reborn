@@ -84,26 +84,18 @@ namespace Hooks {
         return space == std::string::npos ? full : full.substr(space + 1);
     }
 
-    // Returns by value: the old static-buffer version handed out one shared buffer, so a line that
-    // named two objects printed the second one's bytes (or a freed buffer that GetName() had just
-    // reused) for the first. That is where "pawn=<garbage>" and "pawn PoplarPlayerController" in the
-    // earlier logs came from; the pawn pointer itself was fine.
-    std::string NameOrNone(UObject* o) {
-        return o ? o->GetName() : std::string("none");
+    const char* NameOrNone(UObject* o) {
+        static std::string s;
+        s = o ? o->GetName() : "none";
+        return s.c_str();
     }
 
     // "applied class": AWillowPlayerStateInfo::PlayerClass on the controller's PSI. "NO-PSI" when the
     // controller has no player state info at all, which earlier attempts also printed as "none".
-    std::string AppliedClassName(APoplarPlayerStateInfo* psi) {
-        return !psi ? std::string("NO-PSI") : (psi->PlayerClass ? psi->PlayerClass->GetName() : std::string("none"));
-    }
-
-    std::string StateNameOf(APlayerController* pc) {
-        return pc ? pc->GetStateName().ToString() : std::string("none");
-    }
-
-    std::string FullNameOrNone(UObject* o) {
-        return o ? o->GetFullName() : std::string("none");
+    const char* AppliedClassName(APoplarPlayerStateInfo* psi) {
+        static std::string s;
+        s = !psi ? "NO-PSI" : (psi->PlayerClass ? psi->PlayerClass->GetName() : "none");
+        return s.c_str();
     }
 
     // --- Server spawn trace -------------------------------------------------------------------
@@ -115,7 +107,7 @@ namespace Hooks {
     bool spawnTraceOn = false;
     int spawnTraceLines = 0;
     unsigned long long spawnTraceDeadline = 0;   // GetTickCount64() ms; covers login -> WarmUp
-    const int kSpawnTraceMaxLines = 700;
+    const int kSpawnTraceMaxLines = 400;
 
     void StartSpawnTrace(float seconds) {
         spawnTraceOn = true;
@@ -135,8 +127,7 @@ namespace Hooks {
 
         std::string fn = function->GetName();
         // Per-tick noise.
-        static const char* skip[] = { "Tick", "Timer", "PlayerMove", "ServerMove", "Input", "Camera", "ViewTarget", "UpdateRotation", "Rep_", "Replicat", "Hud", "HUD", "Debug", "Audio",
-            "SetSpectatorLocation", "SendClientFrameData", "GetMetaPRI", "HasClientLoadedOnDemandPackageFor", "GetStateName", "WwiseClient" };
+        static const char* skip[] = { "Tick", "Timer", "PlayerMove", "ServerMove", "Input", "Camera", "ViewTarget", "UpdateRotation", "Rep_", "Replicat", "Hud", "HUD", "Debug", "Audio" };
         for (const char* s : skip) if (fn.find(s) != std::string::npos) return;
 
         if (spawnTraceLines >= kSpawnTraceMaxLines) {
@@ -160,16 +151,6 @@ namespace Hooks {
                 extra = " path=" + std::string(w.begin(), w.end());
             }
             else if (fn == "ClientApplyPendingPlayerClass") extra = std::string(" nameId=") + NameOrNone(reinterpret_cast<APoplarPlayerController_execClientApplyPendingPlayerClass_Params*>(params)->ThePlayerClassNameId);
-            else if (fn == "ClientPrepareForClassSwitch") extra = std::string(" nameId=") + NameOrNone(reinterpret_cast<APoplarPlayerController_execClientPrepareForClassSwitch_Params*>(params)->NewPlayerClassNameId);
-            // The possession hand-off. ClientRestart's NewPawn is what the client will be told to
-            // possess: "none" here means the pawn had no open actor channel on the connection yet
-            // when the RPC was serialized, so the client lands in WaitingForPawn.
-            else if (fn == "ClientRestart")               extra = std::string(" newPawn=") + FullNameOrNone(reinterpret_cast<APlayerController_execClientRestart_Params*>(params)->NewPawn);
-            else if (fn == "ServerAcknowledgePossession") extra = std::string(" P=") + FullNameOrNone(reinterpret_cast<APlayerController_execServerAcknowledgePossession_Params*>(params)->P);
-            else if (fn == "ClientGotoState") {
-                auto* p = reinterpret_cast<APlayerController_execClientGotoState_Params*>(params);
-                extra = std::string(" state=") + p->NewState.ToString() + " label=" + p->NewLabel.ToString();
-            }
             else if (fn == "ServerUpdateOnDemandPackageStatus" || fn == "UpdateOnDemandPackageStatus") {
                 auto* p = reinterpret_cast<AWillowPlayerController_execServerUpdateOnDemandPackageStatus_Params*>(params);
                 std::wstring w = p->PackageString.ArrayCount > 0 ? std::wstring(p->PackageString.c_str()) : L"";
@@ -178,8 +159,7 @@ namespace Hooks {
         }
         if (object->IsA(APoplarPlayerController::StaticClass())) {
             APoplarPlayerController* pc = reinterpret_cast<APoplarPlayerController*>(object);
-            extra += std::string(" [pending=") + NameOrNone(pc->PendingPlayerClass) + " applied=" + AppliedClassName(pc->PoplarPSI) + " pawn=" + NameOrNone(pc->Pawn)
-                + " acked=" + NameOrNone(pc->AcknowledgedPawn) + " state=" + StateNameOf(pc) + "]";
+            extra += std::string(" [pending=") + NameOrNone(pc->PendingPlayerClass) + " applied=" + AppliedClassName(pc->PoplarPSI) + " pawn=" + NameOrNone(pc->Pawn) + "]";
         }
         printf("[TRACE] %s %s.%s%s\n", object->Class ? object->Class->GetName().c_str() : "?", object->GetName().c_str(), fn.c_str(), extra.c_str());
     }
@@ -202,152 +182,6 @@ namespace Hooks {
             uintptr_t func = *reinterpret_cast<uintptr_t*>(reinterpret_cast<char*>(f) + 0x110);   // UFunction::Func, the pointer ProcessEvent calls
             printf("[SPAWN] native %s at battleborn+0x%llx (iNative %u)\n", n, (unsigned long long)(func - Globals::baseAddress), (unsigned)f->iNative);
         }
-    }
-
-    // --- Possession watch ---------------------------------------------------------------------
-    //
-    // The server now spawns the remote player's pawn, but the client never shows one. The engine's
-    // own hand-off is PlayerController.Possess -> ClientRestart(Pawn): that RPC goes out the moment
-    // the pawn is spawned, before the mod's replication loop (TickNetServer, which runs later in the
-    // same engine tick) has opened an actor channel for the pawn on the client's connection. An
-    // actor reference with no open channel serializes as None, so the client runs ClientRestart(None):
-    // Pawn = None, GotoState('WaitingForPawn'), and from there it only polls with AskForPawn (seen
-    // in run 20261004-214012's trace right after the possession) while still sending spectator
-    // positions (seen in both runs after the spawn).
-    //
-    // Once per second after the spawn: log the pawn's channel on the connection, whether the
-    // connection's package map knows the pawn's class and archetype, and what the client has
-    // acknowledged (ServerAcknowledgePossession sets AcknowledgedPawn on the server). While the
-    // channel is open and the client has not acknowledged this pawn, send ClientRestart(Pawn) again;
-    // this time the reference serializes, so the client possesses it.
-    const int kPossessionWatchSeconds = 90;
-    const int kPossessionResendMax = 8;
-
-    void WatchPossession(UNetConnection* connection, int n) {
-        if (!Globals::amServer) return;
-
-        auto again = [connection, n] {
-            if (n < kPossessionWatchSeconds)
-                Engine::RunOnGameThreadAfter(1.0f, [connection, n] { WatchPossession(connection, n + 1); });
-            else
-                printf("[POSSESS] watch over after %i s\n", n);
-        };
-
-        Globals::ServerPlayer* sp = ConnectionToServerPlayer(connection);
-        if (!sp || !sp->Connection || !sp->Connection->Actor) {
-            printf("[POSSESS] t+%i s: connection gone, watch over\n", n);
-            return;
-        }
-        APlayerController* base = sp->Connection->Actor;
-        if (!IsLiveObject(base) || !base->IsA(APoplarPlayerController::StaticClass())) {
-            printf("[POSSESS] t+%i s: %s has no live PoplarPlayerController (%s)\n", n, sp->Name.c_str(), FullNameOrNone(base).c_str());
-            again();
-            return;
-        }
-        APoplarPlayerController* pc = reinterpret_cast<APoplarPlayerController*>(base);
-        APawn* pawn = pc->Pawn;
-
-        static int resends = 0;
-        static int lastResend = -100;
-        static int channelSeenFor = 0;
-        static std::string lastLine;
-        static APawn* lastPawn = nullptr;
-
-        std::string line;
-        if (!pawn) {
-            line = "no pawn on the controller";
-            channelSeenFor = 0;
-        }
-        else {
-            UActorChannel* ch = ServerNetworking::GetActorChannelForActor(pawn, connection);
-            channelSeenFor = ch ? channelSeenFor + 1 : 0;
-            UObject* archetype = pawn->ObjectArchetype;
-            char buf[1024];
-            snprintf(buf, sizeof buf,
-                "pawn %s (%p) health %.0f/%.0f role %u/%u owner %s controller %s hidden %u tearoff %u | channel %s%s | package map supports class %s, archetype %s (%s)",
-                pawn->GetFullName().c_str(), (void*)pawn, pawn->GetHealth(), pawn->GetMaxHealth(),
-                (unsigned)pawn->Role, (unsigned)pawn->RemoteRole, NameOrNone(pawn->Owner).c_str(), NameOrNone(pawn->Controller).c_str(),
-                (unsigned)pawn->bHidden, (unsigned)pawn->bTearOff,
-                ch ? "yes" : "NONE",
-                ch ? (std::string(" idx ") + std::to_string(ch->ChIndex) + " openAckd " + std::to_string(ch->OpenAckd) + " closing " + std::to_string(ch->Closing)
-                    + " outRec " + std::to_string(ch->NumOutRec) + " spawnAcked " + std::to_string(ch->SpawnAcked) + " dirty " + std::to_string(ch->ActorDirty)).c_str() : "",
-                ServerNetworking::PackageMapSupportsObject(connection, pawn->Class) ? "yes" : "NO",
-                archetype ? (ServerNetworking::PackageMapSupportsObject(connection, archetype) ? "yes" : "NO") : "n/a",
-                archetype ? archetype->GetFullName().c_str() : "no archetype");
-            line = buf;
-        }
-        line += std::string(" | controller pawn ") + NameOrNone(pc->Pawn) + " acked " + NameOrNone(pc->AcknowledgedPawn)
-            + " state " + StateNameOf(pc) + " player-is-connection " + (pc->Player == (UPlayer*)connection ? "yes" : "NO");
-
-        if (pawn != lastPawn) {
-            printf("[POSSESS] t+%i s: pawn pointer changed %p -> %p\n", n, (void*)lastPawn, (void*)pawn);
-            lastPawn = pawn;
-        }
-        if (line != lastLine || n % 10 == 0) {
-            printf("[POSSESS] t+%i s: %s\n", n, line.c_str());
-            lastLine = line;
-        }
-
-        if (pawn) {
-            UActorChannel* ch = ServerNetworking::GetActorChannelForActor(pawn, connection);
-            bool channelOpen = ch && !ch->Closing && (ch->OpenAckd || channelSeenFor >= 2);   // OpenAckd offset is the SDK's guess; two seconds with a channel is enough either way
-            if (channelOpen && pc->AcknowledgedPawn != pawn && resends < kPossessionResendMax && n - lastResend >= 3) {
-                resends++;
-                lastResend = n;
-                pc->ClientRestart(pawn);   // Poplar's ClientRestart override; Player is the connection, so this is sent as an RPC
-                printf("[POSSESS] t+%i s: re-sent ClientRestart(%s) to %s (resend %i; client had acknowledged %s)\n", n,
-                    pawn->GetFullName().c_str(), sp->Name.c_str(), resends, NameOrNone(pc->AcknowledgedPawn).c_str());
-            }
-            else if (ch && pc->AcknowledgedPawn == pawn && n % 10 == 0) {
-                printf("[POSSESS] t+%i s: client acknowledged this pawn; the possession reached the client\n", n);
-            }
-        }
-
-        again();
-    }
-
-    // Client side of the same question: which pawns this client knows about and what its local
-    // controller points at. Prints when something changes, plus a heartbeat every 5th call.
-    void LogClientPossession(const char* why) {
-        static std::string last;
-        static int calls = 0;
-        calls++;
-
-        APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
-        char buf[256];
-        snprintf(buf, sizeof buf, " (%p)", (void*)pc);
-        std::string line = "local controller " + FullNameOrNone(pc) + buf;
-        if (pc) {
-            line += " pawn " + NameOrNone(pc->Pawn) + " acked " + NameOrNone(pc->AcknowledgedPawn) + " state " + StateNameOf(pc)
-                + " pri " + NameOrNone(pc->PlayerReplicationInfo);
-        }
-
-        int count = 0;
-        std::string pawns;
-        for (APoplarPlayerPawn* p : SDKUtils::GetAllOfClass<APoplarPlayerPawn>()) {
-            if (!IsLiveObject(p)) continue;
-            count++;
-            if (count <= 6) {
-                snprintf(buf, sizeof buf, "%s%s (%p) controller %s owner %s role %u/%u health %.0f",
-                    count > 1 ? "; " : "", p->GetName().c_str(), (void*)p, NameOrNone(p->Controller).c_str(), NameOrNone(p->Owner).c_str(),
-                    (unsigned)p->Role, (unsigned)p->RemoteRole, p->GetHealth());
-                pawns += buf;
-            }
-        }
-        line += " | player pawns in world: " + std::to_string(count) + (count ? ": " + pawns : std::string());
-
-        if (line != last || calls % 5 == 0) {
-            printf("[CLIENT] %s: %s\n", why, line.c_str());
-            last = line;
-        }
-    }
-
-    void StartPossessionWatch(UNetConnection* connection) {
-        static std::vector<UNetConnection*> watched;
-        for (UNetConnection* c : watched) if (c == connection) return;
-        watched.push_back(connection);
-        printf("[POSSESS] watching %s's possession for %i s\n", ConnectionToServerPlayer(connection) ? ConnectionToServerPlayer(connection)->Name.c_str() : "?", kPossessionWatchSeconds);
-        Engine::RunOnGameThreadAfter(1.0f, [connection] { WatchPossession(connection, 1); });
     }
 
     const int kSpawnAttemptMax = 40;   // every 3 s: covers PlayerSetup -> WarmUp -> InProgress (about 60 s after login)
@@ -379,7 +213,6 @@ namespace Hooks {
 
         if (pc->Pawn) {
             printf("[SPAWN] %s already has pawn %s (match state %i)\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str(), ServerMatchState());
-            StartPossessionWatch(connection);
             return;
         }
 
@@ -407,7 +240,7 @@ namespace Hooks {
         if (!pc->PendingPlayerClass && sp->Character) {
             pc->eventSwitchPoplarPlayerClass(sp->Character);
             printf("[SPAWN] attempt %i: %s had no pending class; SwitchPoplarPlayerClass(%s) -> %s\n", attempt, sp->Name.c_str(),
-                sp->Character->GetName().c_str(), NameOrNone(pc->PendingPlayerClass).c_str());
+                sp->Character->GetName().c_str(), NameOrNone(pc->PendingPlayerClass));
         }
         UPlayerClassDefinition* classDef = pc->PendingPlayerClass;
 
@@ -491,8 +324,8 @@ namespace Hooks {
         printf("[SPAWN] attempt %i for %s on %s: match state %i, controller state %s, pending class %s (name id %s), applied class %s, team %s, "
             "spectator %u/%u, char select state %u, client has package %s: %s, requirements met %s, PlayerCanRestart %s, FindPlayerStart %s, bDelayedStart %u\n",
             attempt, sp->Name.c_str(), pc->GetName().c_str(), ServerMatchState(), pc->GetStateName().ToString().c_str(),
-            NameOrNone(classDef).c_str(), pc->PendingPlayerClassNameId ? pc->PendingPlayerClassNameId->GetName().c_str() : "none",
-            AppliedClassName(psi).c_str(),
+            NameOrNone(classDef), pc->PendingPlayerClassNameId ? pc->PendingPlayerClassNameId->GetName().c_str() : "none",
+            AppliedClassName(psi),
             pri->Team ? pri->Team->GetName().c_str() : "none",
             (unsigned)pri->bOnlySpectator, (unsigned)pri->bIsSpectator, (unsigned)pri->CharacterSelectionState,
             pkg.c_str(), clientHasPackage ? "yes" : "no", requirementsMet ? "yes" : "no", canRestart ? "yes" : "no",
@@ -503,11 +336,10 @@ namespace Hooks {
         if (classDef && !(psi && psi->PlayerClass)) {
             pc->SwitchToPendingPlayerClass();
             printf("[SPAWN] attempt %i: SwitchToPendingPlayerClass -> applied class %s, requirements met %s, pawn %s\n", attempt,
-                AppliedClassName(psi).c_str(),
+                AppliedClassName(psi),
                 pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no", pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
             if (pc->Pawn) {
                 printf("[SPAWN] %s got pawn %s from SwitchToPendingPlayerClass\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
-                StartPossessionWatch(connection);
                 return;
             }
 
@@ -526,7 +358,7 @@ namespace Hooks {
                 uint8_t stateBefore = static_cast<uint8_t>(pri->CharacterSelectionState);
                 pc->ServerPlayerSelectClass(FString(wpath.c_str()), FString());
                 printf("[SPAWN] attempt %i: ServerPlayerSelectClass(%s) -> applied class %s, pending class %s, selection state %u -> %u, pawn %s\n", attempt, path.c_str(),
-                    AppliedClassName(psi).c_str(), NameOrNone(pc->PendingPlayerClass).c_str(),
+                    AppliedClassName(psi), NameOrNone(pc->PendingPlayerClass),
                     (unsigned)stateBefore, (unsigned)pri->CharacterSelectionState, pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
                 if (static_cast<uint8_t>(pri->CharacterSelectionState) < stateBefore && sp->Character) {
                     pc->eventServerSelectCharacter(sp->Character, sp->OptionalSkin, sp->OptionalTaunt, true);
@@ -535,7 +367,6 @@ namespace Hooks {
                 }
                 if (pc->Pawn) {
                     printf("[SPAWN] %s got pawn %s from ServerPlayerSelectClass\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
-                    StartPossessionWatch(connection);
                     return;
                 }
             }
@@ -546,10 +377,9 @@ namespace Hooks {
                 classDef = pc->PendingPlayerClass;
                 pc->eventSwitchPlayerClass(classDef);
                 printf("[SPAWN] attempt %i: SwitchPlayerClass(%s) -> applied class %s, pawn %s\n", attempt, classDef->GetName().c_str(),
-                    AppliedClassName(psi).c_str(), pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
+                    AppliedClassName(psi), pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
                 if (pc->Pawn) {
                     printf("[SPAWN] %s got pawn %s from SwitchPlayerClass\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
-                    StartPossessionWatch(connection);
                     return;
                 }
             }
@@ -559,7 +389,6 @@ namespace Hooks {
         pc->ServerRestartPlayer();
         if (pc->Pawn) {
             printf("[SPAWN] %s got pawn %s from ServerRestartPlayer\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
-            StartPossessionWatch(connection);
             return;
         }
 
@@ -567,12 +396,11 @@ namespace Hooks {
         gi->eventRestartPlayer(pc);
         if (pc->Pawn) {
             printf("[SPAWN] %s got pawn %s from GameInfo.RestartPlayer\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
-            StartPossessionWatch(connection);
             return;
         }
 
         printf("[SPAWN] attempt %i: still no pawn for %s (applied class %s, requirements met %s, client has package %s, controller state %s)\n", attempt, sp->Name.c_str(),
-            AppliedClassName(psi).c_str(), pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no",
+            AppliedClassName(psi), pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no",
             (classDef && pc->HasClientLoadedOnDemandPackageFor(classDef)) ? "yes" : "no", pc->GetStateName().ToString().c_str());
         again();
     }
@@ -996,70 +824,6 @@ namespace Hooks {
 
         if (Globals::amServer && spawnTraceOn) SpawnTrace(object, function, params);
 
-        // Possession hand-off, both ends. Server: the client's AskForPawn (sent from WaitingForPawn)
-        // and its ServerAcknowledgePossession. Client: the ClientRestart / ClientGotoState /
-        // ClientPrepareForClassSwitch RPCs it receives, with what they carry. These are outside the
-        // time- and line-capped [TRACE] so the hand-off stays visible for the whole run.
-        {
-            static UFunction* askForPawnFn = nullptr;
-            static UFunction* ackPossessionFn = nullptr;
-            static UFunction* clientRestartEngineFn = nullptr;
-            static UFunction* clientRestartPoplarFn = nullptr;
-            static UFunction* clientGotoStateFn = nullptr;
-            static UFunction* clientPrepareSwitchFn = nullptr;
-            if (!askForPawnFn) {
-                askForPawnFn = UFunction::FindFunction("Function Engine.PlayerController.AskForPawn");
-                ackPossessionFn = UFunction::FindFunction("Function Engine.PlayerController.ServerAcknowledgePossession");
-                clientRestartEngineFn = UFunction::FindFunction("Function Engine.PlayerController.ClientRestart");
-                clientRestartPoplarFn = UFunction::FindFunction("Function PoplarGame.PoplarPlayerController.ClientRestart");
-                clientGotoStateFn = UFunction::FindFunction("Function Engine.PlayerController.ClientGotoState");
-                clientPrepareSwitchFn = UFunction::FindFunction("Function PoplarGame.PoplarPlayerController.ClientPrepareForClassSwitch");
-            }
-            static int possessLogged = 0;
-            const bool networkedClient = !Globals::amServer && !Globals::amStandalone;
-            const bool interesting = function == askForPawnFn || function == ackPossessionFn || function == clientRestartEngineFn
-                || function == clientRestartPoplarFn || function == clientGotoStateFn || function == clientPrepareSwitchFn;
-            if (interesting && possessLogged < 80 && object && object->IsA(APlayerController::StaticClass())) {
-                APoplarPlayerController* ppc = reinterpret_cast<APoplarPlayerController*>(object);
-                if (Globals::amServer && Globals::netDriver && function == askForPawnFn) {
-                    possessLogged++;
-                    printf("[POSSESS] server: client asked for a pawn (AskForPawn) on %s: pawn %s health %.0f, acknowledged %s, state %s\n",
-                        ppc->GetName().c_str(), FullNameOrNone(ppc->Pawn).c_str(), ppc->Pawn ? ppc->Pawn->GetHealth() : -1.0f,
-                        NameOrNone(ppc->AcknowledgedPawn).c_str(), StateNameOf(ppc).c_str());
-                }
-                else if (Globals::amServer && Globals::netDriver && function == ackPossessionFn && params) {
-                    possessLogged++;
-                    APawn* p = reinterpret_cast<APlayerController_execServerAcknowledgePossession_Params*>(params)->P;
-                    printf("[POSSESS] server: client acknowledged possession of %s on %s (server pawn %s, state %s)\n",
-                        FullNameOrNone(p).c_str(), ppc->GetName().c_str(), FullNameOrNone(ppc->Pawn).c_str(), StateNameOf(ppc).c_str());
-                }
-                else if (networkedClient && (function == clientRestartEngineFn || function == clientRestartPoplarFn) && params) {
-                    possessLogged++;
-                    APawn* p = reinterpret_cast<APlayerController_execClientRestart_Params*>(params)->NewPawn;
-                    printf("[POSSESS] client: ClientRestart(newPawn %s) on %s (pawn before %s, acknowledged %s, state %s)\n",
-                        FullNameOrNone(p).c_str(), ppc->GetFullName().c_str(), NameOrNone(ppc->Pawn).c_str(), NameOrNone(ppc->AcknowledgedPawn).c_str(), StateNameOf(ppc).c_str());
-                    printf("[POSSESS] client: package map at ClientRestart: %s\n", ServerNetworking::ClientPackageMapSummary().c_str());
-                }
-                else if (networkedClient && function == clientGotoStateFn && params) {
-                    possessLogged++;
-                    auto* p = reinterpret_cast<APlayerController_execClientGotoState_Params*>(params);
-                    printf("[POSSESS] client: ClientGotoState(%s, %s) on %s (pawn %s, state %s)\n", p->NewState.ToString().c_str(), p->NewLabel.ToString().c_str(),
-                        ppc->GetName().c_str(), NameOrNone(ppc->Pawn).c_str(), StateNameOf(ppc).c_str());
-                }
-                else if (networkedClient && function == clientPrepareSwitchFn && params) {
-                    possessLogged++;
-                    printf("[POSSESS] client: ClientPrepareForClassSwitch(%s) on %s (pawn %s)\n",
-                        NameOrNone(reinterpret_cast<APoplarPlayerController_execClientPrepareForClassSwitch_Params*>(params)->NewPlayerClassNameId).c_str(),
-                        ppc->GetName().c_str(), NameOrNone(ppc->Pawn).c_str());
-                }
-                else if (networkedClient && function == askForPawnFn) {
-                    possessLogged++;
-                    printf("[POSSESS] client: sending AskForPawn from %s (pawn %s, acknowledged %s, state %s)\n", ppc->GetName().c_str(),
-                        NameOrNone(ppc->Pawn).c_str(), NameOrNone(ppc->AcknowledgedPawn).c_str(), StateNameOf(ppc).c_str());
-                }
-            }
-        }
-
         // The client's lock-in (Overlay::LockInCharacter) sends ServerSelectCharacter with no character,
         // which the server resolves to the default class (Class_ModernSoldier) and so keeps undoing the
         // character we assigned at login. Substitute the server-assigned character.
@@ -1070,21 +834,6 @@ namespace Hooks {
 
         if (Globals::amServer && Globals::netDriver && function == serverSelectCharacterUFunction && params) {
             auto* selectParams = reinterpret_cast<APoplarPlayerController_eventServerSelectCharacter_Params*>(params);
-            // The client re-sends its lock-in every 12 s while it sees no pawn. Once the server has
-            // spawned the pawn, letting that lock-in through restarts the character-selection flow
-            // (ClientPrepareForClassSwitch, ServerPlayerSelectClass, another class switch) on a
-            // player who is mid-possession. Drop it; the possession watch re-sends the pawn instead.
-            APoplarPlayerController* selectPc = reinterpret_cast<APoplarPlayerController*>(object);
-            if (selectPc->Pawn && IsLiveObject(selectPc->Pawn)) {
-                static int dropped = 0;
-                if (dropped < 20) {
-                    dropped++;
-                    printf("[SPAWN] ignoring lock-in (ServerSelectCharacter %s lockIn=%u) on %s: already has pawn %s, client acknowledged %s\n",
-                        NameOrNone(selectParams->SelectedCharacter).c_str(), (unsigned)selectParams->bLockIn, selectPc->GetName().c_str(),
-                        selectPc->Pawn->GetName().c_str(), NameOrNone(selectPc->AcknowledgedPawn).c_str());
-                }
-                return;
-            }
             if (!selectParams->SelectedCharacter) {
                 Globals::ServerPlayer* serverPlayer = ConnectionToServerPlayer((UNetConnection*)reinterpret_cast<APlayerController*>(object)->Player);
                 if (serverPlayer && serverPlayer->Character) {
@@ -1227,12 +976,12 @@ namespace Hooks {
                     logged++;
                     UPlayerClassDefinition* pending = ppc->PendingPlayerClass;
                     printf("[SPAWN] SwitchToPendingPlayerClass on %s: before: pending %s, applied %s, client has package %s, PRI selection state %u\n",
-                        ppc->GetName().c_str(), NameOrNone(pending).c_str(), AppliedClassName(ppc->PoplarPSI).c_str(),
+                        ppc->GetName().c_str(), NameOrNone(pending), AppliedClassName(ppc->PoplarPSI),
                         pending ? (ppc->HasClientLoadedOnDemandPackageFor(pending) ? "yes" : "no") : "n/a",
                         ppc->MyPoplarPRI ? (unsigned)ppc->MyPoplarPRI->CharacterSelectionState : 99u);
                     ProcessEvent.call<void>(object, function, params);
                     printf("[SPAWN] SwitchToPendingPlayerClass on %s: after: pending %s, applied %s, pawn %s\n",
-                        ppc->GetName().c_str(), NameOrNone(ppc->PendingPlayerClass).c_str(), AppliedClassName(ppc->PoplarPSI).c_str(), NameOrNone(ppc->Pawn).c_str());
+                        ppc->GetName().c_str(), NameOrNone(ppc->PendingPlayerClass), AppliedClassName(ppc->PoplarPSI), NameOrNone(ppc->Pawn));
                     return;
                 }
             }

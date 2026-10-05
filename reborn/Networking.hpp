@@ -21,8 +21,6 @@ namespace ServerNetworking {
 
     void RefreshServerPackageMaps(UNetConnection* connection);
 
-    std::string ClientPackageMapSummary();
-
     bool ConnectionHasOnDemandPackage(UNetConnection* connection, UObject* package);
 
     void MarkOnDemandPackageLoaded(UNetConnection* connection, UObject* package);

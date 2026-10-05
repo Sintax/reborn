@@ -33,7 +33,6 @@ namespace Autopilot {
         float g_menuTime = 0.f;           // seconds the menu condition has held continuously
         bool g_leftMenu = false;          // Launching: the world has left the menu at least once
         bool g_startupPending = false;    // startup finished; pick a save and continue on the next tick
-        float g_possessionLogTimer = 0.f; // client: seconds until the next possession census
         float g_lockInTime = 0.f;         // CharacterSelect: phase time of the last lock-in
         int g_lockInTries = 0;            // CharacterSelect: lock-ins sent so far (0 = none yet)
         const float kMenuGrace = 2.f;     // menu must hold this long before we call it a real return
@@ -238,15 +237,6 @@ namespace Autopilot {
         const bool inMenu = InMenu();
         if (inMenu) g_menuTime += dt; else g_menuTime = 0.f;
         if (!inMenu && Globals::GetGWorld()) g_leftMenu = true;
-
-        // While joined: what this client knows about its pawn, every 2 s (prints on change).
-        if (!inMenu && !opt.join.empty() && (g_phase == Phase::CharacterSelect || g_phase == Phase::Playing)) {
-            g_possessionLogTimer -= dt;
-            if (g_possessionLogTimer <= 0.f) {
-                g_possessionLogTimer = 2.f;
-                Hooks::LogClientPossession(PhaseName());
-            }
-        }
 
         switch (g_phase) {
         case Phase::WaitingForMenu:

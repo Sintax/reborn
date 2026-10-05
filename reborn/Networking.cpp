@@ -231,75 +231,13 @@ namespace ServerNetworking {
         return numPackages - before;
     }
 
-    // Object references go over the wire as (NetIndex << 14) | position of the package in the
-    // package map's list (UPackageMap::ObjectToIndex battleborn+0x1f0f0, IndexToObject +0x1f2f0),
-    // so the client's list must hold the same package at the same position. WelcomePlayer sends
-    // the whole list once (UNetConnection::SendPackageMap battleborn+0x61afa0, one NMT_Uses per
-    // entry); packages AddNetPackages appends later are only known to the server unless they are
-    // sent too. Without this the pawn's archetype (GD_<Hero>_Streaming...) resolves to None on the
-    // client, the pawn's actor channel never spawns an actor, and ClientRestart(pawn) arrives as
-    // ClientRestart(None). The client's world handles NMT_Uses mid-game (battleborn+0x45c540):
-    // it appends the entry (AddPackageInfo, slot 0x248) and links it to its loaded package.
-    static void SendNewPackageInfos(UNetConnection* connection, int from) {
-        uintptr_t map = reinterpret_cast<uintptr_t>(connection ? connection->PackageMap : nullptr);
-        if (!map)
-            return;
-
-        int num = *reinterpret_cast<int*>(map + 0x58);
-        uintptr_t list = *reinterpret_cast<uintptr_t*>(map + 0x60);
-        if (!list || from >= num)
-            return;
-
-        auto sendPackageInfo = reinterpret_cast<void (*)(UNetConnection*, void*)>(Globals::baseAddress + 0x61b370); // UNetConnection::SendPackageInfo
-        std::string names;
-        for (int i = from; i < num; i++) {
-            uintptr_t info = list + static_cast<uintptr_t>(i) * 0x50;
-            sendPackageInfo(connection, reinterpret_cast<void*>(info));
-            if (i - from < 60)
-                names += (i > from ? ", " : "") + std::to_string(i) + "=" + reinterpret_cast<FName*>(info)->ToString();
-        }
-        printf("[NETWORKING] sent %i new package infos (NMT_Uses) to the client, list positions %i-%i: %s\n", num - from, from, num - 1, names.c_str());
-    }
-
     void RefreshServerPackageMaps(UNetConnection* connection) {
         if (Globals::netDriver) {
             uintptr_t masterMap = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(Globals::netDriver) + 0x90); // UNetDriver::MasterMap
             RefreshPackageMap(reinterpret_cast<void*>(masterMap), "master");
         }
-        if (connection && connection->PackageMap) {
-            int before = *reinterpret_cast<int*>(reinterpret_cast<uintptr_t>(connection->PackageMap) + 0x58);
+        if (connection && connection->PackageMap)
             RefreshPackageMap(connection->PackageMap, "connection");
-            SendNewPackageInfos(connection, before);
-        }
-    }
-
-    // Client side: how many packages the connection's package map lists, how many are not linked
-    // to a loaded package (objects in them deserialize as None), and how many NMT_Uses the client
-    // queued as pending (connection +0x5fe0, see battleborn+0x45c540).
-    std::string ClientPackageMapSummary() {
-        std::string out;
-        for (UNetConnection* conn : SDKUtils::GetAllOfClass<UNetConnection>()) {
-            if (!conn || conn->GetName().rfind("Default__", 0) == 0 || !conn->PackageMap)
-                continue;
-            uintptr_t map = reinterpret_cast<uintptr_t>(conn->PackageMap);
-            int num = *reinterpret_cast<int*>(map + 0x58);
-            uintptr_t list = *reinterpret_cast<uintptr_t*>(map + 0x60);
-            int unlinked = 0;
-            std::string unlinkedNames;
-            for (int i = 0; i < num && list; i++) {
-                uintptr_t info = list + static_cast<uintptr_t>(i) * 0x50;
-                if (*reinterpret_cast<void**>(info + 0x8) == nullptr) {
-                    if (unlinked < 8)
-                        unlinkedNames += (unlinked ? ", " : "") + std::to_string(i) + "=" + reinterpret_cast<FName*>(info)->ToString();
-                    unlinked++;
-                }
-            }
-            int pending = *reinterpret_cast<int*>(reinterpret_cast<uintptr_t>(conn) + 0x5fe0);
-            out += (out.empty() ? "" : "; ") + conn->GetName() + ": " + std::to_string(num) + " packages, last "
-                + (num > 0 && list ? reinterpret_cast<FName*>(list + static_cast<uintptr_t>(num - 1) * 0x50)->ToString() : std::string("none"))
-                + ", unlinked " + std::to_string(unlinked) + (unlinked ? " (" + unlinkedNames + ")" : "") + ", pending uses " + std::to_string(pending);
-        }
-        return out.empty() ? std::string("no connection") : out;
     }
 
     // UNetConnection keeps the on-demand packages a client has reported loaded as a TArray<FName>
