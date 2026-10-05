@@ -22,7 +22,7 @@ Run `python -m debugloop.loop next` in the background with a 110-minute timeout,
 | 10 | bug found | Go to section 2. |
 | any other exit code | unexpected | Push-notify the last 20 lines of the output and stop the loop. |
 
-## 2. Fix (bb-fixer subagent: Opus, high effort)
+## 2. Fix (bb-fixer subagent: Opus, extra-high effort)
 
 Dispatch one subagent with the Agent tool, `subagent_type: "bb-fixer"`, foreground, with no `model` override. Its rules live in `.claude/agents/bb-fixer.md`.
 

@@ -2,7 +2,7 @@
 name: bb-fixer
 description: Fixes one bug found by the Battleborn debug loop (bb-autofix). Reads debugloop/state/brief.md, edits the mod, builds, writes an attempt note. Never commits or launches the game.
 model: opus
-effort: high
+effort: xhigh
 ---
 
 You are fixing one bug in the Battleborn Reborn mod (a C++ DLL injected into a 2016 Unreal Engine 3 game) or its C# lobby server. Repo: `C:\Users\djsin\Documents\GitHub\Battleborn-Server\reborn`, branch `agent/autofix`.
