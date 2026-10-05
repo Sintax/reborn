@@ -628,6 +628,92 @@ namespace ServerNetworking {
 }
 
 namespace ClientNetworking {
+    // Client side. The world's NMT_Uses handler (battleborn+0x45c540) appends the server's entry to
+    // the package map (AddPackageInfo, slot 0x248) unlinked, and links it with
+    // UWorld::VerifyPackageInfo (battleborn+0x45b260) only when the connection's queue of pending
+    // package infos (TArray of 0x50-byte FPackageInfo at connection+0x5fe0/+0x5fe8) is empty;
+    // otherwise the entry goes to the back of that queue. UWorld::Tick pops the queue only from the
+    // front, while VerifyPackageInfo succeeds. In this seek-free build VerifyPackageInfo starts an
+    // async load for a package the client has not loaded and returns false until that finishes, so
+    // the first bot hero package the client has never loaded (C031_PlagueBringer_* with 8 bots)
+    // blocks every later entry for minutes, including the player's own, already-loaded
+    // GD_<Hero>_Streaming. Objects in an unlinked entry deserialize as None (IndexToObject
+    // battleborn+0x1f2f0 needs the entry's Parent), so the pawn's actor channel opens with a None
+    // archetype, the client never spawns the pawn, and every ClientRestart(pawn) arrives as None.
+    // VerifyPackageInfo needs nothing from the queue order: for a loaded package with the same GUID
+    // it sets the generation, sends NMT_Have, and updates the map entry by name+GUID. So link every
+    // queued entry whose package is already loaded, out of order, and drop it from the queue
+    // (TArray RemoveAt battleborn+0x1ff80, which the NMT_Unload handler uses on the same array).
+    int LinkLoadedPendingPackages(UWorld* world, bool onlyNewest, const char* why) {
+        if (!world || Globals::amServer)
+            return 0;
+        if (*reinterpret_cast<uint8_t*>(Globals::baseAddress + 0x34a0b7f) == 0) {
+            // VerifyPackageInfo's non-seek-free branch can load packages synchronously; leave it alone.
+            static bool logged = false;
+            if (!logged) { logged = true; printf("[NET] not a seek-free build; leaving queued package infos to the engine\n"); }
+            return 0;
+        }
+
+        uintptr_t netDriver = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(world) + 0x128); // UWorld::NetDriver
+        if (!netDriver)
+            return 0;
+        uintptr_t conn = *reinterpret_cast<uintptr_t*>(netDriver + 0x80); // UNetDriver::ServerConnection
+        if (!conn)
+            return 0;
+        int* pendingNum = reinterpret_cast<int*>(conn + 0x5fe0);
+        if (*pendingNum <= 0)
+            return 0;
+
+        auto findPackage = reinterpret_cast<UObject* (*)(UObject*, const wchar_t*)>(Globals::baseAddress + 0x879f0); // UObject::FindPackage
+        auto verifyPackageInfo = reinterpret_cast<uint8_t (*)(UWorld*, void*)>(Globals::baseAddress + 0x45b260);
+        auto removeAt = reinterpret_cast<void (*)(void*, int)>(Globals::baseAddress + 0x1ff80);
+
+        int linked = 0;
+        std::string names;
+        int last = *pendingNum - 1;
+        int first = onlyNewest ? last : 0;
+        for (int i = last; i >= first && i < *pendingNum; i--) {
+            uintptr_t info = *reinterpret_cast<uintptr_t*>(conn + 0x5fe8) + static_cast<uintptr_t>(i) * 0x50;
+            const FName* fname = reinterpret_cast<const FName*>(info);
+            std::string name = fname->ToString();
+            if (fname->InstanceNumber > 0)
+                name += "_" + std::to_string(fname->InstanceNumber - 1);
+            std::wstring wname(name.begin(), name.end());
+
+            UObject* pkg = findPackage(nullptr, wname.c_str());
+            if (!pkg)
+                continue;
+
+            // Only the path VerifyPackageInfo links without loading or failing: package loaded, GUID
+            // set and equal to the server's (UPackage GUID at +0x68, FPackageInfo GUID at +0x10).
+            const uint32_t* pkgGuid = reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(pkg) + 0x68);
+            const uint32_t* infoGuid = reinterpret_cast<const uint32_t*>(info + 0x10);
+            if (!(pkgGuid[0] | pkgGuid[1] | pkgGuid[2] | pkgGuid[3]) || memcmp(pkgGuid, infoGuid, 16) != 0)
+                continue;
+
+            if (!verifyPackageInfo(world, reinterpret_cast<void*>(info)))
+                continue;
+
+            removeAt(pendingNum, i);
+            if (linked < 12)
+                names += (linked ? ", " : "") + name;
+            linked++;
+        }
+
+        if (linked) {
+            static int logged = 0;
+            if (logged < 60) {
+                logged++;
+                std::string head = "none";
+                if (*pendingNum > 0)
+                    head = reinterpret_cast<const FName*>(*reinterpret_cast<uintptr_t*>(conn + 0x5fe8))->ToString();
+                printf("[NET] %s: linked %i queued package info(s) whose package is already loaded, out of order: %s%s; still queued %i (head %s)\n",
+                    why, linked, names.c_str(), linked > 12 ? ", ..." : "", *pendingNum, head.c_str());
+            }
+        }
+        return linked;
+    }
+
     void JoinServer(std::wstring ip) {
         std::wstring cmd = L"open ";
 

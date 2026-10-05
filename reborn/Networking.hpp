@@ -43,6 +43,8 @@ namespace ServerNetworking {
 }
 
 namespace ClientNetworking {
+    int LinkLoadedPendingPackages(UWorld* world, bool onlyNewest, const char* why);
+
     void JoinServer(std::wstring ip);
 
     bool IsNetReady(UNetConnection* connection, int saturate);

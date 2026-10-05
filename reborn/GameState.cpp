@@ -38,6 +38,15 @@ namespace GameState {
             return out;
         }
 
+        // The game's own match state (EMatchState), from the replicated game info, so a client
+        // knows the match is over as soon as it shows Victory/Defeat. -1 when there is none.
+        int MatchState() {
+            APoplarGameReplicationInfo* gri = nullptr;
+            for (APoplarGameReplicationInfo* g : SDKUtils::GetAllOfClass<APoplarGameReplicationInfo>())
+                if (g && !(g->ObjectFlags & 0x2000000000000000) && !IsDefault(g)) gri = g;
+            return gri ? (int)gri->CurrentMatchState.State : -1;
+        }
+
         std::string DisconnectReason() {
             std::string line = Diagnostics::LastLineContaining("Failure");
             if (line.empty()) return "";
@@ -64,7 +73,10 @@ namespace GameState {
         j["map"] = map;
         j["net_mode"] = role == "server" ? "dedicated" : (role == "solo" ? "standalone" : "client");
         j["memory_mb"] = pmc.WorkingSetSize / (1024 * 1024);
-        j["match_over"] = !Diagnostics::LastLineContaining("Match ended").empty();
+        int matchState = MatchState();
+        j["match_state"] = matchState;
+        j["match_over"] = !Diagnostics::LastLineContaining("Match ended").empty() ||
+                          matchState >= (int)EMatchState::MatchState_Ended;
 
         if (Globals::amServer) {
             nlohmann::json locs = nlohmann::json::object();

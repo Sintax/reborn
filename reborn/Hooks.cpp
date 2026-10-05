@@ -1,4 +1,5 @@
 #include "Hooks.hpp"
+#include <map>
 
 #include "Init.hpp"
 #include "Globals.hpp"
@@ -131,6 +132,103 @@ namespace Hooks {
         return o ? o->GetFullName() : std::string("none");
     }
 
+    // --- Floor / level-streaming census (s3 Meltdown: players fall through the floor) ----------
+    //
+    // Run 20261005-034402: on IceScort_P both joined players fell from the PlayerStart (z -2110)
+    // through the base floor and the terrain (persistent level, about z -2700 under the spawns) to
+    // the kill volume, on the client AND on the server (the server runs the player's moves itself:
+    // ServerMove battleborn+0x624f60 -> MoveAutonomous 0x27e7e0, then corrects the client), while
+    // the server's bots walked. The client already gets all six always-loaded sublevels: the server
+    // sent six ClientUpdateLevelStreamingStatus at PostLogin and each client answered with six
+    // ServerUpdateLevelVisibility. These lines say, on both ends, what is under the player's pawn
+    // (a line trace and a pawn-sized trace straight down, owner = the pawn) and its collision
+    // state, plus a bot's for comparison, and each streaming level's state.
+
+    // Straight down from the actor, world geometry only (bTraceActors false), traced as the actor.
+    std::string DownTrace(AActor* a, const FVector& extent) {
+        FVector start = a->Location;
+        FVector end = { start.X, start.Y, start.Z - 20000.0f };
+        FVector hitLocation = {}, hitNormal = {};
+        FTraceHitInfo hitInfo = {};
+        AActor* hit = a->Trace(end, start, false, extent, 0, false, nullptr, hitLocation, hitNormal, hitInfo);
+        if (!hit) return "nothing within 20000";
+        char buf[512];
+        snprintf(buf, sizeof buf, "%s %s in %s, %.0f below (z %.0f), component %s",
+            hit->Class ? hit->Class->GetName().c_str() : "?", hit->GetName().c_str(), OutermostPackageName(hit).c_str(),
+            start.Z - hitLocation.Z, hitLocation.Z, NameOrNone(hitInfo.HitComponent).c_str());
+        return buf;
+    }
+
+    std::string FloorReport(APawn* p) {
+        if (!p) return "no pawn";
+        UPrimitiveComponent* cc = p->CollisionComponent;
+        UCylinderComponent* cyl = p->CylinderComponent;
+        float r = cyl ? cyl->CollisionRadius : 0.0f, h = cyl ? cyl->CollisionHeight : 0.0f;
+        char buf[768];
+        snprintf(buf, sizeof buf,
+            "z %.0f vz %.0f physics %u base %s collideWorld %u collideActors %u blockActors %u | collision %s (collide %u block %u nonzero %u zero %u) cylinder r %.0f h %.0f",
+            p->Location.Z, p->Velocity.Z, (unsigned)p->Physics, FullNameOrNone(p->Base).c_str(),
+            (unsigned)p->bCollideWorld, (unsigned)p->bCollideActors, (unsigned)p->bBlockActors,
+            cc ? cc->GetName().c_str() : "NONE", cc ? (unsigned)cc->CollideActors : 0u, cc ? (unsigned)cc->BlockActors : 0u,
+            cc ? (unsigned)cc->BlockNonZeroExtent : 0u, cc ? (unsigned)cc->BlockZeroExtent : 0u, r, h);
+        std::string out = buf;
+        out += " | below (line): " + DownTrace(p, FVector{ 0.0f, 0.0f, 0.0f });
+        out += " | below (pawn-sized): " + (cyl ? DownTrace(p, FVector{ r, r, h }) : std::string("no cylinder"));
+        return out;
+    }
+
+    // Every LevelStreaming object of the current map (found through the object list, not the
+    // WorldInfo layout), as "Name loaded/visible should-load/should-visible block".
+    std::vector<std::pair<std::string, std::string>> StreamingLevelStates() {
+        std::vector<std::pair<std::string, std::string>> out;
+        UWorld* world = Globals::GetGWorld();
+        std::string map = world ? OutermostPackageName(world) : std::string();
+        for (ULevelStreaming* ls : SDKUtils::GetAllOfClass<ULevelStreaming>()) {
+            if (!IsLiveObject(ls) || OutermostPackageName(ls) != map) continue;
+            char buf[256];
+            snprintf(buf, sizeof buf, "loaded %u visible %u (should load %u, should be visible %u, block on load %u, load pending %u)",
+                ls->LoadedLevel ? 1u : 0u, (unsigned)ls->bIsVisible, (unsigned)ls->bShouldBeLoaded, (unsigned)ls->bShouldBeVisible,
+                (unsigned)ls->bShouldBlockOnLoad, (unsigned)ls->bHasLoadRequestPending);
+            out.emplace_back(ls->PackageName.ToString() + " (" + ls->Class->GetName() + ")", buf);
+        }
+        return out;
+    }
+
+    void LogServerStreamingLevels(const char* why) {
+        auto levels = StreamingLevelStates();
+        printf("[STREAMING] server (%s): %zu streaming level(s)\n", why, levels.size());
+        for (auto& l : levels) printf("[STREAMING] server: level %s %s\n", l.first.c_str(), l.second.c_str());
+    }
+
+    // Client: prints each streaming level when its state changes.
+    void LogClientStreamingLevels() {
+        static std::map<std::string, std::string> last;
+        for (auto& l : StreamingLevelStates()) {
+            auto it = last.find(l.first);
+            if (it == last.end() || it->second != l.second) {
+                printf("[STREAMING] client: %s %s\n", l.first.c_str(), l.second.c_str());
+                last[l.first] = l.second;
+            }
+        }
+    }
+
+    // Server, once in a while: a bot's floor next to the players', to tell "the server has no floor
+    // there" from "the player's pawn does not collide".
+    void LogServerBotFloor() {
+        static unsigned long long next = 0;
+        unsigned long long now = GetTickCount64();
+        if (now < next) return;
+        next = now + 15000;
+        int shown = 0;
+        for (APoplarPlayerPawn* p : SDKUtils::GetAllOfClass<APoplarPlayerPawn>()) {
+            if (!IsLiveObject(p) || !p->Controller || p->Controller->IsA(APlayerController::StaticClass()) || p->GetHealth() <= 0.0f) continue;
+            printf("[FLOOR] server bot %s (%s) at (%.0f, %.0f): %s\n", p->GetName().c_str(), NameOrNone(p->Controller).c_str(),
+                p->Location.X, p->Location.Y, FloorReport(p).c_str());
+            if (++shown >= 2) break;
+        }
+        if (!shown) printf("[FLOOR] server: no live bot pawn to compare\n");
+    }
+
     // --- Server spawn trace -------------------------------------------------------------------
     // While a remote player is being spawned, log every event the engine routes through ProcessEvent
     // on that player's controller, PRI, PSI, meta PRI, the game info and the GRI, with the arguments
@@ -245,8 +343,18 @@ namespace Hooks {
     // acknowledged (ServerAcknowledgePossession sets AcknowledgedPawn on the server). While the
     // channel is open and the client has not acknowledged this pawn, send ClientRestart(Pawn) again;
     // this time the reference serializes, so the client possesses it.
-    const int kPossessionWatchSeconds = 90;
-    const int kPossessionResendMax = 8;
+    //
+    // If the client still has not acknowledged after a few re-sends with the channel open, the
+    // channel's opening bunch most likely reached the client while the pawn's archetype package
+    // (GD_<Hero>_Streaming) was not linked in its package map: the client then never spawns the
+    // pawn and ignores that channel for good, so every ClientRestart(pawn) still arrives as None
+    // (s3 run 20261005-032527: c2's map was fully linked later and it still never got the pawn).
+    // Close the pawn's actor channel then (UActorChannel::Close, slot 0x210, battleborn+0x6113f0:
+    // sends the close and clears the channel's Actor at once), so TickNetServer opens a new one
+    // with a fresh spawn on its next pass.
+    const int kPossessionWatchSeconds = 240;
+    const int kPossessionResendMax = 40;
+    const int kPawnChannelReopenMax = 8;
 
     void WatchPossession(UNetConnection* connection, int n) {
         if (!Globals::amServer) return;
@@ -272,11 +380,17 @@ namespace Hooks {
         APoplarPlayerController* pc = reinterpret_cast<APoplarPlayerController*>(base);
         APawn* pawn = pc->Pawn;
 
-        static int resends = 0;
-        static int lastResend = -100;
-        static int channelSeenFor = 0;
-        static std::string lastLine;
-        static APawn* lastPawn = nullptr;
+        // Per connection: with two players these were shared, so one player's watch used up the
+        // other's ClientRestart re-sends (s3 run 20261005-032527: all 8 went out on one watch's clock).
+        struct WatchState { int resends = 0; int lastResend = -100; int channelSeenFor = 0; std::string lastLine; APawn* lastPawn = nullptr;
+                            APawn* reopenPawn = nullptr; int reopens = 0; int lastReopen = -100; int resendsAtReopen = 0; unsigned lastPhysics = 255; };
+        static std::map<UNetConnection*, WatchState> states;
+        WatchState& st = states[connection];
+        int& resends = st.resends;
+        int& lastResend = st.lastResend;
+        int& channelSeenFor = st.channelSeenFor;
+        std::string& lastLine = st.lastLine;
+        APawn*& lastPawn = st.lastPawn;
 
         std::string line;
         if (!pawn) {
@@ -313,6 +427,17 @@ namespace Hooks {
             lastLine = line;
         }
 
+        // What is under this player's pawn on the server (see FloorReport): every 3 s while it is
+        // alive and whenever its physics mode changes, plus a bot's every 15 s for comparison.
+        if (pawn && IsLiveObject(pawn) && pawn->GetHealth() > 0.0f) {
+            if (n % 3 == 0 || (unsigned)pawn->Physics != st.lastPhysics) {
+                printf("[FLOOR] server t+%i s: %s's pawn %p at (%.0f, %.0f), controller state %s: %s\n", n, sp->Name.c_str(), (void*)pawn,
+                    pawn->Location.X, pawn->Location.Y, StateNameOf(pc).c_str(), FloorReport(pawn).c_str());
+            }
+            st.lastPhysics = (unsigned)pawn->Physics;
+            LogServerBotFloor();
+        }
+
         if (pawn) {
             UActorChannel* ch = ServerNetworking::GetActorChannelForActor(pawn, connection);
             bool channelOpen = ch && !ch->Closing && (ch->OpenAckd || channelSeenFor >= 2);   // OpenAckd offset is the SDK's guess; two seconds with a channel is enough either way
@@ -325,6 +450,28 @@ namespace Hooks {
             }
             else if (ch && pc->AcknowledgedPawn == pawn && n % 10 == 0) {
                 printf("[POSSESS] t+%i s: client acknowledged this pawn; the possession reached the client\n", n);
+            }
+
+            // Re-open the pawn's channel when re-sending ClientRestart does not help (see above).
+            // Passing runs never get here: their client acknowledges the pawn without any re-send.
+            if (pawn != st.reopenPawn) {
+                st.reopenPawn = pawn;
+                st.reopens = 0;
+                st.lastReopen = -100;
+                st.resendsAtReopen = resends;
+            }
+            ch = ServerNetworking::GetActorChannelForActor(pawn, connection);
+            if (ch && !ch->Closing && pc->AcknowledgedPawn != pawn && channelSeenFor >= 6 && resends - st.resendsAtReopen >= 2
+                && n - st.lastReopen >= 12 && st.reopens < kPawnChannelReopenMax) {
+                st.reopens++;
+                st.lastReopen = n;
+                st.resendsAtReopen = resends;
+                int chIndex = ch->ChIndex;
+                (*reinterpret_cast<void(**)(UActorChannel*)>(*reinterpret_cast<uintptr_t*>(ch) + 0x210))(ch); // UActorChannel::Close
+                channelSeenFor = 0;
+                printf("[POSSESS] t+%i s: %s's client still has no pawn after %i ClientRestart re-sends; closed the pawn's actor channel %i so it is opened again with a fresh spawn (reopen %i of %i), channel now %s\n",
+                    n, sp->Name.c_str(), resends, chIndex, st.reopens, kPawnChannelReopenMax,
+                    ServerNetworking::GetActorChannelForActor(pawn, connection) ? "STILL SET" : "cleared");
             }
         }
 
@@ -361,10 +508,16 @@ namespace Hooks {
         }
         line += " | player pawns in world: " + std::to_string(count) + (count ? ": " + pawns : std::string());
 
+        // What is under the local pawn on this client (see FloorReport); changes while it moves.
+        if (pc && pc->Pawn && IsLiveObject(pc->Pawn))
+            line += " | floor: " + FloorReport(pc->Pawn);
+
         if (line != last || calls % 5 == 0) {
             printf("[CLIENT] %s: %s\n", why, line.c_str());
             last = line;
         }
+
+        LogClientStreamingLevels();
     }
 
     void StartPossessionWatch(UNetConnection* connection) {
@@ -603,6 +756,14 @@ namespace Hooks {
     }
 
     void WorldControlMessageHook(UWorld* world, UNetConnection* connection, uint8_t message, void* inbunch) {
+        if (!Globals::amServer) {
+            // Client: the first argument is the world's FNetworkNotify sub-object (UWorld + 0x58).
+            WorldControlMessage.call<void>(world, connection, message, inbunch);
+            if (message == 0x7) // NMT_Uses: link it now if the engine queued it behind a package that is still loading
+                ClientNetworking::LinkLoadedPendingPackages(reinterpret_cast<UWorld*>(reinterpret_cast<char*>(world) - 0x58), true, "NMT_Uses");
+            return;
+        }
+
         static int messagesLogged = 0;
         if (messagesLogged < 40) { messagesLogged++; printf("[NETWORKING] control message %u\n", (unsigned)message); }
 
@@ -665,6 +826,17 @@ namespace Hooks {
         DebugServer::Pump();
         Autopilot::Tick(DeltaTime);
         Engine::PumpGameThreadTasks(DeltaTime);
+
+        if (!Globals::amServer) {
+            // Packages the client loads later (bot heroes, skins) can unblock queued NMT_Uses entries
+            // that sit behind a still-loading one; link those too (see LinkLoadedPendingPackages).
+            static float sinceSweep = 0.0f;
+            sinceSweep += DeltaTime;
+            if (sinceSweep >= 0.5f) {
+                sinceSweep = 0.0f;
+                ClientNetworking::LinkLoadedPendingPackages(*reinterpret_cast<UWorld**>(Globals::baseAddress + 0x34DFCA0), false, "tick");
+            }
+        }
 
         if (Globals::amServer) {
             /*
@@ -809,6 +981,7 @@ namespace Hooks {
                             }
 
                             printf("[NETWORKING] Logged in %s as %s (match state %i)\n", serverPlayer.Name.c_str(), pc->GetFullName().c_str(), ServerMatchState());
+                            LogServerStreamingLevels("login");
 
                             StartSpawnTrace(75.0f);
 
@@ -1027,6 +1200,41 @@ namespace Hooks {
         */
 
         if (Globals::amServer && spawnTraceOn) SpawnTrace(object, function, params);
+
+        // Level streaming hand-off, both ends, with arguments: the server's
+        // ClientUpdateLevelStreamingStatus calls (PostLogin, Kismet) and the clients'
+        // ServerUpdateLevelVisibility answers; on a client, the status calls it receives.
+        {
+            static UFunction* statusEngineFn = nullptr;
+            static UFunction* statusWillowFn = nullptr;
+            static UFunction* visibilityFn = nullptr;
+            if (!statusEngineFn) {
+                statusEngineFn = UFunction::FindFunction("Function Engine.PlayerController.ClientUpdateLevelStreamingStatus");
+                statusWillowFn = UFunction::FindFunction("Function WillowGame.WillowPlayerController.ClientUpdateLevelStreamingStatus");
+                visibilityFn = UFunction::FindFunction("Function Engine.PlayerController.ServerUpdateLevelVisibility");
+            }
+            static int streamingLogged = 0;
+            const bool isStatus = function && (function == statusEngineFn || function == statusWillowFn);
+            const bool isVisibility = function && function == visibilityFn;
+            if ((isStatus || isVisibility) && params && object && !Globals::amStandalone && streamingLogged < 120
+                && object->IsA(APlayerController::StaticClass())) {
+                streamingLogged++;
+                APlayerController* spc = reinterpret_cast<APlayerController*>(object);
+                Globals::ServerPlayer* who = Globals::amServer ? ConnectionToServerPlayer((UNetConnection*)spc->Player) : nullptr;
+                std::string whoName = who ? who->Name : NameOrNone(spc);
+                if (isStatus) {
+                    auto* p = reinterpret_cast<APlayerController_execClientUpdateLevelStreamingStatus_Params*>(params);
+                    printf("[STREAMING] %s ClientUpdateLevelStreamingStatus(%s, load %u, visible %u, block %u) %s %s\n",
+                        Globals::amServer ? "sent" : "client: received", p->PackageName.ToString().c_str(), (unsigned)p->bNewShouldBeLoaded,
+                        (unsigned)p->bNewShouldBeVisible, (unsigned)p->bNewShouldBlockOnLoad, Globals::amServer ? "to" : "on", whoName.c_str());
+                }
+                else {
+                    auto* p = reinterpret_cast<APlayerController_eventServerUpdateLevelVisibility_Params*>(params);
+                    printf("[STREAMING] %s ServerUpdateLevelVisibility(%s, visible %u) %s %s\n", Globals::amServer ? "server: received" : "client: sending",
+                        p->PackageName.ToString().c_str(), (unsigned)p->bIsVisible, Globals::amServer ? "from" : "on", whoName.c_str());
+                }
+            }
+        }
 
         // Possession hand-off, both ends. Server: the client's AskForPawn (sent from WaitingForPawn)
         // and its ServerAcknowledgePossession. Client: the ClientRestart / ClientGotoState /
