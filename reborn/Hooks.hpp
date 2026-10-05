@@ -37,6 +37,10 @@ namespace Hooks {
 
     void ProcessEventHook(UObject* object, UFunction* function, void* params);
 
+    // Networked client: logs the local controller's pawn/acknowledged pawn/state and every live
+    // player pawn it knows about. Prints on change plus a periodic heartbeat.
+    void LogClientPossession(const char* why);
+
     extern SafetyHookInline DestroyActor;
 
     bool DestroyActorHook(UWorld* world, AActor* actor, bool force);
