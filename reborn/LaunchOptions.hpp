@@ -27,4 +27,6 @@ namespace LaunchOptions {
     std::wstring InstanceArg(const std::wstring& commandLine);
     void InitFromCommandLine();
     const Options& Get();
+    // What the game's single-instance mutex check got (dllmain.cpp), for startup-failure logs.
+    std::string SingleInstanceMutexStatus();
 }

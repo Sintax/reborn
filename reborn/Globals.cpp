@@ -124,6 +124,25 @@ namespace Globals {
         Globals::CharacterSelectHasLockedIn = false;
         Globals::CharacterSelectThisPossesionsTheRealOne = false;
 
+        // Actors outside any level (archetypes, class defaults) must not point at a world: a
+        // rooted archetype with WorldInfo set keeps the old world alive and the map change after
+        // it fails with "World ... not cleaned up by garbage collection!". Clear any that do.
+        {
+            UClass* actorClass = AActor::StaticClass();
+            UClass* levelClass = ULevel::StaticClass();
+            int cleared = 0;
+            for (int i = 0; i < UObject::GObjObjects()->size(); i++) {
+                UObject* obj = UObject::GObjObjects()->at(i);
+                if (!obj || !obj->IsA(actorClass)) continue;
+                AActor* actor = reinterpret_cast<AActor*>(obj);
+                if (!actor->WorldInfo || (actor->Outer && actor->Outer->IsA(levelClass))) continue;
+                std::cout << "[WORLDSWITCH] clearing WorldInfo " << actor->WorldInfo->GetFullName() << " from " << actor->GetFullName() << " (not in a level)" << std::endl;
+                actor->WorldInfo = nullptr;
+                cleared++;
+            }
+            std::cout << "[WORLDSWITCH] actors outside a level that pointed at a world: " << cleared << std::endl;
+        }
+
         std::scoped_lock t(Globals::NetworkObjectListMutex);
 
         Globals::NetworkObjectList.clear();

@@ -49,6 +49,7 @@ namespace Diagnostics {
         LPTOP_LEVEL_EXCEPTION_FILTER g_previousFilter = nullptr;
 
         long long NowMs() { return (long long)GetTickCount64(); }
+        const long long g_loadMs = NowMs();   // set when the DLL loads, before the game's WinMain
 
         std::string Narrow(const std::wstring& w) {
             if (w.empty()) return {};
@@ -338,7 +339,8 @@ namespace Diagnostics {
         DWORD expected = 0;
         g_gameThreadId.compare_exchange_strong(expected, GetCurrentThreadId());
         g_lastTickMs = NowMs();
-        ++g_ticks;
+        if (++g_ticks == 1)
+            std::printf("[STARTUP] first engine frame done %.1f s after the mod loaded\n", (g_lastTickMs - g_loadMs) / 1000.0);
     }
 
     long long MillisSinceLastTick() {

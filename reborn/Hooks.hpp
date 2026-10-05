@@ -45,6 +45,18 @@ namespace Hooks {
 
     bool DestroyActorHook(UWorld* world, AActor* actor, bool force);
 
+    // Engine shutdown (battleborn+0xdd2b10), run when the main loop ends. If the game quits during
+    // startup (before its first frame) this logs why and exits instead: the shutdown's garbage
+    // collection crashes on a half-started engine (battleborn+0x91b90).
+    extern SafetyHookInline EngineExit;
+
+    void EngineExitHook(void* a1);
+
+    // The game's message box (battleborn+0x134470, appMsgf): logs the text it shows.
+    extern SafetyHookMid GameMessageBox;
+
+    void GameMessageBoxHook(safetyhook::Context& ctx);
+
     extern SafetyHookInline JustDoNothing;
 
     extern SafetyHookInline JustDoNothing2;

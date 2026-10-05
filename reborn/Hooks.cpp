@@ -10,16 +10,41 @@
 #include "DebugServer.hpp"
 #include "Autopilot.hpp"
 #include "GameState.hpp"
+#include "LaunchOptions.hpp"
 
 namespace Hooks {
     SafetyHookInline ProcessRemoteFunction;
 
+    // The engine's ProcessRemoteFunction (battleborn+0x728fd0) reads actor->WorldInfo->NetMode
+    // (+0x168, +0x4C0) first, so an actor with no WorldInfo crashes it; lend one for the call.
+    // Actors outside any level (archetypes such as GD_RocketHawk_Streaming.Player.Pawn_RocketHawk,
+    // class defaults) must not keep it: a permanent WorldInfo on a rooted archetype keeps the old
+    // world alive, and the next map change dies with "World Dojo_P.TheWorld not cleaned up by
+    // garbage collection!" (client after match end, hang:battleborn+0x1347ac).
     bool ProcessRemoteFunctionHook(AActor* actor, UFunction* function, void* params, void* stack) {
-        if (!actor->WorldInfo) {
-            actor->WorldInfo = SDKUtils::GetLastOfClass<AWorldInfo>();
+        if (actor->WorldInfo) {
+            return ProcessRemoteFunction.call<bool>(actor, function, params, stack);
         }
 
+        AWorldInfo* lent = SDKUtils::GetLastOfClass<AWorldInfo>();
+        if (!lent) {
+            return false;
+        }
+
+        bool inLevel = actor->Outer && actor->Outer->IsA(ULevel::StaticClass());
+        actor->WorldInfo = lent;
+
         bool ret = ProcessRemoteFunction.call<bool>(actor, function, params, stack);
+
+        if (!inLevel) {
+            if (actor->WorldInfo == lent) actor->WorldInfo = nullptr;
+            static int logged = 0;
+            if (logged < 20) {
+                logged++;
+                printf("[NET] remote function %s on %s (not in a level): lent WorldInfo for the call and cleared it after\n",
+                    function ? function->GetName().c_str() : "?", actor->GetFullName().c_str());
+            }
+        }
 
         return ret;
     }
@@ -1488,6 +1513,72 @@ namespace Hooks {
         }
 
         return DestroyActor.call<bool>(world, actor, force);
+    }
+
+    // --- Quitting during startup ------------------------------------------------------------------
+    // crash:0xc0000005:battleborn+0x91b90 was this: the game decided to quit inside its startup
+    // (FEngineLoop::PreInit, battleborn+0xdd0c00), before engine Init ran, so GuardedMain went
+    // straight to the shutdown at battleborn+0xdd2b10. Its garbage collection then assembles GC
+    // reference streams for classes the engine never finished setting up (Core.Object flagged
+    // assembled with an empty stream) and reads index -1. PreInit only quits early after showing a
+    // message box: "Error_GameAlreadyRunning" (single-instance mutex already held), resolution
+    // below 640x480, or no AES provider. So the dialog text says which one.
+    SafetyHookInline EngineExit;
+    SafetyHookMid GameMessageBox;
+
+    namespace {
+        std::mutex g_dialogMutex;
+        std::string g_lastDialog;
+
+        std::string Narrow(const wchar_t* w, size_t maxChars) {
+            if (!w) return "";
+            size_t n = wcsnlen(w, maxChars);
+            if (n == 0) return "";
+            int len = WideCharToMultiByte(CP_UTF8, 0, w, (int)n, nullptr, 0, nullptr, nullptr);
+            std::string s(len > 0 ? len : 0, '\0');
+            if (len > 0) WideCharToMultiByte(CP_UTF8, 0, w, (int)n, s.data(), len, nullptr, nullptr);
+            for (char& c : s) if (c == '\r' || c == '\n') c = ' ';
+            return s;
+        }
+    }
+
+    // Mid hook at the entry of appMsgf(int* result, int type, const wchar_t* format, ...): rdx = type,
+    // r8 = the (usually already localized and formatted) text. Logs only; the box still shows.
+    void GameMessageBoxHook(safetyhook::Context& ctx) {
+        std::string text = Narrow(reinterpret_cast<const wchar_t*>(ctx.r8), 400);
+        {
+            std::lock_guard lk(g_dialogMutex);
+            g_lastDialog = text;
+        }
+        printf("[DIALOG] the game shows a message box (type %d, engine frames so far %llu): \"%s\"\n",
+            (int)ctx.rdx, Diagnostics::TickCount(), text.c_str());
+    }
+
+    void EngineExitHook(void* a1) {
+        if (Diagnostics::TickCount() != 0) {
+            EngineExit.call<void>(a1);
+            return;
+        }
+        constexpr UINT kQuitDuringStartupExitCode = 187;
+        std::string dialog;
+        {
+            std::lock_guard lk(g_dialogMutex);
+            dialog = g_lastDialog.empty() ? std::string("none") : "\"" + g_lastDialog + "\"";
+        }
+        const bool requestingExit = *reinterpret_cast<uint8_t*>(Globals::baseAddress + 0x34a4616) != 0;   // GIsRequestingExit
+        const bool firstInstance = *reinterpret_cast<uint8_t*>(Globals::baseAddress + 0x324350c) != 0;    // result of the mutex check
+        printf("[STARTUP] the game is shutting down before its first frame (it quit during startup). "
+               "Last game message box: %s. Game's single-instance check: %s (mutex %s). Screen as the game sees it: %dx%d. "
+               "Requesting exit: %s.\n",
+            dialog.c_str(), firstInstance ? "first instance" : "NOT first instance (another copy running)",
+            LaunchOptions::SingleInstanceMutexStatus().c_str(), GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+            requestingExit ? "yes" : "no");
+        printf("[STARTUP] skipping the engine shutdown: its garbage collection crashes on a half-started engine "
+               "(battleborn+0x91b90). Exiting with code %u.\n", kQuitDuringStartupExitCode);
+        fflush(stdout);
+        fflush(stderr);
+        Sleep(1500);   // let the log tee thread write <instance>.log before the process goes
+        TerminateProcess(GetCurrentProcess(), kQuitDuringStartupExitCode);
     }
 
     SafetyHookInline JustDoNothing;

@@ -1,4 +1,5 @@
 #include <thread>
+#include <atomic>
 #include <iostream>
 #include <format>
 #include <mutex>
@@ -26,9 +27,22 @@ namespace {
     SafetyHookInline g_createMutexW;
     std::wstring g_instanceMutex;
 
+    // What the game's own single-instance check got back (-1 = it has not run yet). If the mutex
+    // already exists the game shows "already running" and quits before its first frame.
+    std::atomic<long long> g_mutexError{ -1 };
+    std::atomic<bool> g_mutexHandle{ false };
+
     HANDLE WINAPI CreateMutexWHook(LPSECURITY_ATTRIBUTES sa, BOOL initialOwner, LPCWSTR name) {
-        if (name && wcscmp(name, kSingleInstanceMutex) == 0) name = g_instanceMutex.c_str();
-        return g_createMutexW.call<HANDLE>(sa, initialOwner, name);
+        bool ours = name && wcscmp(name, kSingleInstanceMutex) == 0;
+        if (ours) name = g_instanceMutex.c_str();
+        HANDLE h = g_createMutexW.call<HANDLE>(sa, initialOwner, name);
+        DWORD err = GetLastError();
+        if (ours) {
+            g_mutexHandle = h != nullptr;
+            g_mutexError = err;
+        }
+        SetLastError(err);   // the game reads ERROR_ALREADY_EXISTS right after this call
+        return h;
     }
 
     // Runs inside DllMain, before the game's WinMain makes its single-instance check.
@@ -39,6 +53,16 @@ namespace {
         void* target = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateMutexW");
         if (target) g_createMutexW = safetyhook::create_inline(target, &CreateMutexWHook);
     }
+}
+
+std::string LaunchOptions::SingleInstanceMutexStatus() {
+    if (g_instanceMutex.empty()) return "not renamed (no -rbinstance)";
+    std::string name(g_instanceMutex.begin(), g_instanceMutex.end());
+    long long err = g_mutexError;
+    if (err < 0) return name + ": the game has not checked it yet";
+    if (!g_mutexHandle) return name + ": could not be created (error " + std::to_string(err) + ")";
+    if (err == ERROR_ALREADY_EXISTS) return name + ": ALREADY EXISTED (another process holds it)";
+    return name + ": created new";
 }
 
 void MainThread() {

@@ -24,6 +24,13 @@ namespace Init {
     }
 
     void Hooks() {
+        // First, so they are in place if the game quits inside its own startup.
+        Hooks::GameMessageBox = safetyhook::create_mid((void*)(Globals::baseAddress + 0x134470), &Hooks::GameMessageBoxHook);
+        Hooks::EngineExit = safetyhook::create_inline((void*)(Globals::baseAddress + 0xdd2b10), &Hooks::EngineExitHook);
+        if (!Hooks::GameMessageBox || !Hooks::EngineExit)
+            std::printf("[STARTUP] hook FAILED: message box %s, engine exit %s\n",
+                Hooks::GameMessageBox ? "ok" : "failed", Hooks::EngineExit ? "ok" : "failed");
+
         if (Globals::amServer) {
             Hooks::DestroyActor = safetyhook::create_inline((void*)(Globals::baseAddress + 0x3EF070), &Hooks::DestroyActorHook);
             Hooks::PoplarGameInfoSetup = safetyhook::create_inline((void*)(Globals::baseAddress + 0x1474140), &Hooks::PoplarGameInfoSetupHook);
