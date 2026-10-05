@@ -159,10 +159,12 @@ def _report(p: Path, fallback: dict) -> dict:
 
 
 def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: float = 2.0,
-                 shots=None) -> RunResult:
-    # Screenshots only of games this runner really launched (fake launchers use made-up pids).
-    if shots is None and launcher is None:
-        shots = screenshot.capture_all
+                 shots=None, arrange=None) -> RunResult:
+    # Screenshots and window placement only for games this runner really launched (fake
+    # launchers use made-up pids).
+    if launcher is None:
+        shots = shots or screenshot.capture_all
+        arrange = arrange or screenshot.arrange
     launcher = launcher or launch.RealLauncher()
     preconditions(runs_dir, len(scn.processes))
     base_id = f"{datetime.now():%Y%m%d-%H%M%S}-{scn.name}"
@@ -203,6 +205,11 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
         os.replace(tmp, active)
 
     def poll():
+        if arrange:
+            try:
+                arrange({n: h.pid for n, h in handles.items()})
+            except Exception:
+                pass   # window placement is cosmetic
         with open(run_dir / "timeline.jsonl", "a", encoding="utf-8") as tl:
             for name, port in ports.items():
                 if name not in handles:

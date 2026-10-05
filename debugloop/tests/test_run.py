@@ -325,3 +325,17 @@ def test_capture_without_a_window_is_false(tmp_path):
     from debugloop import screenshot
     assert screenshot.capture(0, tmp_path / "x.jpg") is False
     assert not (tmp_path / "x.jpg").exists()
+
+
+def test_windows_are_arranged_while_the_run_polls(tmp_path):
+    calls = []
+    r = run.run_scenario(scn(two=True), FakeLauncher(), tmp_path, poll_s=0.5,
+                         shots=lambda *_: None, arrange=lambda pids: calls.append(sorted(pids)))
+    assert r.outcome.kind == "pass", r.outcome
+    assert ["c1", "server"] in calls
+
+
+def test_arrange_never_raises_for_missing_processes():
+    from debugloop import screenshot
+    screenshot.arrange({"server": 0, "c1": 999999})
+    screenshot.arrange({})
