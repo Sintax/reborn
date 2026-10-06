@@ -228,6 +228,60 @@ namespace Hooks {
         return s;
     }
 
+    // --- Skin of the wrong hero (s3 runs 20261006-023201, -025246: invisible ModernSoldier) ----
+    //
+    // Every LAN player is assigned NameId_RocketHawk at login. When the server refuses that hero
+    // (ServerPlayerSelectClass(Class_RocketHawk) leaves Class_ModernSoldier pending), the spawn
+    // retry used to re-lock with RocketHawk, which set the controller's pending skin to
+    // GD_RocketHawk_DefaultSkin.Skin_Default while the class stayed ModernSoldier. The pawn then got
+    // RocketHawk's skin, which has no content skin for BodyClass_ModernSoldier_Poplar, so no body
+    // (mesh + cylinder) was ever applied and nothing replicated to the clients.
+    //
+    // "GD_ModernSoldier_Streaming" / "gd_modernsoldier_SkinColor010" -> "ModernSoldier" /
+    // "modernsoldier"; empty when the outermost package is not GD_<Hero>_...
+    std::string HeroTokenOf(UObject* o) {
+        std::string pkg = OutermostPackageName(o);
+        if (pkg.size() < 5 || _strnicmp(pkg.c_str(), "gd_", 3) != 0) return std::string();
+        size_t end = pkg.find('_', 3);
+        if (end == std::string::npos || end == 3) return std::string();
+        return pkg.substr(3, end - 3);
+    }
+
+    // True when the skin is known to be another hero's than the class.
+    bool SkinIsOtherHeros(UObject* skin, UObject* classDef) {
+        if (!skin || !classDef) return false;
+        std::string hero = HeroTokenOf(classDef), skinHero = HeroTokenOf(skin);
+        return !hero.empty() && !skinHero.empty() && _stricmp(hero.c_str(), skinHero.c_str()) != 0;
+    }
+
+    // Server, before the pending class is applied: make the pending skin (and the PSI's preloaded
+    // skin) belong to the pending class's hero, substituting GD_<Hero>_DefaultSkin.Skin_Default.
+    void FixPendingSkinForClass(APoplarPlayerController* pc, const char* where) {
+        if (!pc || !pc->PendingPlayerClass) return;
+        UPlayerClassDefinition* cls = pc->PendingPlayerClass;
+        APoplarPlayerStateInfo* psi = pc->PoplarPSI;
+        UPoplarSkinDefinition* pending = pc->PendingPlayerSkin;
+        UPoplarSkinDefinition* preloaded = psi ? psi->PreloadedSkin : nullptr;
+        bool pendingBad = SkinIsOtherHeros(pending, cls);
+        bool preloadedBad = SkinIsOtherHeros(preloaded, cls);
+        if (!pendingBad && !preloadedBad) return;
+
+        std::string hero = HeroTokenOf(cls);
+        std::string want = "PoplarSkinDefinition GD_" + hero + "_DefaultSkin.Skin_Default";
+        UPoplarSkinDefinition* fix = UObject::FindObject<UPoplarSkinDefinition>(want);
+        static int logged = 0;
+        if (logged < 20) {
+            logged++;
+            printf("[SKIN] %s on %s: pending class %s (name id %s) but pending skin %s, PSI preloaded skin %s, PSI skin %s; substituting %s -> %s\n",
+                where, pc->GetName().c_str(), NameOrNone(cls).c_str(), NameOrNone(pc->PendingPlayerClassNameId).c_str(),
+                FullNameOrNone(pending).c_str(), FullNameOrNone(preloaded).c_str(), FullNameOrNone(psi ? psi->PlayerSkin : nullptr).c_str(),
+                want.c_str(), fix ? "found" : "NOT LOADED, left as is");
+        }
+        if (!fix) return;
+        if (pendingBad) pc->PendingPlayerSkin = fix;
+        if (preloadedBad && psi) psi->PreloadedSkin = fix;
+    }
+
     std::string CylinderDiag(APawn* p) {
         UCylinderComponent* c = p ? p->CylinderComponent : nullptr;
         if (!c) return "cylinder none";
@@ -906,9 +960,21 @@ namespace Hooks {
                     AppliedClassName(psi).c_str(), NameOrNone(pc->PendingPlayerClass).c_str(),
                     (unsigned)stateBefore, (unsigned)pri->CharacterSelectionState, pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
                 if (static_cast<uint8_t>(pri->CharacterSelectionState) < stateBefore && sp->Character) {
+                    // Re-lock with the hero the server now has pending, not the one it just refused:
+                    // re-locking the refused hero set that hero's skin as the pending skin while the
+                    // class stayed the server's choice, so the pawn spawned with no body (invisible).
+                    UPoplarPlayerNameIdentifierDefinition* serverHero = pc->PendingPlayerClassNameId;
+                    if (serverHero && serverHero != sp->Character) {
+                        printf("[SPAWN] attempt %i: server replaced %s's hero %s with %s; re-locking %s and keeping it for later lock-ins\n", attempt,
+                            sp->Name.c_str(), sp->Character->GetName().c_str(), serverHero->GetName().c_str(), serverHero->GetName().c_str());
+                        sp->Character = serverHero;
+                        sp->OptionalSkin = nullptr;   // belonged to the refused hero
+                        sp->OptionalTaunt = nullptr;
+                    }
                     pc->eventServerSelectCharacter(sp->Character, sp->OptionalSkin, sp->OptionalTaunt, true);
-                    printf("[SPAWN] attempt %i: re-locked %s -> selection state %u, requirements met %s\n", attempt, sp->Character->GetName().c_str(),
-                        (unsigned)pri->CharacterSelectionState, pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no");
+                    printf("[SPAWN] attempt %i: re-locked %s -> selection state %u, requirements met %s, pending class %s, pending skin %s\n", attempt, sp->Character->GetName().c_str(),
+                        (unsigned)pri->CharacterSelectionState, pri->AreRequirementsMetToSpawnCharacter() ? "yes" : "no",
+                        NameOrNone(pc->PendingPlayerClass).c_str(), FullNameOrNone(pc->PendingPlayerSkin).c_str());
                 }
                 if (pc->Pawn) {
                     printf("[SPAWN] %s got pawn %s from ServerPlayerSelectClass\n", sp->Name.c_str(), pc->Pawn->GetFullName().c_str());
@@ -921,6 +987,7 @@ namespace Hooks {
             //     class is pending now, since ServerPlayerSelectClass may just have changed it).
             if (!(psi && psi->PlayerClass) && attempt >= 2 && pc->PendingPlayerClass) {
                 classDef = pc->PendingPlayerClass;
+                FixPendingSkinForClass(pc, "SwitchPlayerClass fallback");
                 pc->eventSwitchPlayerClass(classDef);
                 printf("[SPAWN] attempt %i: SwitchPlayerClass(%s) -> applied class %s, pawn %s\n", attempt, classDef->GetName().c_str(),
                     AppliedClassName(psi).c_str(), pc->Pawn ? pc->Pawn->GetFullName().c_str() : "none");
@@ -1664,6 +1731,8 @@ namespace Hooks {
             // (HasClientLoadedOnDemandPackageFor) holds at that moment.
             if (Globals::amServer && Globals::netDriver && !Globals::amStandalone) {
                 APoplarPlayerController* ppc = reinterpret_cast<APoplarPlayerController*>(object);
+                // Whoever applies the class, it must get its own hero's skin (see FixPendingSkinForClass).
+                FixPendingSkinForClass(ppc, "SwitchToPendingPlayerClass");
                 static int logged = 0;
                 if (logged < 60) {
                     logged++;
@@ -1675,6 +1744,13 @@ namespace Hooks {
                     ProcessEvent.call<void>(object, function, params);
                     printf("[SPAWN] SwitchToPendingPlayerClass on %s: after: pending %s, applied %s, pawn %s\n",
                         ppc->GetName().c_str(), NameOrNone(ppc->PendingPlayerClass).c_str(), AppliedClassName(ppc->PoplarPSI).c_str(), NameOrNone(ppc->Pawn).c_str());
+                    if (pending && ppc->Pawn && ppc->Pawn->IsA(APoplarPawn::StaticClass())) {
+                        APoplarPawn* spawned = reinterpret_cast<APoplarPawn*>(ppc->Pawn);
+                        printf("[SKIN] %s's pawn after SwitchToPendingPlayerClass: skin definition %s, body class %s, skin rep %s, mesh %s%s\n",
+                            ppc->GetName().c_str(), FullNameOrNone(spawned->SkinDefinition).c_str(), NameOrNone(spawned->PoplarBodyClass).c_str(),
+                            FullNameOrNone(spawned->SkinData.SkinDef).c_str(), NameOrNone(spawned->Mesh).c_str(),
+                            SkinIsOtherHeros(spawned->SkinDefinition, spawned->PoplarPlayerClassDef) ? " -- SKIN IS ANOTHER HERO'S" : "");
+                    }
                     return;
                 }
             }
