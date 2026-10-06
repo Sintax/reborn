@@ -162,6 +162,16 @@ namespace Autopilot {
         // PlayerTick consumes (seen live: the pawn walks; the frame leaves them at 0 again).
         void WriteAxes(APoplarPlayerController* pc) {
             UPlayerInput* in = pc->PlayerInput;
+            // The combat brain's axes win while it has something to do; the unstick turn would
+            // spin the aim off its target, so with combat axes a stuck pawn only jumps.
+            Combat::Axes c = Combat::Enabled() ? Combat::CurrentAxes() : Combat::Axes{};
+            if (c.valid) {
+                in->aBaseY = c.forward;
+                in->aStrafe = c.strafe;
+                in->aTurn = c.turn;
+                in->aLookUp = c.lookUp;
+                return;
+            }
             in->aBaseY = 1.0f;
             in->aStrafe = g_strafe;
             in->aTurn = g_unstickFor > 0.f ? 1.0f : g_turn;
@@ -179,7 +189,11 @@ namespace Autopilot {
             }
             g_deadTimer = 0.f;
             if (!g_hadPawn) { g_hadPawn = true; ResetStuck(pc); }   // entering play or respawned
-            if (Combat::Enabled()) Combat::Tick(dt, pc);
+            const bool combat = Combat::Enabled();
+            if (combat) Combat::Tick(dt, pc);
+            const Combat::Axes c = combat ? Combat::CurrentAxes() : Combat::Axes{};
+            // Standing still on purpose (hold, aiming in range, calibrating) is not being stuck.
+            const bool wantsToMove = !c.valid || c.forward != 0.f || c.strafe != 0.f;
 
             g_untilNewPlan -= dt;
             if (g_untilNewPlan <= 0.f) {
@@ -188,13 +202,23 @@ namespace Autopilot {
                 g_untilNewPlan = Rand(2.f, 4.f);
             }
             g_untilJump -= dt;
-            if (g_untilJump <= 0.f) { Exec(L"Jump"); g_untilJump = Rand(3.f, 6.f); }
+            if (g_untilJump <= 0.f) {
+                if (!c.valid) Exec(L"Jump");   // random hops only while wandering
+                g_untilJump = Rand(3.f, 6.f);
+            }
 
-            g_fireCycle += dt;
-            bool wantFire = std::fmod(g_fireCycle, 3.f) < 1.f;
-            if (wantFire != g_firing) { Exec(wantFire ? L"StartFire" : L"StopFire"); g_firing = wantFire; }
+            if (!combat) {   // the combat brain does its own firing
+                g_fireCycle += dt;
+                bool wantFire = std::fmod(g_fireCycle, 3.f) < 1.f;
+                if (wantFire != g_firing) { Exec(wantFire ? L"StartFire" : L"StopFire"); g_firing = wantFire; }
+            }
 
             g_stuckTimer += dt;
+            if (!wantsToMove) {
+                g_stuckTimer = 0.f;
+                g_lastX = pc->Pawn->Location.X;
+                g_lastY = pc->Pawn->Location.Y;
+            }
             if (g_stuckTimer >= 5.f) {
                 float dx = pc->Pawn->Location.X - g_lastX, dy = pc->Pawn->Location.Y - g_lastY;
                 if (std::sqrt(dx * dx + dy * dy) < 100.f) { g_unstickFor = 1.f; Exec(L"Jump"); }

@@ -123,8 +123,7 @@ void MainThread() {
         if (opt.debugPort) DebugServer::Start(opt.debugPort, DebugServer::Routes{
             GameState::SnapshotJson, GameState::Exec,
             [](const std::string&) { return Combat::SnapshotJson(); },
-            [](const std::string&) { return std::string("{\"error\":\"not_implemented\",\"status\":501}"); },
-            [](const std::string&) { return std::string("{\"error\":\"not_implemented\",\"status\":501}"); } });
+            Combat::ApplyOrderJson, Combat::ActJson });
     }
     Init::Hooks();
 
