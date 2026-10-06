@@ -38,3 +38,15 @@ Solo Dojo_P, `-rbautopilot -rbcombat`, heroes Rath (Class_DeathBlade, sword) and
   a hit near or past the reach grows it back. Rath settled near 500 units and killed minions.
 - Unknown still: whether `melee` (`StartOffHandFire`) and `altfire` do anything for each hero, and
   which slot is each hero's ultimate (slot 3 is used when 2+ enemies are within 1500 units).
+
+## Big maps (Meltdown, IceScort_P), 6 Oct smoke runs 20261006-071629 and -072252
+
+- Both smoke runs passed (no crash), but the players never reached a fight in 5 minutes: enemies
+  12-30k units away counted as "visible" on the open map, and straight-line chases ended against
+  walls near base, with skills fired at that range. Now: targets and chases only within 6000 units,
+  skills only within 2000, and a chase that moves under 150 units in 4 s hands over to the wander for
+  6 s.
+- Following a friendly bot hero (whose AI paths along the lanes) does not work on a networked client:
+  the client only has nearby actors (census: 5-6 pawns in total, 0 friendly bots). Kept for small maps.
+- Real navigation (the game's path network) is the next step for big maps.
+- Both clients played Class_ModernSoldier although c1 asks for Rath (hero pick, not the combat code).

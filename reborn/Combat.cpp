@@ -27,6 +27,10 @@ namespace Combat {
         float g_sinceCensus = 1e9f;
         std::vector<Enemy> g_enemies;      // nearest first, refreshed every kCensusEvery
         int g_censusPawns = 0, g_censusLive = 0;   // last census: pawns walked, live ones (diagnostics)
+        uintptr_t g_friend = 0;                    // nearest friendly bot hero (0 = none)
+        float g_friendDist = 1e12f;
+        float g_friendLoc[3] = { 0, 0, 0 };
+        int g_friendKinds[3] = { 0, 0, 0 };        // last census: non-enemies by kind (bot, player, other)
         APoplarPlayerController* g_pc = nullptr;
         float g_myLoc[3] = { 0, 0, 0 };
         int g_myYaw = 0, g_myPitch = 0;
@@ -47,6 +51,14 @@ namespace Combat {
         float g_strafeSign = 1.f, g_untilStrafeFlip = 0.f;
         float g_sinceSkill = 0.f;
         float g_burstLeft = 0.f;            // fire_burst: seconds of forced fire remaining
+        // Meltdown smoke 20261006-071629: enemies 25-30k units away count as visible on an open map;
+        // chasing them in a straight line left both players facing a wall near base, using their
+        // skills at that range. Targets, chases and skills now stay local.
+        constexpr float kChaseRange = 6000.f, kSkillRange = 2000.f;
+        constexpr float kFollowFriendUnits = 500.f;   // stay this close to the friendly bot we follow
+        constexpr float kStuckCheckS = 4.f, kStuckMoveUnits = 150.f, kWanderAfterStuckS = 6.f;
+        float g_wanderFor = 0.f, g_chaseCheckS = 0.f;
+        float g_chaseFrom[2] = { 0, 0 };
         // Reach: how far this hero's attacks actually hurt. Starts unlimited; shrinks when firing at a
         // visible target does no damage for kNoDamageS. Kept for the process (the hero does not change).
         constexpr float kNoDamageS = 2.5f, kMinReach = 200.f;
@@ -92,6 +104,9 @@ namespace Combat {
         void Census(APoplarPlayerController* pc) {
             g_enemies.clear();
             g_censusPawns = g_censusLive = 0;
+            g_friend = 0;
+            g_friendDist = 1e12f;
+            g_friendKinds[0] = g_friendKinds[1] = g_friendKinds[2] = 0;
             APawn* me = pc->Pawn;
             if (Gone(me) || !me->IsA(APoplarPawn::StaticClass())) return;
             APoplarPawn* mePop = reinterpret_cast<APoplarPawn*>(me);
@@ -105,7 +120,21 @@ namespace Combat {
                 if (p == me || !PawnUtils::LivePawnInWorld(p)) continue;
                 if (p->GetHealth() <= 0.f) continue;
                 g_censusLive++;
-                if (!mePop->IsEnemy(p)) continue;
+                if (!mePop->IsEnemy(p)) {
+                    // A friendly bot hero: the game's own AI walks it along the lanes to the fight.
+                    std::string kind = PawnUtils::KindOf(p);
+                    g_friendKinds[kind == "bot" ? 0 : kind == "player" ? 1 : 2]++;
+                    if (kind == "bot") {
+                        float fx = p->Location.X - me->Location.X, fy = p->Location.Y - me->Location.Y;
+                        float d = std::sqrt(fx * fx + fy * fy);
+                        if (d < g_friendDist) {
+                            g_friendDist = d;
+                            g_friend = reinterpret_cast<uintptr_t>(p);
+                            g_friendLoc[0] = p->Location.X; g_friendLoc[1] = p->Location.Y; g_friendLoc[2] = p->Location.Z;
+                        }
+                    }
+                    continue;
+                }
                 FVector aim = AimPoint(p);
                 float dx = aim.X - eye.X, dy = aim.Y - eye.Y, dz = aim.Z - eye.Z;
                 float flat = std::sqrt(dx * dx + dy * dy);
@@ -166,7 +195,7 @@ namespace Combat {
             g_target = 0; g_targetUnseenS = 0.f;
             float best = 1e12f;
             for (const Enemy& e : g_enemies) {
-                if (!e.visible) continue;
+                if (!e.visible || e.distance > kChaseRange) continue;
                 float score = e.distance * (e.kind == "player" ? g_tuning.playerWeight : 1.f);
                 if (score < best) { best = score; g_target = e.id; }
             }
@@ -261,6 +290,22 @@ namespace Combat {
             }
         }
 
+        // Hunt: when the brain has been trying to walk for kStuckCheckS and moved less than
+        // kStuckMoveUnits, hand movement to the autopilot's wander for kWanderAfterStuckS.
+        void CheckChaseProgress(float dt) {
+            bool walking = g_axes.valid && (g_axes.forward != 0.f || g_axes.strafe != 0.f);
+            if (!walking) { g_chaseCheckS = 0.f; g_chaseFrom[0] = g_myLoc[0]; g_chaseFrom[1] = g_myLoc[1]; return; }
+            g_chaseCheckS += dt;
+            if (g_chaseCheckS < kStuckCheckS) return;
+            float dx = g_myLoc[0] - g_chaseFrom[0], dy = g_myLoc[1] - g_chaseFrom[1];
+            if (std::sqrt(dx * dx + dy * dy) < kStuckMoveUnits) {
+                g_wanderFor = kWanderAfterStuckS;
+                std::printf("[COMBAT] chase stuck; wandering for %.0f s\n", kWanderAfterStuckS);
+            }
+            g_chaseCheckS = 0.f;
+            g_chaseFrom[0] = g_myLoc[0]; g_chaseFrom[1] = g_myLoc[1];
+        }
+
         bool ParseMode(const std::string& s, Mode& m) {
             if (s == "hunt") m = Mode::Hunt; else if (s == "hold") m = Mode::Hold;
             else if (s == "goto") m = Mode::Goto; else if (s == "follow") m = Mode::Follow;
@@ -299,7 +344,7 @@ namespace Combat {
 
         void UseSkills(float dt, APoplarPlayerController* pc, const Enemy* t) {
             g_sinceSkill += dt;
-            if (!g_order.skills || !t || !t->visible || g_sinceSkill < 2.f) return;
+            if (!g_order.skills || !t || !t->visible || t->distance > kSkillRange || g_sinceSkill < 2.f) return;
             int nearCount = 0;
             for (const Enemy& e : g_enemies) if (e.distance < 1500.f) nearCount++;
             const EActionSkillSlot slots[3] = { EActionSkillSlot::ASS_SlotOne, EActionSkillSlot::ASS_SlotTwo, EActionSkillSlot::ASS_SlotThree };
@@ -369,7 +414,12 @@ namespace Combat {
 
         switch (g_mode) {
         case Mode::Hunt:
-            if (t) {
+            if (g_wanderFor > 0.f) {
+                // A straight-line chase got stuck: let the autopilot wander (and its unstick turn)
+                // move us for a while, still shooting at anything in sight.
+                g_wanderFor -= dt;
+                g_axes.valid = false;
+            } else if (t) {
                 WalkToward(t->loc, 1.f, engageRange);
                 g_untilStrafeFlip -= dt;
                 if (g_untilStrafeFlip <= 0.f) {
@@ -377,14 +427,21 @@ namespace Combat {
                     g_untilStrafeFlip = std::uniform_real_distribution<float>(1.5f, 3.f)(g_rng);
                 }
                 if (t->distance <= engageRange) g_axes.strafe = g_strafeSign * 0.7f;
-            } else if (!g_enemies.empty()) {
-                // Nothing in sight but the census knows where enemies are: head for the nearest
-                // (straight line; the autopilot's stuck check still jumps over low walls).
+            } else if (!g_enemies.empty() && g_enemies[0].distance < kChaseRange) {
+                // Nothing in sight but the census knows an enemy nearby: head for it (straight line).
                 WalkToward(g_enemies[0].loc, 1.f, 0.f);
                 TurnToward(g_enemies[0].loc, dt);
+            } else if (g_friend) {
+                // The fight is far away: tag along with the nearest friendly bot hero, whose AI
+                // paths along the lanes (live Meltdown: straight lines ended against walls).
+                if (g_friendDist > kFollowFriendUnits) {
+                    WalkToward(g_friendLoc, 1.f, kFollowFriendUnits);
+                    TurnToward(g_friendLoc, dt);
+                }
             } else {
-                g_axes.valid = false;   // no enemy known: the autopilot's wander moves us
+                g_axes.valid = false;   // nothing near and no bot to follow: the autopilot wanders
             }
+            CheckChaseProgress(dt);
             break;
         case Mode::Hold:
             break;
@@ -495,7 +552,11 @@ namespace Combat {
         }
         j["enemies"] = arr;
         j["n_enemies"] = g_enemies.size();
-        j["census"] = { {"pawns", g_censusPawns}, {"live_others", g_censusLive} };
+        j["census"] = { {"pawns", g_censusPawns}, {"live_others", g_censusLive},
+                        {"following", g_friend ? nlohmann::json(HexId(g_friend)) : nlohmann::json(nullptr)},
+                        {"friend_distance", g_friend ? nlohmann::json(g_friendDist) : nlohmann::json(nullptr)},
+                        {"friendly_bots", g_friendKinds[0]}, {"friendly_players", g_friendKinds[1]},
+                        {"friendly_other", g_friendKinds[2]} };
         j["stats"] = StatsJson();
         return j.dump();
     }
