@@ -47,6 +47,7 @@ namespace LaunchOptions {
             else if (key == L"-rbdebugport") { if (ToInt(val, 1024, 65535, n)) o.debugPort = n; else o.errors.push_back(a); }
             else if (key == L"-rbrundir" && !val.empty()) o.runDir = val;
             else if (key == L"-rbautopilot") o.autopilot = true;
+            else if (key == L"-rbcombat") o.combat = true;
             else if (key == L"-rbjoin" && !val.empty()) o.join = val;
             else if (key == L"-rbsolomap" && !val.empty()) o.soloMap = val;
             else if (key == L"-rbservermap" && !val.empty()) o.serverMap = val;

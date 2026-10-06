@@ -1,4 +1,5 @@
 #include "Autopilot.hpp"
+#include "Combat.hpp"
 #include "Constants.hpp"
 #include "Engine.hpp"
 #include "Globals.hpp"
@@ -169,6 +170,7 @@ namespace Autopilot {
 
         void PlayTick(float dt, APoplarPlayerController* pc) {
             if (!pc->Pawn) {
+                Combat::OnNoPawn();
                 g_hadPawn = false;
                 g_firing = false;
                 g_deadTimer += dt;
@@ -177,6 +179,7 @@ namespace Autopilot {
             }
             g_deadTimer = 0.f;
             if (!g_hadPawn) { g_hadPawn = true; ResetStuck(pc); }   // entering play or respawned
+            if (Combat::Enabled()) Combat::Tick(dt, pc);
 
             g_untilNewPlan -= dt;
             if (g_untilNewPlan <= 0.f) {

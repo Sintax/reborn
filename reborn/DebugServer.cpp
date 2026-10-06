@@ -15,8 +15,7 @@ namespace DebugServer {
         std::thread g_thread;
         std::mutex g_mutex;
         std::queue<std::packaged_task<std::string()>> g_queue;
-        StateFn g_state;
-        ExecFn g_exec;
+        Routes g_routes;
         constexpr auto kWait = std::chrono::seconds(3);
 
         // Game objects may only be touched on the game thread: queue the work and wait for Pump().
@@ -50,21 +49,49 @@ namespace DebugServer {
             }
             res.set_content(out, type);
         }
+
+        // Like Answer, but a JSON body of the form {"error":"...","status":NNN} sets the HTTP status.
+        void AnswerJson(httplib::Response& res, std::function<std::string()> fn) {
+            std::string out;
+            try {
+                if (!RunOnGameThread(std::move(fn), out)) return Unresponsive(res);
+            }
+            catch (const std::exception& e) {
+                res.status = 500;
+                res.set_content(std::string("{\"error\":\"") + e.what() + "\"}", "application/json");
+                return;
+            }
+            if (out.rfind("{\"error\"", 0) == 0) {
+                size_t at = out.find("\"status\":");
+                res.status = at == std::string::npos ? 400 : std::atoi(out.c_str() + at + 9);
+            }
+            res.set_content(out, "application/json");
+        }
     }
 
-    bool Start(int port, StateFn state, ExecFn exec) {
-        g_state = std::move(state);
-        g_exec = std::move(exec);
+    bool Start(int port, const Routes& routes) {
+        g_routes = routes;
         g_server = std::make_unique<httplib::Server>();
         g_server->Get("/ping", [](const httplib::Request&, httplib::Response& res) {
             res.set_content("pong", "text/plain");
         });
         g_server->Get("/state", [](const httplib::Request&, httplib::Response& res) {
-            Answer(res, g_state, "application/json");
+            Answer(res, g_routes.state, "application/json");
         });
         g_server->Post("/exec", [](const httplib::Request& req, httplib::Response& res) {
             std::string cmd = req.body;
-            Answer(res, [cmd] { return g_exec(cmd); }, "text/plain");
+            Answer(res, [cmd] { return g_routes.exec(cmd); }, "text/plain");
+        });
+        g_server->Get("/combat", [](const httplib::Request&, httplib::Response& res) {
+            AnswerJson(res, [] { return g_routes.combat(""); });
+        });
+        g_server->Post("/order", [](const httplib::Request& req, httplib::Response& res) {
+            std::string body = req.body;
+            AnswerJson(res, [body] { return g_routes.order(body); });
+        });
+        g_server->Post("/act", [](const httplib::Request& req, httplib::Response& res) {
+            std::string body = req.body;
+            AnswerJson(res, [body] { return g_routes.act(body); });
         });
         g_server->Get("/log", [](const httplib::Request&, httplib::Response& res) {
             std::string s;

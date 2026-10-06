@@ -12,6 +12,7 @@
 #include "httplib.h"
 #include "LaunchOptions.hpp"
 #include "Diagnostics.hpp"
+#include "Combat.hpp"
 #include "DebugServer.hpp"
 #include "GameState.hpp"
 
@@ -119,7 +120,11 @@ void MainThread() {
             std::printf("[LAUNCH] single-instance mutex is %ls (rename hook %s, already-running guard %s)\n",
                         g_instanceMutex.c_str(), g_createMutexW ? "hooked" : "FAILED",
                         g_alreadyRunningGuard ? "hooked" : "FAILED");
-        if (opt.debugPort) DebugServer::Start(opt.debugPort, GameState::SnapshotJson, GameState::Exec);
+        if (opt.debugPort) DebugServer::Start(opt.debugPort, DebugServer::Routes{
+            GameState::SnapshotJson, GameState::Exec,
+            [](const std::string&) { return Combat::SnapshotJson(); },
+            [](const std::string&) { return std::string("{\"error\":\"not_implemented\",\"status\":501}"); },
+            [](const std::string&) { return std::string("{\"error\":\"not_implemented\",\"status\":501}"); } });
     }
     Init::Hooks();
 

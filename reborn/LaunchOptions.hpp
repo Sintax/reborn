@@ -8,6 +8,7 @@ namespace LaunchOptions {
         int debugPort = 0;            // 0 = no debug server
         std::wstring runDir;          // empty = Documents\RebornLogs\<instance>-<time>
         bool autopilot = false;
+        bool combat = false;          // client: autopilot fights (Combat.cpp) instead of wandering
         std::wstring join;            // client: "IP:PORT" to connect to
         std::wstring soloMap;         // solo: map to open
         std::wstring serverMap;       // server: travel URL, e.g. "Dojo_P" or "IceScort_P?SpawnBotsTeamA=4"

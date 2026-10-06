@@ -1,9 +1,11 @@
 #include "GameState.hpp"
 #include "Autopilot.hpp"
+#include "Combat.hpp"
 #include "Diagnostics.hpp"
 #include "Engine.hpp"
 #include "Globals.hpp"
 #include "LaunchOptions.hpp"
+#include "PawnUtils.hpp"
 #include "Utils.hpp"
 #include "json.hpp"
 #include <Windows.h>
@@ -25,7 +27,7 @@ namespace GameState {
             return full.substr(sp + 1, dot - sp - 1);
         }
 
-        bool IsDefault(UObject* o) { return o->GetFullName().find("Default__") != std::string::npos; }
+        using PawnUtils::IsDefault;
 
         nlohmann::json Loc(AActor* a) { return { a->Location.X, a->Location.Y, a->Location.Z }; }
 
@@ -54,14 +56,8 @@ namespace GameState {
         // [FLOOR] notes in Hooks.cpp: the game strips Mesh and the cylinder from pawn archetypes and
         // the skin puts them back). The collision guard gave it a cylinder, so it walked and the run
         // passed, but nobody could see it, not even its own player. These checks report it.
-        const uint64_t kPendingKill = 0x2000000000000000ull;
-
-        bool Gone(UObject* o) { return !o || (o->ObjectFlags & kPendingKill); }
-
-        // A live pawn in a level (not an archetype or class default, not being destroyed).
-        bool LivePawnInWorld(APawn* p) {
-            return !Gone(p) && !p->bDeleteMe && !p->bTearOff && p->Outer && p->Outer->IsA(ULevel::StaticClass());
-        }
+        using PawnUtils::Gone;
+        using PawnUtils::LivePawnInWorld;
 
         // What keeps the pawn's body from being drawn, or "" when nothing does. checkHidden also
         // counts a mesh component marked hidden; not used for the local player's own pawn, whose
@@ -77,13 +73,7 @@ namespace GameState {
             return "";
         }
 
-        std::string HeroOf(APawn* p) {
-            if (p->IsA(APoplarPawn::StaticClass())) {
-                UPoplarPlayerClassDefinition* def = reinterpret_cast<APoplarPawn*>(p)->PoplarPlayerClassDef;
-                if (!Gone(def)) return def->GetName();
-            }
-            return !Gone(p->ObjectArchetype) ? p->ObjectArchetype->GetName() : std::string("unknown");
-        }
+        using PawnUtils::HeroOf;
 
         // A human player's pawn: it has a PlayerReplicationInfo that is not a bot's. On a client the
         // other players' pawns have no Controller (it is not replicated to other clients), so the
@@ -197,6 +187,7 @@ namespace GameState {
             j["unique_id"] = uid.empty() ? nlohmann::json(nullptr) : nlohmann::json(uid);
             j["pawn_location"] = hasPawn ? Loc(pc->Pawn) : nlohmann::json(nullptr);
             j["pawn_health"] = hasPawn ? pc->Pawn->GetHealth() : 0.0f;
+            j["combat"] = { {"enabled", Combat::Enabled()}, {"stats", Combat::StatsJson()} };
 
             // Own body: pawn_visible false (with pawn_body_missing saying why), null with no pawn.
             APawn* own = hasPawn && LivePawnInWorld(pc->Pawn) ? pc->Pawn : nullptr;

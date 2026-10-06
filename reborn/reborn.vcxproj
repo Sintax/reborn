@@ -200,6 +200,7 @@
     <ClCompile Include="DebugServer.cpp" />
     <ClCompile Include="GameState.cpp" />
     <ClCompile Include="Autopilot.cpp" />
+    <ClCompile Include="Combat.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
