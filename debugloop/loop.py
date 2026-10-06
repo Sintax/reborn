@@ -1,4 +1,5 @@
 import argparse
+import json
 import subprocess
 import sys
 import traceback
@@ -195,6 +196,15 @@ def _prune_dumps(d, bug) -> None:
             dmp.unlink()
 
 
+def _run_warnings(run_dir: Path) -> list[str]:
+    """The run's combat warnings from its result.json; none when it is missing or unreadable."""
+    try:
+        w = json.loads((run_dir / "result.json").read_text(encoding="utf-8")).get("warnings", [])
+        return [str(x) for x in w] if isinstance(w, list) else []
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
 def _write_brief(d, st, bug, last_failure: str | None = None) -> None:
     """Written fresh each time, from the ledger: the run folder is the bug's latest failed run."""
     run_dir = d.runs_dir / bug.runs[-1]
@@ -212,6 +222,9 @@ def _write_brief(d, st, bug, last_failure: str | None = None) -> None:
                   "These files were already changed when this brief was written, probably left by "
                   "an earlier fixer. They are not part of HEAD. Check them before you build on them:", "",
                   *[f"- `{p}`" for p in leftovers[:20]], ""]
+    warnings = _run_warnings(run_dir)
+    if warnings:
+        lines += ["## Combat warnings from the failed run", "", *[f"- {w}" for w in warnings], ""]
     lines += [
         "## History", "", *[f"- {n}" for n in bug.notes], "",
         "## Rules", "",
@@ -417,6 +430,8 @@ def cmd_next(d: Deps) -> int:
     if r.outcome.kind != "pass" and not r.signature:
         return _harness_error(st, d, f"run {r.run_id} ended '{r.outcome.kind}' with no signature")
     st.harness_errors_in_row = 0
+    for w in getattr(r, "warnings", []):
+        print(f"WARNING {w}")
     if r.outcome.kind != "pass":
         dirty = _tracked_dirty(d)
         if dirty:

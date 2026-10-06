@@ -13,4 +13,4 @@ args = ["-rbservermap=Dojo_P"]
 [[process]]
 name = "c1"
 role = "client"
-args = ["-rbautopilot", "-rbcharacter=Rath"]
+args = ["-rbautopilot", "-rbcombat", "-rbcharacter=Rath"]

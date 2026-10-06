@@ -59,3 +59,14 @@ def test_smoke_limits_leave_room_past_the_startup_timeout():
     for s in scenario.load_all():
         if s.smoke:
             assert s.time_limit_s >= 270 > STARTUP_TIMEOUT_S, s.name
+
+
+def test_ladder_clients_fight():
+    """Steps 1-3 run with the combat brain, so the ladder tests shooting, dying and respawning.
+    Step 0 (solo load test) keeps the plain autopilot."""
+    for s in scenario.load_all():
+        for p in s.processes:
+            if p.role == "client":
+                assert "-rbcombat" in p.args, s.name
+            if p.role == "solo":
+                assert "-rbcombat" not in p.args, s.name

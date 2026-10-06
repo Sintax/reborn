@@ -339,3 +339,38 @@ def test_arrange_never_raises_for_missing_processes():
     from debugloop import screenshot
     screenshot.arrange({"server": 0, "c1": 999999})
     screenshot.arrange({})
+
+
+def _combat_sample(name, t, shots, damage, enabled=True):
+    from debugloop.outcome import Sample
+    return Sample(t, name, {"autopilot": "playing", "has_pawn": True, "combat": {
+        "enabled": enabled, "stats": {"shots": shots, "damage_taken": damage, "kills": 0, "deaths": 0}}}, 200, True)
+
+
+def test_combat_warnings_for_silent_players():
+    from debugloop.outcome import Sample
+    samples = [_combat_sample("c1", 650.0, 0, 0.0), _combat_sample("c2", 650.0, 40, 900.0),
+               Sample(650.0, "server", {"listening": True}, 200, True)]
+    assert run.combat_warnings(samples, elapsed_s=650.0) == ["c1: fired 0 shots in 10 min",
+                                                             "c1: took no damage in 10 min"]
+
+
+def test_combat_warnings_need_a_long_run():
+    assert run.combat_warnings([_combat_sample("c1", 300.0, 0, 0.0)], elapsed_s=300.0) == []
+
+
+def test_combat_warnings_skip_players_without_combat():
+    assert run.combat_warnings([_combat_sample("c1", 650.0, 0, 0.0, enabled=False)], 650.0) == []
+
+
+def test_combat_warnings_use_the_last_sample():
+    samples = [_combat_sample("c1", 100.0, 0, 0.0), _combat_sample("c1", 650.0, 12, 50.0)]
+    assert run.combat_warnings(samples, 650.0) == []
+
+
+def test_run_writes_combat_json(tmp_path):
+    r = run.run_scenario(scn(limit=3), FakeLauncher(), tmp_path, poll_s=0.5)
+    j = json.loads((r.run_dir / "combat.json").read_text())
+    assert j["c1"]["shots"] == 3
+    assert r.warnings == []
+    assert json.loads((r.run_dir / "result.json").read_text())["warnings"] == []

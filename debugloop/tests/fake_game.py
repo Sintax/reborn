@@ -47,7 +47,8 @@ def main():
             return {**who, "ticks": 5, "listening": True, "map": "Dojo_P", "connections": 9,
                     "player_locations": {}}
         return {**who, "ticks": 5, "has_pawn": True, "connected": True, "map": "Dojo_P",
-                "pawn_location": [0, 0, 0], "autopilot": "playing"}
+                "pawn_location": [0, 0, 0], "autopilot": "playing",
+                "combat": {"enabled": True, "stats": combat()["stats"]}}
 
     class H(BaseHTTPRequestHandler):
         def _json(self, obj, status=200):

@@ -8,7 +8,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +31,7 @@ class RunResult:
     run_dir: Path
     elapsed_s: float
     milestone: int = 0   # how far the join got (outcome.milestone); the loop's "got further" test
+    warnings: list[str] = field(default_factory=list)   # worth a look, not a failure (combat_warnings)
 
 
 def _get_state(port: int) -> tuple[dict | None, int | None]:
@@ -271,13 +272,46 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
         collect_game_dumps(run_dir, t0, config.GAME_LOGS_DIR)
 
     sig = signature.make(o, scn)
-    result = RunResult(run_id, scn.name, o, sig, run_dir, round(time.time() - t0, 1),
-                       milestone(samples))
+    elapsed = time.time() - t0
+    (run_dir / "combat.json").write_text(json.dumps(last_combat_stats(samples), indent=2))
+    result = RunResult(run_id, scn.name, o, sig, run_dir, round(elapsed, 1),
+                       milestone(samples), combat_warnings(samples, elapsed))
     (run_dir / "result.json").write_text(json.dumps(
         {**asdict(result), "run_dir": str(run_dir)}, indent=2, default=str))
     if o.kind == "pass":
         prune_dumps_for_pass(result)
     return result
+
+
+def _last_combat(samples) -> dict[str, dict]:
+    """Each process's last reported combat block (later samples win)."""
+    last: dict[str, dict] = {}
+    for s in samples:
+        if s.state and isinstance(s.state.get("combat"), dict):
+            last[s.name] = s.state["combat"]
+    return last
+
+
+def last_combat_stats(samples) -> dict[str, dict]:
+    return {name: c.get("stats", {}) for name, c in _last_combat(samples).items()}
+
+
+def combat_warnings(samples, elapsed_s: float, min_play_s: float = 600.0) -> list[str]:
+    """Players with the combat brain on that never fired or never got hit over a long run. Worth a
+    look (a broken weapon, a player stuck in a corner, damage that never replicates), not a failure."""
+    if elapsed_s < min_play_s:
+        return []
+    mins = int(elapsed_s // 60)
+    out = []
+    for name, c in _last_combat(samples).items():
+        if not c.get("enabled"):
+            continue
+        st = c.get("stats", {})
+        if not st.get("shots"):
+            out.append(f"{name}: fired 0 shots in {mins} min")
+        if not st.get("damage_taken"):
+            out.append(f"{name}: took no damage in {mins} min")
+    return out
 
 
 def collect_game_dumps(run_dir: Path, since: float, logs_dir: Path) -> list[Path]:

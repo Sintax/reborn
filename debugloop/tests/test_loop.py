@@ -770,3 +770,32 @@ def test_stop_play(tmp_path, capsys):
     d.play_stop = lambda: ["server", "c1"]
     assert loop.main(["stop-play"], d) == loop.OK
     assert "stopped: server, c1" in capsys.readouterr().out
+
+
+def test_next_prints_combat_warnings(tmp_path, capsys):
+    d = deps(tmp_path, [PASS])
+    inner = d.run
+
+    def run_with_warning(scn):
+        r = inner(scn)
+        r.warnings = ["c1: fired 0 shots in 12 min"]
+        return r
+
+    d.run = run_with_warning
+    assert loop.cmd_next(d) == loop.OK
+    assert "WARNING c1: fired 0 shots in 12 min" in capsys.readouterr().out
+
+
+def test_brief_lists_combat_warnings_of_the_failed_run(tmp_path):
+    d = deps(tmp_path, [("crash", "crash:0x5:x", "playing", 700.0)])
+    inner = d.run
+
+    def run_with_warning(scn):
+        r = inner(scn)
+        (r.run_dir / "result.json").write_text(json.dumps({"warnings": ["c2: took no damage in 11 min"]}))
+        return r
+
+    d.run = run_with_warning
+    assert loop.cmd_next(d) == loop.FIX_NEEDED
+    brief = (tmp_path / "state" / "brief.md").read_text()
+    assert "## Combat warnings from the failed run" in brief and "- c2: took no damage in 11 min" in brief
