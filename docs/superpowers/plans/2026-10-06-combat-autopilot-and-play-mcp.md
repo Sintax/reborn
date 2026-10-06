@@ -20,7 +20,7 @@
 - Nothing in Python may start or stop a game except `run.py` (runs) and `playsession.py` (play sessions). The MCP server never launches processes.
 - All HTTP is `127.0.0.1` only. Debug ports start at `config.FIRST_DEBUG_PORT` (18080).
 - The `-rbcombat` launch flag defaults to off, so scenarios that do not name it behave exactly as today.
-- Commit messages: imperative, prefixed `feat:`/`fix:`/`test:`/`docs:`, ending with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Commit messages: imperative, prefixed `feat:`/`fix:`/`test:`/`docs:`, ending with the Co-Authored-By line for the model doing the work (currently `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`).
 - Never launch the game by hand during a task unless the task says "live check"; the loop's `active.json` / `play.json` must be the only owners of game processes.
 
 ## Review Focus
@@ -429,9 +429,10 @@ Add to the anonymous namespace:
 ```cpp
         Tuning g_tuning;
 
-        // How many rotator units one unit of aTurn / aLookUp moves the view in one frame. Measured
-        // on the first ticks with a pawn: write 1.0 for a frame, read the change. The sign comes
-        // out of the measurement too (the engine may invert look-up).
+        // How many rotator units per second one unit of aTurn / aLookUp turns the view. Measured on
+        // the first ticks with a pawn: write the probe for one frame, read the change, divide by that
+        // frame's dt (PlayerInput scales the axes by dt, so a per-frame figure would drift with the
+        // frame rate). The sign comes out of the measurement too (the engine may invert look-up).
         float g_yawPerInput = 0.f, g_pitchPerInput = 0.f;
         int g_calibStep = 0;           // 0 idle, 1 yaw sent, 2 pitch sent, 3 done
         int g_calibYaw0 = 0, g_calibPitch0 = 0;
@@ -459,7 +460,7 @@ Add to the anonymous namespace:
         }
 
         // Returns true while still calibrating (axes are the probe, aim must not run).
-        bool Calibrate(APoplarPlayerController* pc) {
+        bool Calibrate(APoplarPlayerController* pc, float dt) {
             if (g_calibrated) return false;
             switch (g_calibStep) {
             case 0:
@@ -470,7 +471,7 @@ Add to the anonymous namespace:
             case 1: {
                 int d = WrapUnits(pc->Rotation.Yaw - g_calibYaw0);
                 if (std::abs(d) < 2 && g_calibProbe < 100.f) { g_calibProbe *= 10.f; g_calibStep = 0; return true; }
-                g_yawPerInput = d / g_calibProbe;
+                g_yawPerInput = d / (g_calibProbe * dt);
                 g_calibPitch0 = pc->Rotation.Pitch;
                 g_axes = Axes{}; g_axes.forward = 0.f; g_axes.lookUp = g_calibProbe; g_axes.valid = true;
                 g_calibStep = 2;
@@ -478,10 +479,10 @@ Add to the anonymous namespace:
             }
             case 2: {
                 int d = WrapUnits(pc->Rotation.Pitch - g_calibPitch0);
-                g_pitchPerInput = d != 0 ? d / g_calibProbe : g_yawPerInput;
+                g_pitchPerInput = d != 0 ? d / (g_calibProbe * dt) : g_yawPerInput;
                 g_calibrated = true;
-                if (std::abs(g_yawPerInput) < 0.01f) g_yawPerInput = 100.f;   // never divide by zero
-                std::printf("[COMBAT] calibrated: yaw %.2f units per input, pitch %.2f (probe %.0f)\n",
+                if (std::abs(g_yawPerInput) < 1.f) g_yawPerInput = 6000.f;   // never divide by zero
+                std::printf("[COMBAT] calibrated: yaw %.0f units/s per input, pitch %.0f (probe %.0f)\n",
                             g_yawPerInput, g_pitchPerInput, g_calibProbe);
                 return false;
             }
@@ -507,15 +508,17 @@ Add to the anonymous namespace:
                                       (unsigned long long)g_target, FindEnemy(g_target)->hero.c_str(), best);
         }
 
-        // Turn/look toward the target: one-frame deadbeat step, capped at maxTurnDegPerTick.
-        void Aim(const Enemy& e) {
+        // Turn/look toward the target: one-frame deadbeat step (this frame's dt as the estimate of
+        // the next), capped at maxTurnDegPerTick.
+        void Aim(const Enemy& e, float dt) {
             float maxUnits = g_tuning.maxTurnDegPerTick * kUnitsPerDeg;
             float yawErr = e.bearingDeg * kUnitsPerDeg;
             float pitchErr = e.pitchDeg * kUnitsPerDeg - (float)WrapUnits(g_myPitch);
             yawErr = std::max(-maxUnits, std::min(maxUnits, yawErr));
             pitchErr = std::max(-maxUnits, std::min(maxUnits, pitchErr));
-            g_axes.turn = yawErr / g_yawPerInput;
-            g_axes.lookUp = pitchErr / g_pitchPerInput;
+            float step = std::max(dt, 0.005f);
+            g_axes.turn = yawErr / (g_yawPerInput * step);
+            g_axes.lookUp = pitchErr / (g_pitchPerInput * step);
             g_aimOn = std::fabs(e.bearingDeg) < g_tuning.aimOnDeg &&
                       std::fabs(e.pitchDeg - WrapUnits(g_myPitch) / kUnitsPerDeg) < g_tuning.aimOnDeg;
         }
@@ -530,7 +533,7 @@ Replace `Combat::Tick` with:
         g_health = me->GetHealth(); g_maxHealth = me->GetMaxHealth();
         g_hero = PawnUtils::HeroOf(me);
         TrackStats(dt, pc);
-        if (Calibrate(pc)) return;
+        if (Calibrate(pc, dt)) return;
         g_sinceCensus += dt;
         if (g_sinceCensus >= kCensusEvery) { g_sinceCensus = 0.f; Census(pc); }
 
@@ -538,7 +541,7 @@ Replace `Combat::Tick` with:
         PickTarget(dt, 0);
         const Enemy* t = FindEnemy(g_target);
         g_aimOn = false;
-        if (t) { Aim(*t); g_stats.withTargetS += dt; }
+        if (t) { Aim(*t, dt); g_stats.withTargetS += dt; }
         bool fire = t && g_aimOn && t->visible && t->distance < g_tuning.fireRange;
         SetFiring(fire);
         if (fire) g_stats.firingS += dt;
@@ -577,7 +580,7 @@ In `PlayTick`, when `Combat::Enabled()`, skip the wander's own fire cycle (the `
 
 - [ ] **Step 5: Live check (aim)**
 
-Same s0 smoke with `-rbcombat` as Task 1 Step 9. Watch `debugloop/runs/<run>/solo.log` for `[COMBAT] calibrated` (yaw units per input must be non-zero and not the 100 fallback; if it is the fallback, the probe was not consumed — check that `WriteAxes` runs after `Combat::Tick` in the same tick) and `[COMBAT] target`. Poll `/combat` every 2 s with:
+Same s0 smoke with `-rbcombat` as Task 1 Step 9. Watch `debugloop/runs/<run>/solo.log` for `[COMBAT] calibrated` (yaw units per second per input must be non-zero and not the 6000 fallback; if it is the fallback, the probe was not consumed — check that `WriteAxes` runs after `Combat::Tick` in the same tick) and `[COMBAT] target`. Poll `/combat` every 2 s with:
 ```bash
 for i in $(seq 1 10); do curl -s http://127.0.0.1:18080/combat | python -c "import json,sys; j=json.load(sys.stdin); t=j['target']; e=[x for x in j['enemies'] if x['id']==t]; print(j['calibrated'], j['aim_on'], j['firing'], e[0]['bearing'] if e else None, e[0]['pitch'] if e else None)"; sleep 2; done
 ```
@@ -642,12 +645,12 @@ Add to the anonymous namespace:
             g_axes.strafe = sign * (dx * rx + dy * ry) / dist;
         }
 
-        void TurnToward(const float* pt) {   // when there is no target: face the walking goal
+        void TurnToward(const float* pt, float dt) {   // when there is no target: face the walking goal
             float dx = pt[0] - g_myLoc[0], dy = pt[1] - g_myLoc[1];
             int yawTo = (int)std::lround(std::atan2(dy, dx) * 180.f / kPi * kUnitsPerDeg);
             float err = (float)WrapUnits(yawTo - g_myYaw);
             float maxUnits = g_tuning.maxTurnDegPerTick * kUnitsPerDeg;
-            g_axes.turn = std::max(-maxUnits, std::min(maxUnits, err)) / g_yawPerInput;
+            g_axes.turn = std::max(-maxUnits, std::min(maxUnits, err)) / (g_yawPerInput * std::max(dt, 0.005f));
         }
 
         void UseSkills(float dt, APoplarPlayerController* pc, const Enemy* t) {
@@ -677,7 +680,7 @@ Replace the body of `Tick` after the census with:
         PickTarget(dt, g_order.target);
         const Enemy* t = FindEnemy(g_target);
         g_aimOn = false;
-        if (t) { Aim(*t); g_stats.withTargetS += dt; }
+        if (t) { Aim(*t, dt); g_stats.withTargetS += dt; }
 
         // Auto-retreat: low health with an enemy close, in hunt only.
         if (g_mode == Mode::Hunt && g_maxHealth > 0.f && g_health < g_maxHealth * g_tuning.retreatHealthFrac &&
@@ -701,7 +704,7 @@ Replace the body of `Tick` after the census with:
         case Mode::Goto:
             if (!g_order.hasPoint) { SetMode(Mode::Hold); break; }
             WalkToward(g_order.point, 1.f, 150.f);
-            if (!t) TurnToward(g_order.point);
+            if (!t) TurnToward(g_order.point, dt);
             if (g_axes.forward == 0.f && g_axes.strafe == 0.f) SetMode(Mode::Hold);
             break;
         case Mode::Follow: {
@@ -709,7 +712,7 @@ Replace the body of `Tick` after the census with:
             if (!f) { SetMode(Mode::Hold); break; }
             if (f->distance > 1200.f) WalkToward(f->loc, 1.f, 1200.f);
             else if (f->distance < 600.f) WalkToward(f->loc, -1.f, 0.f);
-            if (!t) TurnToward(f->loc);
+            if (!t) TurnToward(f->loc, dt);
             break;
         }
         case Mode::Retreat:
