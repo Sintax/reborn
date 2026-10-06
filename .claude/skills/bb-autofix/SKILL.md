@@ -22,6 +22,17 @@ Run `python -m debugloop.loop next` in the background with a 110-minute timeout,
 | 10 | bug found | Go to section 2. |
 | any other exit code | unexpected | Push-notify the last 20 lines of the output and stop the loop. |
 
+## 1b. Live reproduction (optional, combat bugs only)
+
+The ladder's players fight with the combat brain (`-rbcombat`). When the brief's signature, triage or "Combat warnings" mention damage, weapon, skill, death, respawn or firing, and this is the bug's first attempt, you may reproduce it by hand before dispatching the fixer:
+
+1. `python -m debugloop.loop play <scenario from the brief>` (background, 15-minute timeout). It builds, deploys, starts the games and prints each player's name and port.
+2. Use the `battleborn-play` tools (`bb_list`, `bb_situation`, `bb_order`, `bb_act`, `bb_log`; `bb_look` only when the text leaves a doubt, pictures cost far more) for at most 10 minutes to steer the players into the situation, for example `bb_order c1 hunt` and `bb_order c2 follow` with c1's id. Without the MCP tools, `python -m debugloop.play ...` does the same.
+3. Append what you saw, with the exact log lines, under a `## Live reproduction` heading at the end of `debugloop/state/brief.md`.
+4. `python -m debugloop.loop stop-play`. `next` and `verify` refuse to run while a play session is up.
+
+Skip this for startup, join or map-load failures; the loop's own run already shows those.
+
 ## 2. Fix (bb-fixer subagent: Opus, extra-high effort)
 
 Dispatch one subagent with the Agent tool, `subagent_type: "bb-fixer"`, foreground, with no `model` override. Its rules live in `.claude/agents/bb-fixer.md`.

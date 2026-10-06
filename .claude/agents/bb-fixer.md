@@ -27,6 +27,7 @@ Tools:
 - Ghidra 12.1.4 headless: `%LOCALAPPDATA%\Programs\Ghidra\ghidra_12.1.4_PUBLIC`. Java 21 is installed.
 - cdb: `(Get-AppxPackage *WinDbg*).InstallLocation\amd64\cdb.exe`.
 - SDK headers: `reborn/BB/SDK_HEADERS`.
-- Notes: `docs/notes/`.
+- Notes: `docs/notes/` (combat brain findings: `docs/notes/combat-census-notes.md`).
+- Live game tools, read-only for you: `python -m debugloop.play list|situation|combat|log <name>` reads a play session the controller started (if the brief says one is running). Never run `loop play`, `loop stop-play`, `loop next` or `loop verify`, and never start or stop a game.
 
 Reply with 3 lines: hypothesis, change, confidence.
