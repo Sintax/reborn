@@ -20,11 +20,13 @@ namespace Combat {
         constexpr float kUnitsPerDeg = 65536.f / 360.f;   // UE3 rotator units
         constexpr float kCensusEvery = 0.25f;
         constexpr int kMaxEnemiesInJson = 12;
+        constexpr float kSeenWithinS = 0.3f;    // drawn this recently counts as visible
 
         bool g_enabled = false;
         bool g_enabledInit = false;
         float g_sinceCensus = 1e9f;
         std::vector<Enemy> g_enemies;      // nearest first, refreshed every kCensusEvery
+        int g_censusPawns = 0, g_censusLive = 0;   // last census: pawns walked, live ones (diagnostics)
         APoplarPlayerController* g_pc = nullptr;
         float g_myLoc[3] = { 0, 0, 0 };
         int g_myYaw = 0, g_myPitch = 0;
@@ -45,17 +47,27 @@ namespace Combat {
         float g_strafeSign = 1.f, g_untilStrafeFlip = 0.f;
         float g_sinceSkill = 0.f;
         float g_burstLeft = 0.f;            // fire_burst: seconds of forced fire remaining
+        // Reach: how far this hero's attacks actually hurt. Starts unlimited; shrinks when firing at a
+        // visible target does no damage for kNoDamageS. Kept for the process (the hero does not change).
+        constexpr float kNoDamageS = 2.5f, kMinReach = 200.f;
+        float g_reach = 1e9f;
+        float g_noDamageS = 0.f, g_reachTargetHealth = -1.f;
+        uintptr_t g_reachTarget = 0;
         std::mt19937 g_rng{ 7u };
 
-        // How many rotator units per second one unit of aTurn / aLookUp turns the view. Measured on
-        // the first ticks with a pawn: write the probe for one frame, read the change, divide by that
-        // frame's dt (PlayerInput scales the axes by dt, so a per-frame figure would drift with the
-        // frame rate). The sign comes out of the measurement too (the engine may invert look-up).
-        float g_yawPerInput = 0.f, g_pitchPerInput = 0.f;
-        int g_calibStep = 0;           // 0 send yaw probe, 1 read yaw + send pitch probe, 2 read pitch
-        int g_calibYaw0 = 0, g_calibPitch0 = 0;
-        float g_calibProbe = 1.f;
-        bool g_calibrated = false;
+        // The view turns through aTurn/aLookUp, like a player's stick. Writing Rotation (directly or
+        // with ClientSetRotation) does not stick: live (20261006-054516) the controller's yaw was back
+        // at the same stored value every tick. The input's speed is not a fixed number either (two
+        // runs measured 15285 and 22187 rotator units per second at input 1; look-up is inverted,
+        // about -30800), so the rate is learned while turning: each tick compares the view's change
+        // with the input written the tick before. Steering is proportional to the live error, so a
+        // rate off by 2x only makes it a little faster or slower, never unstable.
+        constexpr float kAimGainPerS = 8.f;           // close 1/8 of the error per 1/8 s
+        constexpr int kMaxPitchUnits = 16000;         // ~88 degrees up or down
+        float g_yawRate = 18000.f, g_pitchRate = -30000.f;   // learned units/s at input 1
+        float g_prevTurnIn = 0.f, g_prevLookIn = 0.f; // input written last tick
+        int g_prevYaw = 0, g_prevPitch = 0;
+        bool g_havePrev = false;
 
         uintptr_t g_target = 0;
         float g_targetUnseenS = 0.f;
@@ -79,6 +91,7 @@ namespace Combat {
 
         void Census(APoplarPlayerController* pc) {
             g_enemies.clear();
+            g_censusPawns = g_censusLive = 0;
             APawn* me = pc->Pawn;
             if (Gone(me) || !me->IsA(APoplarPawn::StaticClass())) return;
             APoplarPawn* mePop = reinterpret_cast<APoplarPawn*>(me);
@@ -88,8 +101,10 @@ namespace Combat {
             int viewYaw = pc->Rotation.Yaw;
             int guard = 0;
             for (APawn* p = wi->PawnList; p && guard < 2000; p = p->NextPawn, guard++) {
+                g_censusPawns++;
                 if (p == me || !PawnUtils::LivePawnInWorld(p)) continue;
                 if (p->GetHealth() <= 0.f) continue;
+                g_censusLive++;
                 if (!mePop->IsEnemy(p)) continue;
                 FVector aim = AimPoint(p);
                 float dx = aim.X - eye.X, dy = aim.Y - eye.Y, dz = aim.Z - eye.Z;
@@ -103,7 +118,9 @@ namespace Combat {
                 int yawTo = (int)std::lround(std::atan2(dy, dx) * 180.f / kPi * kUnitsPerDeg);
                 e.bearingDeg = WrapUnits(yawTo - viewYaw) / kUnitsPerDeg;
                 e.pitchDeg = std::atan2(dz, flat) * 180.f / kPi;
-                e.visible = me->FastTrace(aim, eye, Vec(0, 0, 0), false);
+                // "Can I see it" = the renderer drew it in the last moment. FastTrace through
+                // ProcessEvent said false for minions in plain view (live run 20261006-042128).
+                e.visible = wi->TimeSeconds - p->LastRenderTime < kSeenWithinS;
                 e.health = p->GetHealth();
                 e.team = p->GetTeamNum();
                 g_enemies.push_back(e);
@@ -126,44 +143,17 @@ namespace Combat {
             return nullptr;
         }
 
+        // Through the controller's own StartFire/StopFire: the console's "StartFire" did nothing
+        // (live 20261006-055622: Oscar Mike's magazine stayed at 30 through 13 "shots"). Battleborn's
+        // buttons go through its own input package (GD_Input_Poplar), not console exec bindings.
         void SetFiring(bool on) {
             if (on == g_firing) return;
             g_firing = on;
-            Exec(on ? L"StartFire" : L"StopFire");
+            APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+            if (pc && !Gone(pc->Pawn)) {
+                if (on) pc->StartFire(0); else pc->StopFire(0);
+            }
             if (on) g_stats.shots++;
-        }
-
-        // Returns true while still calibrating (the axes are the probe; aim must not run).
-        bool Calibrate(APoplarPlayerController* pc, float dt) {
-            if (g_calibrated) return false;
-            switch (g_calibStep) {
-            case 0:
-                g_calibYaw0 = pc->Rotation.Yaw;
-                g_axes = Axes{}; g_axes.forward = 0.f; g_axes.turn = g_calibProbe; g_axes.valid = true;
-                g_calibStep = 1;
-                return true;
-            case 1: {
-                int d = WrapUnits(pc->Rotation.Yaw - g_calibYaw0);
-                if (std::abs(d) < 2 && g_calibProbe < 100.f) { g_calibProbe *= 10.f; g_calibStep = 0; return true; }
-                g_yawPerInput = d / (g_calibProbe * (std::max)(dt, 0.001f));
-                g_calibPitch0 = pc->Rotation.Pitch;
-                g_axes = Axes{}; g_axes.forward = 0.f; g_axes.lookUp = g_calibProbe; g_axes.valid = true;
-                g_calibStep = 2;
-                return true;
-            }
-            case 2: {
-                int d = WrapUnits(pc->Rotation.Pitch - g_calibPitch0);
-                g_pitchPerInput = d != 0 ? d / (g_calibProbe * (std::max)(dt, 0.001f)) : g_yawPerInput;
-                g_calibrated = true;
-                if (std::abs(g_yawPerInput) < 1.f) g_yawPerInput = 6000.f;     // never divide by zero
-                if (std::abs(g_pitchPerInput) < 1.f) g_pitchPerInput = g_yawPerInput;
-                std::printf("[COMBAT] calibrated: yaw %.0f units/s per input, pitch %.0f (probe %.0f, dt %.4f)\n",
-                            g_yawPerInput, g_pitchPerInput, g_calibProbe, dt);
-                return false;
-            }
-            default:
-                return false;
-            }
         }
 
         // Choose/keep the target. The order's explicit target wins while it is alive and known.
@@ -189,17 +179,86 @@ namespace Combat {
 
         float Clamp(float v, float lim) { return (std::max)(-lim, (std::min)(lim, v)); }
 
-        // Turn/look toward the target: one-frame deadbeat step (this frame's dt as the estimate of
-        // the next), capped at maxTurnDegPerTick.
+        // A live pawn by id, re-found in the world's pawn list so a pawn freed since the census is
+        // never read. Null when it is gone.
+        APawn* LivePawn(uintptr_t id) {
+            if (!id || !g_pc || Gone(g_pc->WorldInfo)) return nullptr;
+            int guard = 0;
+            for (APawn* p = g_pc->WorldInfo->PawnList; p && guard < 2000; p = p->NextPawn, guard++)
+                if (reinterpret_cast<uintptr_t>(p) == id) return PawnUtils::LivePawnInWorld(p) ? p : nullptr;
+            return nullptr;
+        }
+
+        // Learn the input's turn rate from what last tick's input did (call once per tick, before
+        // writing new input).
+        void LearnRates(APoplarPlayerController* pc, float dt) {
+            int yaw = pc->Rotation.Yaw, pitch = WrapUnits(pc->Rotation.Pitch);
+            if (g_havePrev && dt > 0.f) {
+                float dYaw = (float)WrapUnits(yaw - g_prevYaw), dPitch = (float)(pitch - g_prevPitch);
+                if (std::fabs(g_prevTurnIn) > 0.05f) {
+                    float r = dYaw / (g_prevTurnIn * dt);
+                    if (r > 3000.f && r < 120000.f) g_yawRate += 0.1f * (r - g_yawRate);
+                }
+                if (std::fabs(g_prevLookIn) > 0.05f && std::abs(pitch) < kMaxPitchUnits - 500) {
+                    float r = dPitch / (g_prevLookIn * dt);
+                    if (std::fabs(r) > 3000.f && std::fabs(r) < 120000.f && (r > 0) == (g_pitchRate > 0))
+                        g_pitchRate += 0.1f * (r - g_pitchRate);
+                }
+            }
+            g_prevYaw = yaw; g_prevPitch = pitch; g_havePrev = true;
+            g_prevTurnIn = g_prevLookIn = 0.f;
+        }
+
+        // Steer the view toward a world point. Returns the live yaw and pitch error in degrees.
+        void TurnViewTo(const FVector& from, const FVector& to, float dt, float& yawErrDeg, float& pitchErrDeg) {
+            float dx = to.X - from.X, dy = to.Y - from.Y, dz = to.Z - from.Z;
+            float flat = std::sqrt(dx * dx + dy * dy);
+            int yawTo = (int)std::lround(std::atan2(dy, dx) * 180.f / kPi * kUnitsPerDeg);
+            int pitchTo = (int)std::lround(std::atan2(dz, flat) * 180.f / kPi * kUnitsPerDeg);
+            pitchTo = (std::max)(-kMaxPitchUnits, (std::min)(kMaxPitchUnits, pitchTo));
+            float yawErr = (float)WrapUnits(yawTo - g_pc->Rotation.Yaw);
+            float pitchErr = (float)(pitchTo - WrapUnits(g_pc->Rotation.Pitch));
+            float maxRate = g_tuning.maxTurnDegPerS * kUnitsPerDeg;
+            float wantYawRate = Clamp(kAimGainPerS * yawErr, maxRate);
+            float wantPitchRate = Clamp(kAimGainPerS * pitchErr, maxRate);
+            g_axes.turn = g_prevTurnIn = wantYawRate / g_yawRate;
+            g_axes.lookUp = g_prevLookIn = wantPitchRate / g_pitchRate;
+            yawErrDeg = yawErr / kUnitsPerDeg;
+            pitchErrDeg = pitchErr / kUnitsPerDeg;
+        }
+
+        // Aim at the target's live position (the census copy is up to kCensusEvery old).
         void Aim(const Enemy& e, float dt) {
-            float maxUnits = g_tuning.maxTurnDegPerTick * kUnitsPerDeg;
-            float myPitchDeg = WrapUnits(g_myPitch) / kUnitsPerDeg;
-            float yawErr = Clamp(e.bearingDeg * kUnitsPerDeg, maxUnits);
-            float pitchErr = Clamp((e.pitchDeg - myPitchDeg) * kUnitsPerDeg, maxUnits);
-            float step = (std::max)(dt, 0.005f);
-            g_axes.turn = yawErr / (g_yawPerInput * step);
-            g_axes.lookUp = pitchErr / (g_pitchPerInput * step);
-            g_aimOn = std::fabs(e.bearingDeg) < g_tuning.aimOnDeg && std::fabs(e.pitchDeg - myPitchDeg) < g_tuning.aimOnDeg;
+            APawn* me = g_pc->Pawn;
+            APawn* tp = LivePawn(e.id);
+            FVector to = tp ? AimPoint(tp) : Vec(e.loc[0], e.loc[1], e.loc[2]);
+            float yawLeft = 0.f, pitchLeft = 0.f;
+            TurnViewTo(Eye(me), to, dt, yawLeft, pitchLeft);
+            g_aimOn = std::fabs(yawLeft) < g_tuning.aimOnDeg && std::fabs(pitchLeft) < g_tuning.aimOnDeg;
+        }
+
+        void LearnReach(float dt, const Enemy* t, bool firing) {
+            if (!firing || !t) { g_noDamageS = 0.f; return; }
+            if (t->id != g_reachTarget || t->health < g_reachTargetHealth) {   // new target, or it got hurt
+                // A hit near or past the learned reach: it was too short (shots at an enemy behind
+                // cover can shrink it), so grow it back.
+                if (t->id == g_reachTarget && g_reach < 1e8f && t->distance > g_reach * 0.8f) {
+                    g_reach = t->distance * 1.5f;
+                    std::printf("[COMBAT] hit at %.0f units; reach now %.0f\n", t->distance, g_reach);
+                }
+                g_reachTarget = t->id;
+                g_reachTargetHealth = t->health;
+                g_noDamageS = 0.f;
+                return;
+            }
+            g_noDamageS += dt;
+            if (g_noDamageS < kNoDamageS) return;
+            g_noDamageS = 0.f;
+            float r = (std::max)(kMinReach, t->distance * 0.6f);
+            if (r < g_reach) {
+                g_reach = r;
+                std::printf("[COMBAT] no damage after %.1f s at %.0f units; reach now %.0f\n", kNoDamageS, t->distance, g_reach);
+            }
         }
 
         bool ParseMode(const std::string& s, Mode& m) {
@@ -230,12 +289,12 @@ namespace Combat {
             g_axes.strafe = sign * (dx * rx + dy * ry) / dist;
         }
 
-        // With no target: face the walking goal.
+        // With no target: face the walking goal, eyes level.
         void TurnToward(const float* pt, float dt) {
-            float dx = pt[0] - g_myLoc[0], dy = pt[1] - g_myLoc[1];
-            int yawTo = (int)std::lround(std::atan2(dy, dx) * 180.f / kPi * kUnitsPerDeg);
-            float err = Clamp((float)WrapUnits(yawTo - g_myYaw), g_tuning.maxTurnDegPerTick * kUnitsPerDeg);
-            g_axes.turn = err / (g_yawPerInput * (std::max)(dt, 0.005f));
+            APawn* me = g_pc->Pawn;
+            FVector eye = Eye(me);
+            float yawLeft = 0.f, pitchLeft = 0.f;
+            TurnViewTo(eye, Vec(pt[0], pt[1], eye.Z), dt, yawLeft, pitchLeft);
         }
 
         void UseSkills(float dt, APoplarPlayerController* pc, const Enemy* t) {
@@ -284,9 +343,15 @@ namespace Combat {
         g_health = me->GetHealth(); g_maxHealth = me->GetMaxHealth();
         g_hero = PawnUtils::HeroOf(me);
         TrackStats(pc);
-        if (Calibrate(pc, dt)) return;
+        LearnRates(pc, dt);
         g_sinceCensus += dt;
         if (g_sinceCensus >= kCensusEvery) { g_sinceCensus = 0.f; Census(pc); }
+
+        // The learned reach caps both ranges, so a melee hero (Rath: a sword) closes in instead of
+        // swinging from 30 m away (live 20261006-054808: 20 s of firing, no damage). The weapon's own
+        // WeaponRange is no help: it read 16384 for Rath's sword.
+        float fireRange = (std::min)(g_tuning.fireRange, g_reach);
+        float engageRange = (std::min)(g_tuning.engageRange, g_reach * 0.7f);
 
         g_axes = Axes{}; g_axes.valid = true; g_axes.forward = 0.f;
         g_modeTime += dt;
@@ -305,15 +370,20 @@ namespace Combat {
         switch (g_mode) {
         case Mode::Hunt:
             if (t) {
-                WalkToward(t->loc, 1.f, g_tuning.engageRange);
+                WalkToward(t->loc, 1.f, engageRange);
                 g_untilStrafeFlip -= dt;
                 if (g_untilStrafeFlip <= 0.f) {
                     g_strafeSign = -g_strafeSign;
                     g_untilStrafeFlip = std::uniform_real_distribution<float>(1.5f, 3.f)(g_rng);
                 }
-                if (t->distance <= g_tuning.engageRange) g_axes.strafe = g_strafeSign * 0.7f;
+                if (t->distance <= engageRange) g_axes.strafe = g_strafeSign * 0.7f;
+            } else if (!g_enemies.empty()) {
+                // Nothing in sight but the census knows where enemies are: head for the nearest
+                // (straight line; the autopilot's stuck check still jumps over low walls).
+                WalkToward(g_enemies[0].loc, 1.f, 0.f);
+                TurnToward(g_enemies[0].loc, dt);
             } else {
-                g_axes.valid = false;   // no target: the autopilot's wander moves us
+                g_axes.valid = false;   // no enemy known: the autopilot's wander moves us
             }
             break;
         case Mode::Hold:
@@ -341,7 +411,8 @@ namespace Combat {
             break;
         }
 
-        bool fire = g_order.fire && t && g_aimOn && t->visible && t->distance < g_tuning.fireRange;
+        bool fire = g_order.fire && t && g_aimOn && t->visible && t->distance < fireRange;
+        LearnReach(dt, t, fire);
         if (g_burstLeft > 0.f) { g_burstLeft -= dt; fire = true; }
         SetFiring(fire);
         if (fire) g_stats.firingS += dt;
@@ -392,8 +463,9 @@ namespace Combat {
         nlohmann::json j;
         j["enabled"] = Enabled();
         j["mode"] = ModeName();
-        j["calibrated"] = g_calibrated;
         j["aim_on"] = g_aimOn;
+        j["turn_rates"] = { g_yawRate, g_pitchRate };
+        j["reach"] = g_reach < 1e8f ? nlohmann::json(g_reach) : nlohmann::json(nullptr);
         j["firing"] = g_firing;
         bool alive = g_pc && !Gone(g_pc) && !Gone(g_pc->Pawn);
         j["me"] = { {"hero", g_hero}, {"location", {g_myLoc[0], g_myLoc[1], g_myLoc[2]}},
@@ -423,6 +495,7 @@ namespace Combat {
         }
         j["enemies"] = arr;
         j["n_enemies"] = g_enemies.size();
+        j["census"] = { {"pawns", g_censusPawns}, {"live_others", g_censusLive} };
         j["stats"] = StatsJson();
         return j.dump();
     }
@@ -449,7 +522,7 @@ namespace Combat {
                 for (auto& [k, v] : j["tuning"].items()) {
                     float f = v.get<float>();
                     if (k == "fireRange") t.fireRange = f; else if (k == "engageRange") t.engageRange = f;
-                    else if (k == "aimOnDeg") t.aimOnDeg = f; else if (k == "maxTurnDegPerTick") t.maxTurnDegPerTick = f;
+                    else if (k == "aimOnDeg") t.aimOnDeg = f; else if (k == "maxTurnDegPerS") t.maxTurnDegPerS = f;
                     else if (k == "retreatHealthFrac") t.retreatHealthFrac = f; else if (k == "retreatNearUnits") t.retreatNearUnits = f;
                     else if (k == "playerWeight") t.playerWeight = f; else if (k == "targetMemoryS") t.targetMemoryS = f;
                 }
@@ -481,8 +554,8 @@ namespace Combat {
             g_burstLeft = dur;
             SetFiring(true);
         }
-        else if (a == "altfire") { Exec(L"StartAltFire"); Exec(L"StopAltFire"); }
-        else if (a == "melee") { Exec(L"StartOffHandFire"); Exec(L"StopOffHandFire"); }
+        else if (a == "altfire") { pc->StartAltFire(0); pc->StopAltFire(0); }
+        else if (a == "melee") { pc->StartOffHandFire(0); pc->StopOffHandFire(0); }
         else if (a == "skill1") pc->StartActionSkillBySlot(EActionSkillSlot::ASS_SlotOne);
         else if (a == "skill2") pc->StartActionSkillBySlot(EActionSkillSlot::ASS_SlotTwo);
         else if (a == "ultimate") pc->StartActionSkillBySlot(EActionSkillSlot::ASS_SlotThree);

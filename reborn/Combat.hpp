@@ -19,14 +19,15 @@ namespace Combat {
         int team;
     };
 
-    // Movement/look input for this frame. The autopilot writes it when valid; otherwise it wanders.
+    // Movement input for this frame. The autopilot writes it when valid; otherwise it wanders.
+    // turn/lookUp stay 0: the brain turns the view by writing the controller's Rotation.
     struct Axes { float forward = 1.f, strafe = 0.f, turn = 0.f, lookUp = 0.f; bool valid = false; };
 
     struct Tuning {
         float fireRange = 3000.f;     // fire only inside this (units; ~30 m)
         float engageRange = 1200.f;   // hunt: approach until this close
         float aimOnDeg = 4.f;         // aim counts as on under this yaw and pitch error
-        float maxTurnDegPerTick = 20.f;
+        float maxTurnDegPerS = 540.f; // view turn speed cap
         float retreatHealthFrac = 0.25f;
         float retreatNearUnits = 800.f;
         float playerWeight = 0.6f;    // players score closer than bots/minions
