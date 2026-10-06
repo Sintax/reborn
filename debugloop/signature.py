@@ -51,6 +51,8 @@ def make(o: Outcome, scn: Scenario) -> str | None:
         return f"desync:{scn.expect_map or 'unknown'}"
     if o.kind == "fell":
         return f"fell:{scn.expect_map or 'unknown'}"
+    if o.kind == "invisible":
+        return f"invisible:{scn.expect_map or 'unknown'}"
     if o.kind == "timeout":
         return f"timeout:{o.phase}"
     return f"{o.kind}:unknown"

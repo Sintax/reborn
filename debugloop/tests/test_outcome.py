@@ -515,3 +515,59 @@ def test_live_player_far_from_server_is_still_a_desync():
         s += [Sample(t, "server", srv(player_locations={"c1": [9000, 0, 0]}), 200),
               Sample(t, "c1", cli(pawn_health=500.0), 200)]
     assert outcome.classify(scn(), s, recs(), 30, False).kind == "desync"
+
+
+def _body_samples(until, c, step=4):
+    """Pair samples every `step` s up to `until`; the client's sample gets the fields c(t) returns."""
+    return [x for t in range(0, until, step) for x in pair(t, c=cli(**c(t)))]
+
+def test_player_without_a_visible_body_fails_the_run():
+    s = _body_samples(200, c=lambda t: dict(pawn_visible=False, pawn_body_missing="no mesh component",
+                                            pawn_health=1091.0))
+    o = outcome.classify(scn(), s, recs(), 200, False)
+    assert (o.kind, o.process) == ("invisible", "c1"), o
+    assert "no mesh component" in o.detail
+
+def test_body_that_loads_during_the_grace_period_is_normal():
+    s = _body_samples(900, c=lambda t: dict(pawn_visible=t >= 24, pawn_health=1091.0))
+    assert outcome.classify(scn(), s, recs(), 900, False).kind == "pass"
+
+def test_body_missing_for_less_than_the_persist_time_is_normal():
+    s = _body_samples(900, c=lambda t: dict(pawn_visible=not (100 <= t < 150), pawn_health=1091.0))
+    assert outcome.classify(scn(), s, recs(), 900, False).kind == "pass"
+
+def test_seeing_another_player_without_a_body_fails_the_run():
+    s = _body_samples(200, c=lambda t: dict(pawn_visible=True, pawn_health=1091.0, others_seen=1,
+                                            others_invisible=["LAN Player (Class_ModernSoldier): no mesh component"]))
+    o = outcome.classify(scn(), s, recs(), 200, False)
+    assert (o.kind, o.process) == ("invisible", "c1"), o
+    assert "Class_ModernSoldier" in o.detail
+
+def test_dead_player_without_a_body_is_not_invisible():
+    s = _body_samples(900, c=lambda t: dict(pawn_visible=False, pawn_health=0.0))
+    assert outcome.classify(scn(), s, recs(), 900, False).kind == "pass"
+
+def test_timeline_without_body_fields_is_not_judged():
+    s = _body_samples(900, c=lambda t: dict(pawn_health=1091.0))
+    assert outcome.classify(scn(), s, recs(), 900, False).kind == "pass"
+
+def test_respawn_starts_the_grace_period_again():
+    # Invisible while alive 0-20 s, dead 20-60 s, then a new pawn with no body until 140 s: counted
+    # from the respawn that is 30 s of grace + 48 s, short of the persist time.
+    def c(t):
+        if 20 <= t < 60:
+            return dict(pawn_visible=False, pawn_health=0.0)
+        return dict(pawn_visible=t >= 140, pawn_health=1091.0)
+    s = _body_samples(900, c=c)
+    assert outcome.classify(scn(), s, recs(), 900, False).kind == "pass"
+
+def test_invisible_body_after_the_match_ended_is_not_judged():
+    s = []
+    for t in range(0, 300, 4):
+        s += pair(t, s=srv(match_over=t >= 20), c=cli(pawn_visible=False, pawn_health=1091.0))
+    assert outcome.classify(scn(), s, recs(), 900, False).kind == "pass"
+
+def test_invisible_signature_names_the_map():
+    from debugloop import signature
+    o = outcome.Outcome("invisible", "c2: own pawn has no visible body", "c2", "playing")
+    assert signature.make(o, scn()) == "invisible:Dojo_P"

@@ -12,6 +12,12 @@ DESYNC_SAMPLES = 5
 FALL_UNITS = 5000
 FALL_COUNT = 4
 FALL_WINDOW_S = 300
+# A player whose body is not drawn (its pawn never got its skin's mesh). A new pawn has no mesh until
+# its skin is applied, so the first INVISIBLE_GRACE_S after it appears are skipped; after that it
+# has to stay invisible for INVISIBLE_PERSIST_S over at least INVISIBLE_SAMPLES samples.
+INVISIBLE_GRACE_S = 30
+INVISIBLE_PERSIST_S = 60
+INVISIBLE_SAMPLES = 3
 STARTUP_TIMEOUT_S = 240
 WATCHDOG_GRACE_S = 10    # time the watchdog gets to write its dump and report
 
@@ -245,6 +251,9 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
         f = _keeps_falling(roles, play)
         if f:
             return Outcome("fell", f, f, phase)
+        inv = _invisible(roles, play)
+        if inv:
+            return Outcome("invisible", inv[1], inv[0], phase)
         d = _desync(roles, play)
         if d:
             return Outcome("desync", d, d, phase)
@@ -305,6 +314,55 @@ def _keeps_falling(roles: dict[str, str], play: list[Sample]) -> str | None:
             if len(times) >= FALL_COUNT:
                 return s.name
         below[s.name] = low
+    return None
+
+
+def _invisible_count(v) -> int:
+    """others_invisible is a list of "name (hero): what is missing"; a bare count is accepted too."""
+    if isinstance(v, list):
+        return len(v)
+    if isinstance(v, int) and not isinstance(v, bool):
+        return max(v, 0)
+    return 0
+
+
+def _invisible(roles: dict[str, str], play: list[Sample]) -> tuple[str, str] | None:
+    """(process, detail) for a player whose body is not drawn: a client's own pawn has no visible
+    mesh (pawn_visible false), or a client sees another human player's pawn without one
+    (others_invisible), for INVISIBLE_PERSIST_S after the pawn's first INVISIBLE_GRACE_S. Seen on
+    Meltdown, run 20261006-023201: player 2's pawn never got its skin. A dead player is skipped and
+    starts over when it respawns. Samples without these fields (older mod builds) never count."""
+    appeared: dict[str, float] = {}
+    bad_since: dict[tuple[str, str], tuple[float, int]] = {}   # (process, check) -> (first t, samples)
+    for s in play:
+        if roles.get(s.name) not in ("client", "solo") or not s.state:
+            continue
+        st = s.state
+        health = st.get("pawn_health")
+        dead = isinstance(health, (int, float)) and not isinstance(health, bool) and health <= 0
+        if not st.get("has_pawn") or dead:
+            appeared.pop(s.name, None)
+            bad_since.pop((s.name, "own"), None)
+            bad_since.pop((s.name, "others"), None)
+            continue
+        start = appeared.setdefault(s.name, s.t)
+        others = st.get("others_invisible")
+        checks = {
+            "own": (st.get("pawn_visible") is False,
+                    f"own pawn has no visible body ({st.get('pawn_body_missing') or 'unknown'})"),
+            "others": (_invisible_count(others) > 0,
+                       "sees players without a visible body: "
+                       + ("; ".join(map(str, others)) if isinstance(others, list) else str(others))),
+        }
+        for what, (bad, detail) in checks.items():
+            key = (s.name, what)
+            if not bad or s.t - start < INVISIBLE_GRACE_S:
+                bad_since.pop(key, None)
+                continue
+            first, n = bad_since.get(key, (s.t, 0))
+            bad_since[key] = (first, n + 1)
+            if s.t - first >= INVISIBLE_PERSIST_S and n + 1 >= INVISIBLE_SAMPLES:
+                return s.name, f"{s.name}: {detail}"
     return None
 
 

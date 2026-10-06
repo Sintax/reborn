@@ -27,6 +27,7 @@ def test_other_kinds():
     assert signature.make(O("exit", code="3"), scn()) == "exit:3"
     assert signature.make(O("disconnect", detail="client:timeout"), scn()) == "disconnect:client:timeout"
     assert signature.make(O("desync"), scn()) == "desync:Dojo_P"
+    assert signature.make(O("invisible"), scn()) == "invisible:Dojo_P"
     assert signature.make(O("timeout", phase="startup"), scn()) == "timeout:startup"
     assert signature.make(O("pass"), scn()) is None
 
