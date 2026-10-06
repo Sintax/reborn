@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "battleborn-play": {
+      "command": "python",
+      "args": ["-m", "debugloop.mcp_server"],
+      "cwd": "C:\\Users\\djsin\\Documents\\GitHub\\Battleborn-Server\\reborn"
+    }
+  }
+}
