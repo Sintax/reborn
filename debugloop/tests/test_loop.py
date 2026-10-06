@@ -75,7 +75,10 @@ def deps(tmp_path, outcomes, build_ok=True, status=" M reborn/Hooks.cpp\x00", br
                   triage=fake_triage, git=FakeGit(status, tmp_path / "state", always_dirty, log),
                   state_dir=tmp_path / "state", runs_dir=tmp_path / "runs",
                   branch=lambda: branch,
-                  preconditions=lambda runs_dir, n: log.append("preconditions"))
+                  preconditions=lambda runs_dir, n: log.append("preconditions"),
+                  play_alive=lambda: None,
+                  play_start=lambda scn: {"run_dir": "r", "ports": {"c1": 18081}},
+                  play_stop=lambda: [])
     d.log, d.ran, d.triaged = log, ran, triaged
     return d
 
@@ -712,3 +715,58 @@ def test_same_bug_progress_whose_step0_check_cannot_run_is_a_harness_error(tmp_p
     st = LoopState.load(d.state_dir)
     assert st.current_bug == "exit:3" and st.attempts_on_current == 0 and st.bug_milestone == 4
     assert st.harness_errors_in_row == 1
+
+
+ALIVE = {"run_dir": "r", "scenario": "s3-meltdown-2clients-bots", "ports": {"c1": 18081}}
+
+
+def test_next_refuses_while_play_session_alive(tmp_path, capsys):
+    d = deps(tmp_path, [PASS])
+    d.play_alive = lambda: ALIVE
+    assert loop.cmd_next(d) == loop.HARNESS
+    assert "play session is running" in capsys.readouterr().out
+    assert "run" not in d.log and "build" not in d.log
+    assert LoopState.load(tmp_path / "state").harness_errors_in_row == 0
+
+
+def test_verify_refuses_while_play_session_alive(tmp_path, capsys):
+    d = deps(tmp_path, [PASS])
+    d.play_alive = lambda: ALIVE
+    assert loop.cmd_verify(d) == loop.HARNESS
+    assert "play session is running" in capsys.readouterr().out
+    assert "run" not in d.log
+
+
+def test_play_builds_deploys_and_starts(tmp_path, capsys):
+    d = deps(tmp_path, [])
+    started = []
+    d.play_start = lambda scn: started.append(scn.name) or {"run_dir": "r", "ports": {"server": 18080, "c1": 18081}}
+    assert loop.main(["play", "s1-dojo-1client-smoke"], d) == loop.OK
+    assert started == ["s1-dojo-1client-smoke"]
+    assert d.log[:2] == ["build", "deploy"]
+    out = capsys.readouterr().out
+    assert "c1" in out and "18081" in out and "stop-play" in out
+
+
+def test_play_without_scenario_is_an_error(tmp_path, capsys):
+    assert loop.main(["play"], deps(tmp_path, [])) == loop.HARNESS
+    assert "usage" in capsys.readouterr().out
+
+
+def test_play_unknown_scenario_is_an_error(tmp_path, capsys):
+    assert loop.main(["play", "nope"], deps(tmp_path, [])) == loop.HARNESS
+    assert "HARNESS ERROR" in capsys.readouterr().out
+
+
+def test_play_refuses_while_another_session_is_alive(tmp_path, capsys):
+    d = deps(tmp_path, [])
+    d.play_alive = lambda: ALIVE
+    assert loop.main(["play", "s1-dojo-1client-smoke"], d) == loop.HARNESS
+    assert "build" not in d.log
+
+
+def test_stop_play(tmp_path, capsys):
+    d = deps(tmp_path, [])
+    d.play_stop = lambda: ["server", "c1"]
+    assert loop.main(["stop-play"], d) == loop.OK
+    assert "stopped: server, c1" in capsys.readouterr().out

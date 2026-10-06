@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import analyze, build, config, deploy, run, scenario, signature
+from . import analyze, build, config, deploy, playsession, run, scenario, signature
 from .ledger import Ledger
 from .state import LoopState, StateCorrupt, atomic_write
 
@@ -44,6 +44,9 @@ class Deps:
     runs_dir: Path = config.RUNS_DIR
     branch: Callable = field(default=_branch)
     preconditions: Callable = field(default=_preconditions)
+    play_alive: Callable = field(default=playsession.alive)
+    play_start: Callable = field(default=playsession.start)
+    play_stop: Callable = field(default=playsession.stop)
 
 
 def _load(d):
@@ -152,6 +155,17 @@ def _guard_branch(d):
         print(f"STOPPED: on branch '{b}', not '{REQUIRED_BRANCH}'. Switch branch by hand.")
         return STOPPED
     return None
+
+
+def _guard_play(d):
+    """A live play session owns the game processes and debug ports: no test may start meanwhile.
+    Not a harness error (the count stays), just a refusal."""
+    info = d.play_alive()
+    if info is None:
+        return None
+    print(f"a play session is running ({info.get('scenario', '?')}, ports {info.get('ports')}); "
+          "end it with `python -m debugloop.loop stop-play` before the loop runs a test")
+    return HARNESS
 
 
 def _note(d) -> str:
@@ -370,7 +384,7 @@ def _attempt_failed(st, L, d, why: str, diff: str | None = None) -> int:
 
 
 def cmd_next(d: Deps) -> int:
-    blocked = _guard_branch(d)
+    blocked = _guard_branch(d) or _guard_play(d)
     if blocked is not None:
         return blocked
     st, L = _load(d)
@@ -438,7 +452,7 @@ def _smoke_of(scn):
 
 
 def cmd_verify(d: Deps) -> int:
-    blocked = _guard_branch(d)
+    blocked = _guard_branch(d) or _guard_play(d)
     if blocked is not None:
         return blocked
     st, L = _load(d)
@@ -545,6 +559,43 @@ def cmd_build(d: Deps) -> int:
     return OK if r.ok else HARNESS
 
 
+def cmd_play(d: Deps, name: str | None) -> int:
+    """Start a scenario and leave it running for live driving (see playsession.py)."""
+    if not name:
+        print("usage: python -m debugloop.loop play <scenario>")
+        return HARNESS
+    blocked = _guard_branch(d) or _guard_play(d)
+    if blocked is not None:
+        return blocked
+    try:
+        scn = scenario.find_scenario(name)
+    except scenario.ScenarioError as e:
+        print(f"HARNESS ERROR: {e}")
+        return HARNESS
+    b = d.build()
+    if not b.ok:
+        print("BUILD FAILED\n" + b.output[-3000:])
+        return HARNESS
+    try:
+        d.deploy()
+        info = d.play_start(scn)
+    except (run.HarnessError, deploy.DeployError, OSError) as e:
+        print(f"HARNESS ERROR: {e}")
+        return HARNESS
+    print(f"play session up: {scn.name}  run folder {info['run_dir']}")
+    for n, p in info["ports"].items():
+        print(f"  {n:8} port {p}")
+    print("drive it with the battleborn-play MCP tools or `python -m debugloop.play ...`; "
+          "end it with `python -m debugloop.loop stop-play`")
+    return OK
+
+
+def cmd_stop_play(d: Deps) -> int:
+    killed = d.play_stop()
+    print("stopped: " + ", ".join(killed) if killed else "no play session was running")
+    return OK
+
+
 def _state_corrupt(e: StateCorrupt) -> int:
     print(f"STOPPED: {e} The loop never resets its own state; a human has to repair or move "
           "the file before the loop can go on.")
@@ -553,10 +604,13 @@ def _state_corrupt(e: StateCorrupt) -> int:
 
 def main(argv=None, deps: Deps | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m debugloop.loop")
-    ap.add_argument("command", choices=["next", "verify", "giveup", "status", "reset-stop", "build"])
+    ap.add_argument("command", choices=["next", "verify", "giveup", "status", "reset-stop", "build",
+                                        "play", "stop-play"])
+    ap.add_argument("scenario", nargs="?", help="play: the scenario to start")
     a = ap.parse_args(argv)
     fn = {"next": cmd_next, "verify": cmd_verify, "giveup": cmd_giveup, "status": cmd_status,
-          "reset-stop": cmd_reset_stop, "build": cmd_build}[a.command]
+          "reset-stop": cmd_reset_stop, "build": cmd_build,
+          "play": lambda d: cmd_play(d, a.scenario), "stop-play": cmd_stop_play}[a.command]
     d = deps or Deps()
     try:
         return fn(d)
