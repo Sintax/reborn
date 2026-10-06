@@ -723,7 +723,7 @@ ALIVE = {"run_dir": "r", "scenario": "s3-meltdown-2clients-bots", "ports": {"c1"
 def test_next_refuses_while_play_session_alive(tmp_path, capsys):
     d = deps(tmp_path, [PASS])
     d.play_alive = lambda: ALIVE
-    assert loop.cmd_next(d) == loop.HARNESS
+    assert loop.cmd_next(d) == loop.PLAY_SESSION
     assert "play session is running" in capsys.readouterr().out
     assert "run" not in d.log and "build" not in d.log
     assert LoopState.load(tmp_path / "state").harness_errors_in_row == 0
@@ -732,7 +732,7 @@ def test_next_refuses_while_play_session_alive(tmp_path, capsys):
 def test_verify_refuses_while_play_session_alive(tmp_path, capsys):
     d = deps(tmp_path, [PASS])
     d.play_alive = lambda: ALIVE
-    assert loop.cmd_verify(d) == loop.HARNESS
+    assert loop.cmd_verify(d) == loop.PLAY_SESSION
     assert "play session is running" in capsys.readouterr().out
     assert "run" not in d.log
 
@@ -743,7 +743,7 @@ def test_play_builds_deploys_and_starts(tmp_path, capsys):
     d.play_start = lambda scn: started.append(scn.name) or {"run_dir": "r", "ports": {"server": 18080, "c1": 18081}}
     assert loop.main(["play", "s1-dojo-1client-smoke"], d) == loop.OK
     assert started == ["s1-dojo-1client-smoke"]
-    assert d.log[:2] == ["build", "deploy"]
+    assert d.log[:3] == ["preconditions", "build", "deploy"]
     out = capsys.readouterr().out
     assert "c1" in out and "18081" in out and "stop-play" in out
 
@@ -761,7 +761,7 @@ def test_play_unknown_scenario_is_an_error(tmp_path, capsys):
 def test_play_refuses_while_another_session_is_alive(tmp_path, capsys):
     d = deps(tmp_path, [])
     d.play_alive = lambda: ALIVE
-    assert loop.main(["play", "s1-dojo-1client-smoke"], d) == loop.HARNESS
+    assert loop.main(["play", "s1-dojo-1client-smoke"], d) == loop.PLAY_SESSION
     assert "build" not in d.log
 
 
@@ -799,3 +799,21 @@ def test_brief_lists_combat_warnings_of_the_failed_run(tmp_path):
     assert loop.cmd_next(d) == loop.FIX_NEEDED
     brief = (tmp_path / "state" / "brief.md").read_text()
     assert "## Combat warnings from the failed run" in brief and "- c2: took no damage in 11 min" in brief
+
+
+def test_play_session_exit_code_is_distinct():
+    """A forgotten play session must not look like a retryable harness error to the loop skill."""
+    assert loop.PLAY_SESSION not in (loop.OK, loop.HARNESS, loop.STOPPED, loop.LADDER_DONE, loop.GAVE_UP,
+                                     loop.FIX_NEEDED, loop.ATTEMPT_FAILED)
+
+
+def test_play_checks_for_running_games_before_building(tmp_path, capsys):
+    d = deps(tmp_path, [])
+
+    def busy(runs_dir, n):
+        raise run.HarnessError("a game process is already running (pids [42])")
+
+    d.preconditions = busy
+    assert loop.main(["play", "s1-dojo-1client-smoke"], d) == loop.HARNESS
+    assert "build" not in d.log and "deploy" not in d.log
+    assert "already running" in capsys.readouterr().out

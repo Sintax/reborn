@@ -292,8 +292,9 @@ namespace Combat {
 
         // Hunt: when the brain has been trying to walk for kStuckCheckS and moved less than
         // kStuckMoveUnits, hand movement to the autopilot's wander for kWanderAfterStuckS.
-        void CheckChaseProgress(float dt) {
-            bool walking = g_axes.valid && (g_axes.forward != 0.f || g_axes.strafe != 0.f);
+        // inFight: strafing back and forth in range moves little on purpose; that is not stuck.
+        void CheckChaseProgress(float dt, bool inFight) {
+            bool walking = !inFight && g_axes.valid && (g_axes.forward != 0.f || g_axes.strafe != 0.f);
             if (!walking) { g_chaseCheckS = 0.f; g_chaseFrom[0] = g_myLoc[0]; g_chaseFrom[1] = g_myLoc[1]; return; }
             g_chaseCheckS += dt;
             if (g_chaseCheckS < kStuckCheckS) return;
@@ -441,7 +442,7 @@ namespace Combat {
             } else {
                 g_axes.valid = false;   // nothing near and no bot to follow: the autopilot wanders
             }
-            CheckChaseProgress(dt);
+            CheckChaseProgress(dt, t && t->distance <= engageRange);
             break;
         case Mode::Hold:
             break;
@@ -474,9 +475,13 @@ namespace Combat {
         SetFiring(fire);
         if (fire) g_stats.firingS += dt;
         UseSkills(dt, pc, t);
+        // The autopilot writes our turn input only when the axes are valid; otherwise its own wander
+        // turn moves the view, and learning from it would corrupt the rates.
+        if (!g_axes.valid) g_prevTurnIn = g_prevLookIn = 0.f;
     }
 
     void OnNoPawn() {
+        g_pc = nullptr;   // may be freed before the next pawn arrives
         g_enemies.clear();
         g_lastHealth = -1.f;
         g_health = 0.f;
@@ -524,14 +529,17 @@ namespace Combat {
         j["turn_rates"] = { g_yawRate, g_pitchRate };
         j["reach"] = g_reach < 1e8f ? nlohmann::json(g_reach) : nlohmann::json(nullptr);
         j["firing"] = g_firing;
-        bool alive = g_pc && !Gone(g_pc) && !Gone(g_pc->Pawn);
+        // A fresh lookup, never g_pc: the controller from the last combat tick may be freed by now
+        // (match over, back in the menu).
+        APoplarPlayerController* livePc = SDKUtils::GetLocalPlayerController();
+        bool alive = livePc && !Gone(livePc->Pawn);
         j["me"] = { {"hero", g_hero}, {"location", {g_myLoc[0], g_myLoc[1], g_myLoc[2]}},
                     {"yaw", g_myYaw / kUnitsPerDeg}, {"pitch", WrapUnits(g_myPitch) / kUnitsPerDeg},
                     {"health", g_health}, {"max_health", g_maxHealth}, {"dead", !alive} };
         nlohmann::json skills = nlohmann::json::array();
         if (alive) {
             for (int i = 0; i < 3; i++) {
-                float cd = g_pc->GetActionSkillSlotCooldownTimeRemaining((EActionSkillSlot)i);
+                float cd = livePc->GetActionSkillSlotCooldownTimeRemaining((EActionSkillSlot)i);
                 skills.push_back({ {"slot", i + 1}, {"ready", cd <= 0.f}, {"cooldown_s", cd} });
             }
         }

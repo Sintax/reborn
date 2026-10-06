@@ -20,6 +20,7 @@ PHASE_ORDER = {"startup": 0, "playing": 1}
 REGRESSION_SCENARIO = "s0-solo-dojo-smoke"   # re-run after every fix commit
 NOTES_DIR = "docs/notes/"
 OK, HARNESS, STOPPED, LADDER_DONE, GAVE_UP, FIX_NEEDED, ATTEMPT_FAILED = 0, 2, 3, 4, 5, 10, 11
+PLAY_SESSION = 6   # a live play session holds the games; distinct so the loop skill alerts instead of retrying
 
 
 def _git(args: list[str]) -> str:
@@ -166,7 +167,7 @@ def _guard_play(d):
         return None
     print(f"a play session is running ({info.get('scenario', '?')}, ports {info.get('ports')}); "
           "end it with `python -m debugloop.loop stop-play` before the loop runs a test")
-    return HARNESS
+    return PLAY_SESSION
 
 
 def _note(d) -> str:
@@ -584,7 +585,9 @@ def cmd_play(d: Deps, name: str | None) -> int:
         return blocked
     try:
         scn = scenario.find_scenario(name)
-    except scenario.ScenarioError as e:
+        # Before building or deploying: never touch the game folder while a game is running.
+        d.preconditions(d.runs_dir, len(scn.processes))
+    except (scenario.ScenarioError, run.HarnessError) as e:
         print(f"HARNESS ERROR: {e}")
         return HARNESS
     b = d.build()

@@ -43,6 +43,7 @@ namespace Autopilot {
         float Rand(float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(g_rng); }
 
         void SetPhase(Phase p) {
+            if (p != Phase::Playing) Combat::OnNoPawn();   // drop the old controller and targets
             g_phase = p;
             g_phaseTime = 0.f;
             g_menuTime = 0.f;

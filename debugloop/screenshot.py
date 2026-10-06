@@ -113,13 +113,20 @@ def arrange(pids: dict[str, int]) -> None:
         pass
 
 
+_u32.IsIconic.argtypes = [wintypes.HWND]
+
+
+def _is_minimised(hwnd) -> bool:
+    return bool(_u32.IsIconic(hwnd))
+
+
 def capture(pid: int, path: Path) -> bool:
     """Save the process's main window as a JPEG. False when there is nothing to capture."""
     try:
         from PIL import Image
         hwnd = _main_window(pid)
-        if not hwnd:
-            return False
+        if not hwnd or _is_minimised(hwnd):
+            return False   # a minimised window "captures" as a tiny black strip
         r = wintypes.RECT()
         _u32.GetWindowRect(hwnd, ctypes.byref(r))
         w, h = r.right - r.left, r.bottom - r.top

@@ -19,6 +19,7 @@ Run `python -m debugloop.loop next` in the background with a 110-minute timeout,
 | 2 | harness error | Read the message. If it says a game is already running, push-notify the user once ("close the game so the loop can continue") and end the iteration. Otherwise end the iteration (the loop retries). |
 | 3 | stopped | Read the `STOPPED:` line in the command output. For harness-error stops it is also shown by `python -m debugloop.loop status`. If the reason is harness errors with a Python traceback, go to section 4. If the reason is the wrong branch or uncommitted changes, push-notify the reason and stop the loop. Never switch branches, stash or commit to fix this yourself. Otherwise push-notify the reason and stop the loop. |
 | 4 | ladder done | Push-notify "Steps 0-3 pass. Ready for human players." Stop the loop. |
+| 6 | a play session is still running | If you started it in this iteration (section 1b), run `python -m debugloop.loop stop-play` and run `next` again. Otherwise someone is playing it: push-notify "A Battleborn play session is still running; the loop is paused until it ends (`python -m debugloop.loop stop-play`)" and stop the loop. |
 | 10 | bug found | Go to section 2. |
 | any other exit code | unexpected | Push-notify the last 20 lines of the output and stop the loop. |
 
@@ -56,7 +57,7 @@ Run `python -m debugloop.loop verify` in the background with a 110-minute timeou
 | 10 | Progress: either fixed one bug and a new later one is open, or the same bug got further (the output says `PROGRESS`: the fix was committed, the join reached a higher milestone, and the attempt count is reset). Go back to section 2 in this same iteration (at most 2 fix cycles per iteration). |
 | 11 | Attempt failed (brief now has the reason). Go back to section 2 (at most 2 fix cycles per iteration). |
 | 5 | Gave up on this bug. Push-notify "Gave up on bug <signature> after 5 tries". End the iteration. |
-| 2 / 3 | As in section 1. |
+| 2 / 3 / 6 | As in section 1. |
 | any other exit code | Push-notify the last 20 lines of the output and stop the loop. |
 
 ## 4. Harness repair (Sonnet subagent)

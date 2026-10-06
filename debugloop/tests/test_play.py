@@ -133,3 +133,11 @@ def test_cli_error_is_one_line(fake, capsys):
     fake(mode="dead")
     assert play.main(["--ports", "18180-18181", "act", "c1", "jump"]) == 1
     assert capsys.readouterr().out.strip() == "error: c1: no_pawn"
+
+
+def test_capture_refuses_a_minimised_window(monkeypatch, tmp_path):
+    """Windows reports a minimised window at a tiny off-screen size; that is no picture, not a black one."""
+    monkeypatch.setattr(play.screenshot, "_main_window", lambda pid: 1234)
+    monkeypatch.setattr(play.screenshot, "_is_minimised", lambda hwnd: True)
+    assert play.screenshot.capture(99, tmp_path / "x.jpg") is False
+    assert not (tmp_path / "x.jpg").exists()
