@@ -49,12 +49,8 @@ def make(o: Outcome, scn: Scenario) -> str | None:
         return f"disconnect:{o.detail}"
     if o.kind == "desync":
         return f"desync:{scn.expect_map or 'unknown'}"
-    if o.kind == "fell":
-        return f"fell:{scn.expect_map or 'unknown'}"
-    if o.kind == "invisible":
-        return f"invisible:{scn.expect_map or 'unknown'}"
-    if o.kind == "nocombat":
-        return f"nocombat:{scn.expect_map or 'unknown'}"
+    if o.kind in ("fell", "invisible", "wronghero", "wrongskin", "nocombat"):
+        return f"{o.kind}:{scn.expect_map or 'unknown'}"
     if o.kind == "timeout":
         return f"timeout:{o.phase}"
     return f"{o.kind}:unknown"

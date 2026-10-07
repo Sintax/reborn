@@ -212,11 +212,21 @@ def _run_warnings(run_dir: Path) -> list[str]:
     return [str(x) for x in w] if isinstance(w, list) else []
 
 
-def _nocombat_detail(run_dir: Path) -> str | None:
-    """The plain-words reason of a nocombat run ("c1 had the combat brain on for N s ...")."""
+# Failure kinds whose outcome detail already says in plain words what went wrong, with a fallback
+# for a run whose detail is missing.
+PLAIN_KINDS = {
+    "nocombat": "a player with the combat brain on never fired or used a skill",
+    "wronghero": "a player's pawn is not the hero it picked",
+    "wrongskin": "a player's pawn wears another hero's skin",
+}
+
+
+def _plain_detail(run_dir: Path) -> tuple[str, str] | None:
+    """(kind, plain-words reason) of a run that failed with one of PLAIN_KINDS
+    ("c1 had the combat brain on for N s ...", "c2: picked Marquis but plays Alani")."""
     o = _run_result(run_dir).get("outcome")
-    if isinstance(o, dict) and o.get("kind") == "nocombat":
-        return str(o.get("detail") or "a player with the combat brain on never fired or used a skill")
+    if isinstance(o, dict) and o.get("kind") in PLAIN_KINDS:
+        return o["kind"], str(o.get("detail") or PLAIN_KINDS[o["kind"]])
     return None
 
 
@@ -237,10 +247,16 @@ def _write_brief(d, st, bug, last_failure: str | None = None) -> None:
                   "These files were already changed when this brief was written, probably left by "
                   "an earlier fixer. They are not part of HEAD. Check them before you build on them:", "",
                   *[f"- `{p}`" for p in leftovers[:20]], ""]
-    idle = _nocombat_detail(run_dir)
-    if idle:
-        lines += ["## What went wrong", "", idle + ".",
-                  f"Its last combat numbers are in `{run_dir / 'combat.json'}`.", ""]
+    plain = _plain_detail(run_dir)
+    if plain:
+        kind, why = plain
+        lines += ["## What went wrong", "", why + "."]
+        if kind == "nocombat":
+            lines.append(f"Its last combat numbers are in `{run_dir / 'combat.json'}`.")
+        else:
+            lines.append(f"Each player's requested_hero, pawn_hero and skin fields are in "
+                         f"`{run_dir / 'timeline.jsonl'}`.")
+        lines.append("")
     warnings = _run_warnings(run_dir)
     if warnings:
         lines += ["## Combat warnings from the failed run", "", *[f"- {w}" for w in warnings], ""]

@@ -14,7 +14,8 @@ FALL_COUNT = 4
 FALL_WINDOW_S = 300
 # A player whose body is not drawn (its pawn never got its skin's mesh). A new pawn has no mesh until
 # its skin is applied, so the first INVISIBLE_GRACE_S after it appears are skipped; after that it
-# has to stay invisible for INVISIBLE_PERSIST_S over at least INVISIBLE_SAMPLES samples.
+# has to stay invisible for INVISIBLE_PERSIST_S over at least INVISIBLE_SAMPLES samples. The same
+# timing judges a pawn of the wrong hero (wronghero) or in another hero's skin (wrongskin).
 INVISIBLE_GRACE_S = 30
 INVISIBLE_PERSIST_S = 60
 INVISIBLE_SAMPLES = 3
@@ -285,9 +286,13 @@ def _classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
         f = _keeps_falling(roles, play)
         if f:
             return Outcome("fell", f, f, phase)
-        inv = _invisible(roles, play)
-        if inv:
-            return Outcome("invisible", inv[1], inv[0], phase)
+        # The wrong hero or skin before invisible: a pawn in another hero's skin often has no body
+        # either, and the skin is the cause worth naming.
+        for kind, judge in (("wronghero", _wrong_hero), ("wrongskin", _wrong_skin),
+                            ("invisible", _invisible)):
+            bad = judge(roles, play)
+            if bad:
+                return Outcome(kind, bad[1], bad[0], phase)
         d = _desync(roles, play)
         if d:
             return Outcome("desync", d, d, phase)
@@ -360,12 +365,15 @@ def _invisible_count(v) -> int:
     return 0
 
 
-def _invisible(roles: dict[str, str], play: list[Sample]) -> tuple[str, str] | None:
-    """(process, detail) for a player whose body is not drawn: a client's own pawn has no visible
-    mesh (pawn_visible false), or a client sees another human player's pawn without one
-    (others_invisible), for INVISIBLE_PERSIST_S after the pawn's first INVISIBLE_GRACE_S. Seen on
-    Meltdown, run 20261006-023201: player 2's pawn never got its skin. A dead player is skipped and
-    starts over when it respawns. Samples without these fields (older mod builds) never count."""
+def _listed(v) -> str:
+    return "; ".join(map(str, v)) if isinstance(v, list) else str(v)
+
+
+def _persists(roles: dict[str, str], play: list[Sample], checks) -> tuple[str, str] | None:
+    """(process, detail) for the first check that stays bad on a living player's pawn for
+    INVISIBLE_PERSIST_S over INVISIBLE_SAMPLES samples, after the pawn's first INVISIBLE_GRACE_S
+    (a new pawn gets its skin, body and class a little after it appears). checks(state) gives
+    {name: (bad, detail)}. A dead player is skipped and starts over when it respawns."""
     appeared: dict[str, float] = {}
     bad_since: dict[tuple[str, str], tuple[float, int]] = {}   # (process, check) -> (first t, samples)
     for s in play:
@@ -376,19 +384,11 @@ def _invisible(roles: dict[str, str], play: list[Sample]) -> tuple[str, str] | N
         dead = isinstance(health, (int, float)) and not isinstance(health, bool) and health <= 0
         if not st.get("has_pawn") or dead:
             appeared.pop(s.name, None)
-            bad_since.pop((s.name, "own"), None)
-            bad_since.pop((s.name, "others"), None)
+            for key in [k for k in bad_since if k[0] == s.name]:
+                del bad_since[key]
             continue
         start = appeared.setdefault(s.name, s.t)
-        others = st.get("others_invisible")
-        checks = {
-            "own": (st.get("pawn_visible") is False,
-                    f"own pawn has no visible body ({st.get('pawn_body_missing') or 'unknown'})"),
-            "others": (_invisible_count(others) > 0,
-                       "sees players without a visible body: "
-                       + ("; ".join(map(str, others)) if isinstance(others, list) else str(others))),
-        }
-        for what, (bad, detail) in checks.items():
+        for what, (bad, detail) in checks(st).items():
             key = (s.name, what)
             if not bad or s.t - start < INVISIBLE_GRACE_S:
                 bad_since.pop(key, None)
@@ -398,6 +398,48 @@ def _invisible(roles: dict[str, str], play: list[Sample]) -> tuple[str, str] | N
             if s.t - first >= INVISIBLE_PERSIST_S and n + 1 >= INVISIBLE_SAMPLES:
                 return s.name, f"{s.name}: {detail}"
     return None
+
+
+def _invisible(roles: dict[str, str], play: list[Sample]) -> tuple[str, str] | None:
+    """A player whose body is not drawn: a client's own pawn has no visible mesh (pawn_visible
+    false), or a client sees another human player's pawn without one (others_invisible). Seen on
+    Meltdown, run 20261006-023201: player 2's pawn never got its skin. Samples without these
+    fields (older mod builds) never count."""
+    def checks(st):
+        others = st.get("others_invisible")
+        return {
+            "own": (st.get("pawn_visible") is False,
+                    f"own pawn has no visible body ({st.get('pawn_body_missing') or 'unknown'})"),
+            "others": (_invisible_count(others) > 0,
+                       "sees players without a visible body: " + _listed(others)),
+        }
+    return _persists(roles, play, checks)
+
+
+def _wrong_hero(roles: dict[str, str], play: list[Sample]) -> tuple[str, str] | None:
+    """A player whose pawn is not the hero it picked (hero_matches false). Samples with no pick
+    or no answer (null, or an older mod build without the field) never count."""
+    def checks(st):
+        return {"hero": (st.get("hero_matches") is False,
+                         f"picked {st.get('requested_hero') or '?'} but plays "
+                         f"{st.get('pawn_hero') or '?'}")}
+    return _persists(roles, play, checks)
+
+
+def _wrong_skin(roles: dict[str, str], play: list[Sample]) -> tuple[str, str] | None:
+    """A player whose own pawn wears another hero's skin (pawn_skin_ok false), or who sees another
+    human player in one (others_wrong_skin). That is how the s3 ModernSoldier lost its body
+    (runs 20261006-023201, -025246). Samples without these fields never count."""
+    def checks(st):
+        others = st.get("others_wrong_skin")
+        return {
+            "own": (st.get("pawn_skin_ok") is False,
+                    f"own pawn ({st.get('pawn_hero') or '?'}) wears another hero's skin "
+                    f"({st.get('pawn_skin_wrong') or 'unknown'})"),
+            "others": (_invisible_count(others) > 0,
+                       "sees players in another hero's skin: " + _listed(others)),
+        }
+    return _persists(roles, play, checks)
 
 
 def _desync(roles: dict[str, str], play: list[Sample]) -> str | None:
