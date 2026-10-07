@@ -356,7 +356,7 @@ def test_combat_warnings_for_silent_players():
 
 
 def test_combat_warnings_need_a_long_run():
-    assert run.combat_warnings([_combat_sample("c1", 300.0, 0, 0.0)], elapsed_s=300.0) == []
+    assert run.combat_warnings([_combat_sample("c1", 200.0, 0, 0.0)], elapsed_s=200.0) == []
 
 
 def test_combat_warnings_skip_players_without_combat():

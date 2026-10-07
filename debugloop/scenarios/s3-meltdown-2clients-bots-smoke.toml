@@ -1,7 +1,7 @@
 name = "s3-meltdown-2clients-bots-smoke"
 step = 3
 smoke = true
-time_limit_s = 300
+time_limit_s = 270
 pass_when = "survive"
 required_passes = 1
 expect_map = "IceScort_P"

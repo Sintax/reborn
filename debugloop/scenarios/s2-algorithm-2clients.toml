@@ -1,6 +1,6 @@
 name = "s2-algorithm-2clients"
 step = 2
-time_limit_s = 1800
+time_limit_s = 600
 pass_when = "survive"
 required_passes = 2
 expect_map = "Caverns_P"

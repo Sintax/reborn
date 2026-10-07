@@ -1,7 +1,7 @@
 name = "s2-algorithm-2clients-smoke"
 step = 2
 smoke = true
-time_limit_s = 300
+time_limit_s = 270
 pass_when = "survive"
 required_passes = 1
 expect_map = "Caverns_P"

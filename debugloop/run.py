@@ -296,7 +296,7 @@ def last_combat_stats(samples) -> dict[str, dict]:
     return {name: c.get("stats", {}) for name, c in _last_combat(samples).items()}
 
 
-def combat_warnings(samples, elapsed_s: float, min_play_s: float = 600.0) -> list[str]:
+def combat_warnings(samples, elapsed_s: float, min_play_s: float = 240.0) -> list[str]:
     """Players with the combat brain on that never fired or never got hit over a long run. Worth a
     look (a broken weapon, a player stuck in a corner, damage that never replicates), not a failure."""
     if elapsed_s < min_play_s:
