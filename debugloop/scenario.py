@@ -30,6 +30,8 @@ class Scenario:
     expect_map: str | None
     processes: list[ProcessSpec]
     path: Path
+    # The map has enemies to fight: a combat-brain player that never fires or casts is a failure.
+    expect_combat: bool = False
 
 
 def parse(text: str, path: Path) -> Scenario:
@@ -48,6 +50,9 @@ def parse(text: str, path: Path) -> Scenario:
     pass_when = d.get("pass_when", "survive")
     if pass_when not in ("survive", "match_end"):
         raise ScenarioError(f"{path}: pass_when must be survive|match_end")
+    expect_combat = d.get("expect_combat", False)
+    if not isinstance(expect_combat, bool):
+        raise ScenarioError(f"{path}: expect_combat must be true or false")
     procs = []
     for p in d.get("process", []):
         if p.get("role") not in ROLES:
@@ -63,7 +68,7 @@ def parse(text: str, path: Path) -> Scenario:
         raise ScenarioError(f"{path}: clients need exactly one server")
     return Scenario(name, step, bool(d.get("smoke", False)), need("time_limit_s", int),
                     pass_when, int(d.get("required_passes", 1)), d.get("expect_map"),
-                    procs, path)
+                    procs, path, expect_combat)
 
 
 def load(path: Path) -> Scenario:

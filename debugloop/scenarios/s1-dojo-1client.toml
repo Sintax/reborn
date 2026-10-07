@@ -4,6 +4,7 @@ time_limit_s = 480
 pass_when = "survive"
 required_passes = 2
 expect_map = "Dojo_P"
+expect_combat = true
 
 [[process]]
 name = "server"

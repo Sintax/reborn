@@ -19,6 +19,9 @@ INVISIBLE_GRACE_S = 30
 INVISIBLE_PERSIST_S = 60
 INVISIBLE_SAMPLES = 3
 STARTUP_TIMEOUT_S = 240
+# On a map with enemies (Scenario.expect_combat), a combat-brain player that has been in the game
+# this long without one shot or skill is not fighting at all.
+NOCOMBAT_PLAY_S = 180
 WATCHDOG_GRACE_S = 10    # time the watchdog gets to write its dump and report
 
 
@@ -101,6 +104,10 @@ def _phase(scn: Scenario, samples: list[Sample]) -> tuple[str, int]:
 def classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
              elapsed_s: float, match_ended: bool) -> Outcome:
     o = _classify(scn, samples, procs, elapsed_s, match_ended)
+    if o.kind == "pass" and scn.expect_combat:
+        idle = _never_fought(scn, samples)
+        if idle:
+            o = Outcome("nocombat", idle[1], idle[0], "playing")
     # Outcomes decided at or after the desync check get a note when the check was blind.
     if o.kind in ("desync", "pass", "timeout", "running") or o.code == "wrong_map":
         phase, start = _phase(scn, samples)
@@ -111,6 +118,33 @@ def classify(scn: Scenario, samples: list[Sample], procs: list[ProcessRecord],
                 note = "no unique_id from " + ",".join(missing) + " (desync matched by name)"
                 o.detail = f"{o.detail}; {note}" if o.detail else note
     return o
+
+
+def _never_fought(scn: Scenario, samples: list[Sample]) -> tuple[str, str] | None:
+    """(process, detail) for a player with the combat brain on that was in the game (a pawn, or
+    autopilot "playing") for NOCOMBAT_PLAY_S or more, yet its last stats show no shot and no skill.
+    Samples without a combat block (older mod builds, brain off) never count."""
+    roles = {p.name: p.role for p in scn.processes}
+    first_play: dict[str, float] = {}
+    last_t: dict[str, float] = {}
+    combat: dict[str, dict] = {}
+    for s in samples:
+        if roles.get(s.name) not in ("client", "solo") or not isinstance(s.state, dict):
+            continue
+        st = s.state
+        if st.get("has_pawn") or st.get("autopilot") == "playing":
+            first_play.setdefault(s.name, s.t)
+        last_t[s.name] = s.t
+        if isinstance(st.get("combat"), dict):
+            combat[s.name] = st["combat"]
+    for name, c in combat.items():
+        played = last_t[name] - first_play.get(name, last_t[name])
+        stats = c.get("stats") if isinstance(c.get("stats"), dict) else {}
+        if (c.get("enabled") and played >= NOCOMBAT_PLAY_S
+                and not stats.get("shots") and not stats.get("skills_used")):
+            return name, (f"{name} had the combat brain on for {int(played)} s but never fired or "
+                          "used a skill; on this map it should find and fight enemies")
+    return None
 
 
 def _missing_unique_id(roles: dict[str, str], play: list[Sample]) -> list[str]:

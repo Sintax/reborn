@@ -197,13 +197,27 @@ def _prune_dumps(d, bug) -> None:
             dmp.unlink()
 
 
+def _run_result(run_dir: Path) -> dict:
+    """The run's result.json; empty when it is missing or unreadable."""
+    try:
+        r = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+        return r if isinstance(r, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def _run_warnings(run_dir: Path) -> list[str]:
     """The run's combat warnings from its result.json; none when it is missing or unreadable."""
-    try:
-        w = json.loads((run_dir / "result.json").read_text(encoding="utf-8")).get("warnings", [])
-        return [str(x) for x in w] if isinstance(w, list) else []
-    except (OSError, ValueError, AttributeError):
-        return []
+    w = _run_result(run_dir).get("warnings", [])
+    return [str(x) for x in w] if isinstance(w, list) else []
+
+
+def _nocombat_detail(run_dir: Path) -> str | None:
+    """The plain-words reason of a nocombat run ("c1 had the combat brain on for N s ...")."""
+    o = _run_result(run_dir).get("outcome")
+    if isinstance(o, dict) and o.get("kind") == "nocombat":
+        return str(o.get("detail") or "a player with the combat brain on never fired or used a skill")
+    return None
 
 
 def _write_brief(d, st, bug, last_failure: str | None = None) -> None:
@@ -223,6 +237,10 @@ def _write_brief(d, st, bug, last_failure: str | None = None) -> None:
                   "These files were already changed when this brief was written, probably left by "
                   "an earlier fixer. They are not part of HEAD. Check them before you build on them:", "",
                   *[f"- `{p}`" for p in leftovers[:20]], ""]
+    idle = _nocombat_detail(run_dir)
+    if idle:
+        lines += ["## What went wrong", "", idle + ".",
+                  f"Its last combat numbers are in `{run_dir / 'combat.json'}`.", ""]
     warnings = _run_warnings(run_dir)
     if warnings:
         lines += ["## Combat warnings from the failed run", "", *[f"- {w}" for w in warnings], ""]
