@@ -2226,8 +2226,12 @@ namespace Hooks {
 
     // Mid hook at the entry of appMsgf(int* result, int type, const wchar_t* format, ...): rdx = type,
     // r8 = the (usually already localized and formatted) text. Logs only; the box still shows.
+    // The fatal-error dialog passes format "%s" with the whole text (error + call stack) in r9.
     void GameMessageBoxHook(safetyhook::Context& ctx) {
-        std::string text = Narrow(reinterpret_cast<const wchar_t*>(ctx.r8), 400);
+        const wchar_t* format = reinterpret_cast<const wchar_t*>(ctx.r8);
+        const bool textIsArgument = format && ctx.r9 && (wcscmp(format, L"%s") == 0 || wcscmp(format, L"%ls") == 0);
+        std::string text = textIsArgument ? Narrow(reinterpret_cast<const wchar_t*>(ctx.r9), 1500)
+                                          : Narrow(format, 400);
         {
             std::lock_guard lk(g_dialogMutex);
             g_lastDialog = text;
@@ -2506,6 +2510,41 @@ namespace Hooks {
         return CallWindowProc(oWndProc, hWnd, uMsg, wParam, lParam);
     }
 
+    namespace {
+        const char* DxgiResultName(HRESULT hr) {
+            switch ((unsigned)hr) {
+            case 0x00000000: return "S_OK (device not removed)";
+            case 0x887A0001: return "DXGI_ERROR_INVALID_CALL (a bad D3D call, by the game or our overlay)";
+            case 0x887A0005: return "DXGI_ERROR_DEVICE_REMOVED";
+            case 0x887A0006: return "DXGI_ERROR_DEVICE_HUNG (the GPU took too long on this process's commands)";
+            case 0x887A0007: return "DXGI_ERROR_DEVICE_RESET (the GPU was reset because of another process or the driver)";
+            case 0x887A0020: return "DXGI_ERROR_DRIVER_INTERNAL_ERROR (graphics driver fault)";
+            case 0x8007000E: return "E_OUTOFMEMORY (out of video memory)";
+            }
+            return "other";
+        }
+
+        // A failed Present means the D3D device is gone; the game then asserts on its next checked D3D call
+        // (seen as "RenderAssert: Device->CreateRenderTargetView ... DXGI_ERROR_DEVICE_REMOVED"). The removed
+        // reason says whose fault it was. Runs on the render thread.
+        HRESULT LogPresentResult(IDXGISwapChain* swapChain, HRESULT hr) {
+            static int logged = 0;
+            if (!FAILED(hr) || logged >= 3) return hr;
+            logged++;
+            ID3D11Device* device = nullptr;
+            HRESULT reason = E_POINTER;
+            if (swapChain && SUCCEEDED(swapChain->GetDevice(__uuidof(ID3D11Device), (void**)&device)) && device) {
+                reason = device->GetDeviceRemovedReason();
+                device->Release();
+            }
+            printf("[GPU] Present failed with 0x%08X %s; device removed reason 0x%08X %s (engine frames so far %llu, overlay %s)\n",
+                (unsigned)hr, DxgiResultName(hr), (unsigned)reason, DxgiResultName(reason), Diagnostics::TickCount(),
+                init ? "drawing" : "not started");
+            fflush(stdout);
+            return hr;
+        }
+    }
+
     HRESULT PresentHook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags) {
         if (!init)
         {
@@ -2529,7 +2568,7 @@ namespace Hooks {
             }
 
             else
-                return Present.call<HRESULT>(pSwapChain, SyncInterval, Flags);
+                return LogPresentResult(pSwapChain, Present.call<HRESULT>(pSwapChain, SyncInterval, Flags));
         }
 
         ImGui_ImplDX11_NewFrame();
@@ -2542,6 +2581,6 @@ namespace Hooks {
 
         pContext->OMSetRenderTargets(1, &mainRenderTargetView, NULL);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        return Present.call<HRESULT>(pSwapChain, SyncInterval, Flags);
+        return LogPresentResult(pSwapChain, Present.call<HRESULT>(pSwapChain, SyncInterval, Flags));
     }
 }

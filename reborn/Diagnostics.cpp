@@ -37,8 +37,17 @@ namespace Diagnostics {
 
         // The faulting thread copies the exception into these globals before handing off, so the
         // worker never reads memory owned by the faulting thread's stack.
-        struct CrashRequest { DWORD threadId; bool firstChance; unsigned seq; unsigned long long ticks; };
+        struct CrashRequest { DWORD threadId; bool firstChance; bool withMessage; unsigned seq; unsigned long long ticks; };
         CrashRequest g_request{};
+        std::atomic<bool> g_finalReported{ false };   // at most one final (first_chance=false) report per process
+
+        // UE3's fatal-error path (appError / a failed check or assert) writes the message into the engine's
+        // error buffer, then raises this code. The game's own handlers catch it and show the "%s" dialog,
+        // so it never becomes a second-chance exception and UnhandledFilter never runs.
+        constexpr DWORD kEngineFatalError = 0xDEAD;
+        const wchar_t* g_fatalTextSource = nullptr;
+        size_t g_fatalTextMax = 0;
+        char g_fatalText[2048];   // narrow, one line; filled on the faulting thread (no heap)
         EXCEPTION_RECORD g_recordCopy;
         CONTEXT g_contextCopy;
         EXCEPTION_POINTERS g_pointersCopy;
@@ -201,8 +210,9 @@ namespace Diagnostics {
               << ",\"game_thread\":" << (r.threadId == g_gameThreadId ? "true" : "false")
               << ",\"first_chance\":" << (r.firstChance ? "true" : "false")
               << ",\"ticks\":" << r.ticks
-              << ",\"dump\":" << JsonString(Narrow(g_instance) + "." + std::to_string(index) + ".dmp")
-              << ",\"log_tail\":" << TailJson() << "}";
+              << ",\"dump\":" << JsonString(Narrow(g_instance) + "." + std::to_string(index) + ".dmp");
+            if (r.withMessage) j << ",\"message\":" << JsonString(g_fatalText);
+            j << ",\"log_tail\":" << TailJson() << "}";
             WriteJson(base + L".crash.json", j.str());
         }
 
@@ -219,7 +229,7 @@ namespace Diagnostics {
 
         // The dump is written from a separate thread: MiniDumpWriteDump is unreliable on the faulting thread.
         // If the wait times out the request is abandoned, but the worker only uses the global copies.
-        void Report(EXCEPTION_POINTERS* ep, bool firstChance) {
+        void Report(EXCEPTION_POINTERS* ep, bool firstChance, bool withMessage = false) {
             static std::mutex oneAtATime;
             const unsigned long long ticksAtFault = g_ticks;   // before any wait below
             DWORD tid = GetCurrentThreadId();
@@ -238,7 +248,7 @@ namespace Diagnostics {
             g_contextCopy.ContextFlags &= ~(CONTEXT_XSTATE & ~CONTEXT_AMD64);
             g_pointersCopy = { &g_recordCopy, &g_contextCopy };
             unsigned seq = ++g_nextSeq;
-            g_request = { tid, firstChance, seq, ticksAtFault };
+            g_request = { tid, firstChance, withMessage, seq, ticksAtFault };
             SetEvent(g_requestEvent);
             while (g_doneSeq != seq) {
                 ULONGLONG now = GetTickCount64();
@@ -247,8 +257,39 @@ namespace Diagnostics {
             }
         }
 
+        // Copies the engine's fatal message into g_fatalText as one line. No heap: runs on the faulting thread.
+        void CopyFatalText() {
+            g_fatalText[0] = '\0';
+            if (!g_fatalTextSource || !g_fatalTextMax) return;
+            __try {
+                // At most 600 chars: up to 3 UTF-8 bytes each still fits, and a too-small buffer would fail outright.
+                size_t n = wcsnlen(g_fatalTextSource, g_fatalTextMax < 600 ? g_fatalTextMax : 600);
+                int len = n ? WideCharToMultiByte(CP_UTF8, 0, g_fatalTextSource, (int)n, g_fatalText,
+                                                  (int)sizeof g_fatalText - 1, nullptr, nullptr) : 0;
+                g_fatalText[len > 0 ? len : 0] = '\0';
+            } __except (EXCEPTION_EXECUTE_HANDLER) { g_fatalText[0] = '\0'; }
+            for (char* c = g_fatalText; *c; c++) if (*c == '\r' || *c == '\n' || *c == '\t') *c = ' ';
+        }
+
+        // The engine stops for good after raising 0xDEAD (it shows its dialog and then exits or sits there),
+        // so this is the final report for the process, with the engine's own message attached.
+        void ReportEngineFatalError(EXCEPTION_POINTERS* ep) {
+            DWORD tid = GetCurrentThreadId();
+            if (tid == g_workerThreadId || tid == g_watchdogThreadId) return;
+            if (g_finalReported.exchange(true)) return;
+            CopyFatalText();
+            std::printf("[FATAL] the game hit a fatal error (exception 0xDEAD) on the %s thread %lu: %s\n",
+                        tid == g_gameThreadId ? "game" : "non-game", tid,
+                        g_fatalText[0] ? g_fatalText : "(engine error text not available)");
+            Report(ep, false, true);
+        }
+
         // No heap allocation and no locks here: this runs on the faulting thread.
         LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* ep) {
+            if (ep->ExceptionRecord->ExceptionCode == kEngineFatalError) {
+                ReportEngineFatalError(ep);
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
             if (!IsFatal(ep->ExceptionRecord->ExceptionCode)) return EXCEPTION_CONTINUE_SEARCH;
             DWORD tid = GetCurrentThreadId();
             if (tid == g_workerThreadId || tid == g_watchdogThreadId) return EXCEPTION_CONTINUE_SEARCH;
@@ -267,8 +308,7 @@ namespace Diagnostics {
 
         // Always writes its own final report (first_chance=false), even for an address already reported.
         LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
-            static std::atomic<bool> reported{ false };
-            if (!reported.exchange(true)) Report(ep, false);   // one final report per process
+            if (!g_finalReported.exchange(true)) Report(ep, false);   // one final report per process
             return g_previousFilter ? g_previousFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
         }
 
@@ -333,6 +373,11 @@ namespace Diagnostics {
         std::thread(Watchdog).detach();
         std::printf("[DIAG] run dir %ls, instance %ls, freeze limit %d s\n",
                     g_runDir.c_str(), g_instance.c_str(), g_hangSeconds);
+    }
+
+    void SetFatalErrorBuffer(const wchar_t* buffer, size_t maxChars) {
+        g_fatalTextMax = maxChars;
+        g_fatalTextSource = buffer;
     }
 
     void NoteTick() {

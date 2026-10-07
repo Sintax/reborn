@@ -1,5 +1,6 @@
 #include "Init.hpp"
 #include "LaunchOptions.hpp"
+#include "Diagnostics.hpp"
 
 namespace Init {
     void Globals() {
@@ -30,6 +31,9 @@ namespace Init {
         if (!Hooks::GameMessageBox || !Hooks::EngineExit)
             std::printf("[STARTUP] hook FAILED: message box %s, engine exit %s\n",
                 Hooks::GameMessageBox ? "ok" : "failed", Hooks::EngineExit ? "ok" : "failed");
+        // The engine's fatal-error text buffer (GErrorHist, 0x4000 wide chars). The fatal-error function
+        // (battleborn+0x52ee0) formats "file(line): Assertion failed: ..." into it, then raises 0xDEAD.
+        Diagnostics::SetFatalErrorBuffer(reinterpret_cast<const wchar_t*>(Globals::baseAddress + 0x3496300), 0x4000);
 
         if (Globals::amServer) {
             Hooks::DestroyActor = safetyhook::create_inline((void*)(Globals::baseAddress + 0x3EF070), &Hooks::DestroyActorHook);

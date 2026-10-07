@@ -4,6 +4,8 @@
 
 namespace Diagnostics {
     void Init(const std::wstring& runDir, const std::wstring& instance, int hangSeconds);
+    // Where the engine writes its fatal-error text before raising 0xDEAD; attached to that crash report.
+    void SetFatalErrorBuffer(const wchar_t* buffer, size_t maxChars);
     void NoteTick();
     long long MillisSinceLastTick();
     unsigned long long TickCount();
