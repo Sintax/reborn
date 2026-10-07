@@ -15,7 +15,7 @@ The user's rule: the smart player controls (the combat brain, `-rbcombat` in the
 
 Once the ladder passes cleanly without it, put `-rbcombat` back on the clients and let the ladder run again. If the basic bugs return with it on, turn it off again and tell the user.
 
-Current setting: ON again (2026-10-07). It was off while `invisible:IceScort_P` and character-select timeouts recurred; the ladder then passed steps 0-3 without it.
+Current setting: OFF until the user says otherwise (2026-10-07). The user concluded the automated player control is not helping ("this is a human thing"); do not turn it back on yourself.
 
 ## 1. Run the next test
 
