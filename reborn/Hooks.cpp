@@ -962,6 +962,52 @@ namespace Hooks {
                 attempt, sp->Name.c_str(), pkg.c_str(), inList ? "yes" : "no", supportsPkg ? "yes" : "no", supportsObj ? "yes" : "no", clientHasPackage ? "yes" : "no");
         }
 
+        // 3b. The same gate for the pending skin and taunt. Runs 20261007-055347 and -064405: the class
+        //     gate passed ("client has package yes") but SwitchToPendingPlayerClass applied nothing 40
+        //     times while the pending skin and taunt said "client has it no"; the passing run -060934
+        //     applied the class on the first call where both said yes. The package maps were refreshed
+        //     once, when the class gate failed, before GD_<Hero>_DefaultSkin / _Taunt001 loaded on the
+        //     server, and nothing refreshed them again because the class gate then passed.
+        if (classDef) {
+            UNetConnection* conn = sp->Connection;
+            UObject* extras[2] = { pc->PendingPlayerSkin, pc->PendingPlayerTaunt };
+            const char* kinds[2] = { "skin", "taunt" };
+            bool refreshed = false;
+            for (int i = 0; i < 2; i++) {
+                UObject* obj = extras[i];
+                if (!obj) {
+                    printf("[SPAWN] attempt %i: %s's pending %s is none (server loading skin %u, taunt %u)\n", attempt, sp->Name.c_str(), kinds[i],
+                        (unsigned)pc->bLoadingPlayerSkin, (unsigned)pc->bLoadingPlayerTaunt);
+                    continue;
+                }
+                if (pc->HasClientLoadedOnDemandPackageFor(obj))
+                    continue;
+                UObject* objPkg = OutermostObject(obj);
+                std::string objPkgName = objPkg ? objPkg->GetName() : std::string("none");
+                bool inList = objPkg && ServerNetworking::ConnectionHasOnDemandPackage(conn, objPkg);
+                bool supPkg = objPkg && ServerNetworking::PackageMapSupportsPackage(conn, objPkg);
+                bool supObj = ServerNetworking::PackageMapSupportsObject(conn, obj);
+                printf("[SPAWN] attempt %i: %s gate for %s before fix: %s (package %s) in client's loaded list %s, package map supports package %s, supports object %s\n",
+                    attempt, kinds[i], sp->Name.c_str(), obj->GetFullName().c_str(), objPkgName.c_str(), inList ? "yes" : "no", supPkg ? "yes" : "no", supObj ? "yes" : "no");
+                if (objPkg && !inList) {
+                    std::wstring wp(objPkgName.begin(), objPkgName.end());
+                    pc->UpdateOnDemandPackageStatus(FString(wp.c_str()), true);
+                    if (!ServerNetworking::ConnectionHasOnDemandPackage(conn, objPkg))
+                        ServerNetworking::MarkOnDemandPackageLoaded(conn, objPkg);
+                    inList = ServerNetworking::ConnectionHasOnDemandPackage(conn, objPkg);
+                }
+                if ((!supPkg || !supObj) && !refreshed) {
+                    ServerNetworking::RefreshServerPackageMaps(conn);
+                    refreshed = true;
+                }
+                supPkg = objPkg && ServerNetworking::PackageMapSupportsPackage(conn, objPkg);
+                supObj = ServerNetworking::PackageMapSupportsObject(conn, obj);
+                printf("[SPAWN] attempt %i: %s gate for %s after fix: in client's loaded list %s, package map supports package %s, supports object %s -> HasClientLoadedOnDemandPackageFor %s\n",
+                    attempt, kinds[i], sp->Name.c_str(), inList ? "yes" : "no", supPkg ? "yes" : "no", supObj ? "yes" : "no",
+                    pc->HasClientLoadedOnDemandPackageFor(obj) ? "yes" : "no");
+            }
+        }
+
         // The gates, before touching anything else.
         bool requirementsMet = pri->AreRequirementsMetToSpawnCharacter();
         bool canRestart = gi->PlayerCanRestart(pc);
