@@ -22,6 +22,8 @@ namespace Globals {
         UPoplarPerkFunction* GearSlotTwo = nullptr;
         UPoplarPerkFunction* GearSlotThree = nullptr;
         bool shouldReplicateTo = false;
+        // LAN players: Character is only a placeholder until the client's lock-in names its hero.
+        bool AwaitingHeroPick = false;
         int UniqueId = 0;
 
         ServerPlayer(std::string PlayerName, std::string CharacterObjectName, std::string SkinObjectName, std::string TauntObjectName, std::string GearSlotOneObjectName, std::string GearSlotTwoObjectName, std::string GearSlotThreeObjectName){

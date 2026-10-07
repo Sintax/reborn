@@ -31,7 +31,7 @@ namespace Constants {
         "Orendi",
         "Oscar Mike",
         "Pendles",
-        "Pheobe",
+        "Phoebe",
         "Rath",
         "Reyna",
         "Shayne & Aurox",

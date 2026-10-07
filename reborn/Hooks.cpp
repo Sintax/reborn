@@ -3,6 +3,7 @@
 
 #include "Init.hpp"
 #include "Globals.hpp"
+#include "Constants.hpp"
 #include "ServerSettings.hpp"
 #include "Engine.hpp"
 #include "Networking.hpp"
@@ -62,6 +63,19 @@ namespace Hooks {
                 return &serverPlayer;
         }
 
+        return nullptr;
+    }
+
+    // The hero behind a character-select index (Constants::CharacterSelectCharacterTable, the index
+    // the client's lock-in sends with ServerCharacterSelectInput), or nullptr.
+    UPoplarPlayerNameIdentifierDefinition* HeroForSelectIndex(int index) {
+        if (index < 0 || index >= (int)Constants::CharacterSelectCharacterTable.size()) return nullptr;
+        std::string className = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[index]);
+        if (className.empty()) return nullptr;
+        for (UPoplarPlayerNameIdentifierDefinition* id : SDKUtils::GetAllOfClass<UPoplarPlayerNameIdentifierDefinition>()) {
+            if (id->CharacterClassId && !id->GetFullName().contains("Default") && id->CharacterClassId->ClassName.ToString() == className)
+                return id;
+        }
         return nullptr;
     }
 
@@ -782,6 +796,8 @@ namespace Hooks {
     }
 
     const int kSpawnAttemptMax = 40;   // every 3 s: covers PlayerSetup -> WarmUp -> InProgress (about 60 s after login)
+    const int kHeroPickWaitAttempts = 11;   // about 30 s; the client re-sends its lock-in every 12 s
+    const int kHeroMismatchAttempts = 20;   // about 60 s of switching back to the picked hero
 
     // Game thread only. Looks the controller up through the connection each time, since the pointer
     // captured at login is not kept alive by anything.
@@ -822,23 +838,50 @@ namespace Hooks {
             return;
         }
 
+        // 0. A LAN player's hero comes with the client's lock-in, which reaches the server some
+        //    seconds after login. Wait for it; after kHeroPickWaitAttempts, select the placeholder.
+        if (sp->AwaitingHeroPick) {
+            if (attempt < kHeroPickWaitAttempts) {
+                if (attempt == 1)
+                    printf("[SPAWN] attempt %i: waiting for %s's hero pick\n", attempt, sp->Name.c_str());
+                again();
+                return;
+            }
+            sp->AwaitingHeroPick = false;
+            pc->eventServerSelectCharacter(sp->Character, sp->OptionalSkin, sp->OptionalTaunt, true);
+            printf("[SPAWN] attempt %i: %s never picked a hero; selected %s -> pending class %s\n", attempt, sp->Name.c_str(),
+                NameOrNone(sp->Character).c_str(), NameOrNone(pc->PendingPlayerClass).c_str());
+        }
+
         APoplarPlayerStateInfo* psi = pc->PoplarPSI;   // holds the applied class (AWillowPlayerStateInfo::PlayerClass)
 
         LogSpawnNativeAddresses();
 
-        // 1. Work with the pending class the server itself settled on. Every selection that goes
-        //    through the game's own rules (the client's lock-in, ServerSelectCharacter at login,
-        //    ServerPlayerSelectClass) comes back as Class_ModernSoldier for this player: the remote
-        //    player's meta PRI owns no characters, so the server substitutes the default hero.
-        //    Attempts 2-4 forced the pending class back to RocketHawk every 3 s and then tried to
-        //    apply a class the server had just refused; none of them ever ran SwitchToPendingPlayerClass
-        //    with the server's own choice and the package gate fixed for *that* class. Accept the
-        //    default (a pawn of any class is what this stage needs) and only seed a pending class when
-        //    there is none at all.
-        if (!pc->PendingPlayerClass && sp->Character) {
-            pc->eventSwitchPoplarPlayerClass(sp->Character);
-            printf("[SPAWN] attempt %i: %s had no pending class; SwitchPoplarPlayerClass(%s) -> %s\n", attempt, sp->Name.c_str(),
-                sp->Character->GetName().c_str(), NameOrNone(pc->PendingPlayerClass).c_str());
+        // 1. Get the pending class to the player's hero. ServerPlayerSelectClass replaces a hero the
+        //    remote player does not own (its meta PRI owns no characters) with Class_ModernSoldier,
+        //    so it is kept out of this (see 4b and the empty-path drop in the ProcessEvent hook);
+        //    SwitchPoplarPlayerClass sets the pending class once the hero's data has loaded.
+        //    A LAN player's hero is the one its client picked (see the ServerCharacterSelectInput hook).
+        //    The game also hands a random hero to a player with no selection shortly after PostLogin,
+        //    and that hero's load can finish after ours and replace the pending class. Until
+        //    kHeroMismatchAttempts, switch back to the picked hero and wait for its load rather than
+        //    spawning the wrong one; after that, take whatever the server has pending.
+        if (sp->Character && (!pc->PendingPlayerClass || pc->PendingPlayerClassNameId != sp->Character)) {
+            UPoplarPlayerNameIdentifierDefinition* pendingBefore = pc->PendingPlayerClassNameId;
+            if (!pc->PendingPlayerClass || attempt < kHeroMismatchAttempts) {
+                pc->eventSwitchPoplarPlayerClass(sp->Character);
+                printf("[SPAWN] attempt %i: %s's pending hero is %s, not %s; SwitchPoplarPlayerClass(%s) -> %s\n", attempt, sp->Name.c_str(),
+                    NameOrNone(pendingBefore).c_str(), sp->Character->GetName().c_str(), sp->Character->GetName().c_str(),
+                    NameOrNone(pc->PendingPlayerClassNameId).c_str());
+            }
+            else {
+                printf("[SPAWN] attempt %i: %s's pending hero is still %s, not %s; spawning it anyway\n", attempt, sp->Name.c_str(),
+                    NameOrNone(pendingBefore).c_str(), sp->Character->GetName().c_str());
+            }
+            if (pc->PendingPlayerClass && pc->PendingPlayerClassNameId != sp->Character && attempt < kHeroMismatchAttempts) {
+                again();
+                return;
+            }
         }
         UPlayerClassDefinition* classDef = pc->PendingPlayerClass;
 
@@ -951,7 +994,10 @@ namespace Hooks {
             //     Attempt 1 stays clean (gate fix + SwitchToPendingPlayerClass only) so the trace shows
             //     what the server does on its own; the fallbacks start on attempt 2 and always name
             //     the class the server currently has pending, never one it already refused.
-            if (!(psi && psi->PlayerClass) && clientHasPackage && attempt >= 2) {
+            //     Skipped when the pending class is already the player's hero: ServerPlayerSelectClass
+            //     replaces any hero the remote player does not own with Class_ModernSoldier, which is
+            //     how every LAN player used to end up as Oscar Mike.
+            if (!(psi && psi->PlayerClass) && clientHasPackage && attempt >= 2 && pc->PendingPlayerClassNameId != sp->Character) {
                 std::string path = ObjectPath(classDef);
                 std::wstring wpath(path.begin(), path.end());
                 uint8_t stateBefore = static_cast<uint8_t>(pri->CharacterSelectionState);
@@ -1058,6 +1104,7 @@ namespace Hooks {
                 Globals::ServerPlayer serverPlayer = Globals::ServerPlayer("LAN Player", "PoplarPlayerNameIdentifierDefinition GD_RocketHawk.NameId_RocketHawk", "", "", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_MaxShield_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_ShieldPen_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_HealthRegen_Legendary_LLC2");
 
                 serverPlayer.Connection = connection;
+                serverPlayer.AwaitingHeroPick = true;   // RocketHawk is a placeholder; the client's lock-in names the hero
 
                 Globals::ServerPlayers.push_back(serverPlayer);
 
@@ -1259,13 +1306,21 @@ namespace Hooks {
                             // runs here, which is what the server's setup phase waits for.
                             pc->ServerSetHasReceivedEntitlements();
 
-                            pc->eventServerSelectCharacter(serverPlayer.Character, serverPlayer.OptionalSkin, serverPlayer.OptionalTaunt, true);
+                            // The first selection decides the hero: the server does not switch class on a
+                            // later one. A LAN player's hero is not known yet, so leave the selection to
+                            // the client's lock-in (see the ServerCharacterSelectInput hook).
+                            if (serverPlayer.AwaitingHeroPick) {
+                                printf("[SPAWN] %s: no hero selected at login; waiting for the client's pick\n", serverPlayer.Name.c_str());
+                            }
+                            else {
+                                pc->eventServerSelectCharacter(serverPlayer.Character, serverPlayer.OptionalSkin, serverPlayer.OptionalTaunt, true);
 
-                            if (serverPlayer.OptionalSkin)
-                                pc->eventServerSelectCharacterSkin(serverPlayer.OptionalSkin);
+                                if (serverPlayer.OptionalSkin)
+                                    pc->eventServerSelectCharacterSkin(serverPlayer.OptionalSkin);
 
-                            if(serverPlayer.OptionalTaunt)
-                                pc->eventServerSelectCharacterTaunt(serverPlayer.OptionalTaunt);
+                                if(serverPlayer.OptionalTaunt)
+                                    pc->eventServerSelectCharacterTaunt(serverPlayer.OptionalTaunt);
+                            }
 
                             
                             if (serverPlayer.GearSlotOne) {
@@ -1566,6 +1621,66 @@ namespace Hooks {
                     printf("[POSSESS] client: sending AskForPawn from %s (pawn %s, acknowledged %s, state %s)\n", ppc->GetName().c_str(),
                         NameOrNone(ppc->Pawn).c_str(), NameOrNone(ppc->AcknowledgedPawn).c_str(), StateNameOf(ppc).c_str());
                 }
+            }
+        }
+
+        // Every LAN player is assigned NameId_RocketHawk at login. The client's lock-in names the hero
+        // it picked only by its character-select index (ServerCharacterSelectInput, sent before the
+        // hero-less ServerSelectCharacter below), so take the hero from there while there is no pawn.
+        static UFunction* serverCharacterSelectInputUFunction = nullptr;
+
+        if (!serverCharacterSelectInputUFunction)
+            serverCharacterSelectInputUFunction = UFunction::FindFunction("Function PoplarGame.PoplarPlayerController.ServerCharacterSelectInput");
+
+        if (Globals::amServer && Globals::netDriver && function == serverCharacterSelectInputUFunction && params) {
+            APoplarPlayerController* inputPc = reinterpret_cast<APoplarPlayerController*>(object);
+            int index = reinterpret_cast<APoplarPlayerController_execServerCharacterSelectInput_Params*>(params)->Index;
+            Globals::ServerPlayer* serverPlayer = ConnectionToServerPlayer((UNetConnection*)inputPc->Player);
+            UPoplarPlayerNameIdentifierDefinition* picked = HeroForSelectIndex(index);
+            if (!picked) {
+                printf("[SPAWN] character-select index %i names no known hero; keeping %s\n", index,
+                    serverPlayer ? NameOrNone(serverPlayer->Character).c_str() : "none");
+            }
+            else if (serverPlayer && serverPlayer->AwaitingHeroPick) {
+                // Only the first pick counts (the client re-sends its lock-in while it has no pawn).
+                printf("[SPAWN] %s picked %s (index %i) in place of %s\n", serverPlayer->Name.c_str(), picked->GetName().c_str(), index,
+                    NameOrNone(serverPlayer->Character).c_str());
+                serverPlayer->Character = picked;
+                serverPlayer->OptionalSkin = nullptr;   // belonged to the placeholder hero
+                serverPlayer->OptionalTaunt = nullptr;
+                serverPlayer->AwaitingHeroPick = false;
+                // A player with no selection a few seconds after PostLogin gets a random hero from the
+                // game (ClientPrepareForClassSwitch with e.g. NameId_MageBlade_Poplar), and the lock-in
+                // that follows this RPC does not switch class while another one is pending. Clear it.
+                if (inputPc->PendingPlayerClass && inputPc->PendingPlayerClassNameId != picked && !(inputPc->Pawn && IsLiveObject(inputPc->Pawn))) {
+                    printf("[SPAWN] clearing %s's pending class %s (%s) so the lock-in can select %s\n", serverPlayer->Name.c_str(),
+                        NameOrNone(inputPc->PendingPlayerClass).c_str(), NameOrNone(inputPc->PendingPlayerClassNameId).c_str(), picked->GetName().c_str());
+                    inputPc->PendingPlayerClass = nullptr;
+                    inputPc->PendingPlayerClassNameId = nullptr;
+                    inputPc->PendingPlayerSkin = nullptr;
+                }
+            }
+        }
+
+        // The lock-in also sends ServerPlayerSelectClass with an empty class path, which the server
+        // resolves to the default hero (Class_ModernSoldier) and so replaces the hero picked above.
+        // Drop it while the player has no pawn; the spawn retry sends the real class path itself.
+        static UFunction* serverPlayerSelectClassUFunction = nullptr;
+
+        if (!serverPlayerSelectClassUFunction)
+            serverPlayerSelectClassUFunction = UFunction::FindFunction("Function PoplarGame.PoplarPlayerController.ServerPlayerSelectClass");
+
+        if (Globals::amServer && Globals::netDriver && function == serverPlayerSelectClassUFunction && params) {
+            auto* selectClassParams = reinterpret_cast<APoplarPlayerController_execServerPlayerSelectClass_Params*>(params);
+            APoplarPlayerController* selectClassPc = reinterpret_cast<APoplarPlayerController*>(object);
+            bool emptyPath = selectClassParams->ClassPath.ArrayCount == 0 || selectClassParams->ClassPath.c_str()[0] == L'\0';
+            if (emptyPath && !(selectClassPc->Pawn && IsLiveObject(selectClassPc->Pawn))) {
+                static int droppedEmpty = 0;
+                if (droppedEmpty < 20) {
+                    droppedEmpty++;
+                    printf("[SPAWN] ignoring ServerPlayerSelectClass with no class on %s (it would pick the default hero)\n", selectClassPc->GetName().c_str());
+                }
+                return;
             }
         }
 
