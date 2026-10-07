@@ -21,6 +21,8 @@ namespace ServerNetworking {
 
     void RefreshServerPackageMaps(UNetConnection* connection);
 
+    void SyncNewPawnSkin(APawn* pawn, const char* who);
+
     std::string ClientPackageMapSummary();
 
     bool ConnectionHasOnDemandPackage(UNetConnection* connection, UObject* package);

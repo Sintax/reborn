@@ -415,6 +415,10 @@ namespace Hooks {
             if (!p || handled[pc] == p) return;
             if ((p->ObjectFlags & kPendingKill) || p->bDeleteMe || p->bTearOff) return;
             handled[pc] = p;
+            // Server: every joined client's package map must list this pawn's skin package, or that
+            // client gets the skin as None and the pawn has no body there (run 20261007-042539).
+            if (Globals::amServer)
+                ServerNetworking::SyncNewPawnSkin(p, who);
             if (p->CollisionComponent || p->CylinderComponent) {
                 if (goodLogged < 12) {
                     goodLogged++;
@@ -1852,10 +1856,16 @@ namespace Hooks {
                 if (logged < 60) {
                     logged++;
                     UPlayerClassDefinition* pending = ppc->PendingPlayerClass;
-                    printf("[SPAWN] SwitchToPendingPlayerClass on %s: before: pending %s, applied %s, client has package %s, PRI selection state %u\n",
+                    // The skin and taunt gates too: run 20261007-055347 had "client has package yes"
+                    // for the class while SwitchToPendingPlayerClass applied nothing 40 times.
+                    UObject* pendingSkin = ppc->PendingPlayerSkin;
+                    UObject* pendingTaunt = ppc->PendingPlayerTaunt;
+                    printf("[SPAWN] SwitchToPendingPlayerClass on %s: before: pending %s, applied %s, client has package %s, PRI selection state %u, pending skin %s (client has it %s), pending taunt %s (client has it %s)\n",
                         ppc->GetName().c_str(), NameOrNone(pending).c_str(), AppliedClassName(ppc->PoplarPSI).c_str(),
                         pending ? (ppc->HasClientLoadedOnDemandPackageFor(pending) ? "yes" : "no") : "n/a",
-                        ppc->MyPoplarPRI ? (unsigned)ppc->MyPoplarPRI->CharacterSelectionState : 99u);
+                        ppc->MyPoplarPRI ? (unsigned)ppc->MyPoplarPRI->CharacterSelectionState : 99u,
+                        FullNameOrNone(pendingSkin).c_str(), pendingSkin ? (ppc->HasClientLoadedOnDemandPackageFor(pendingSkin) ? "yes" : "no") : "n/a",
+                        FullNameOrNone(pendingTaunt).c_str(), pendingTaunt ? (ppc->HasClientLoadedOnDemandPackageFor(pendingTaunt) ? "yes" : "no") : "n/a");
                     ProcessEvent.call<void>(object, function, params);
                     printf("[SPAWN] SwitchToPendingPlayerClass on %s: after: pending %s, applied %s, pawn %s\n",
                         ppc->GetName().c_str(), NameOrNone(ppc->PendingPlayerClass).c_str(), AppliedClassName(ppc->PoplarPSI).c_str(), NameOrNone(ppc->Pawn).c_str());

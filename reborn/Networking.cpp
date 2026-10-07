@@ -1,5 +1,6 @@
 #include "Networking.hpp"
 
+#include <algorithm>
 #include <psapi.h>
 
 namespace ServerNetworking {
@@ -258,18 +259,232 @@ namespace ServerNetworking {
             if (i - from < 60)
                 names += (i > from ? ", " : "") + std::to_string(i) + "=" + reinterpret_cast<FName*>(info)->ToString();
         }
-        printf("[NETWORKING] sent %i new package infos (NMT_Uses) to the client, list positions %i-%i: %s\n", num - from, from, num - 1, names.c_str());
+        printf("[NETWORKING] sent %i new package infos (NMT_Uses) to connection %p, list positions %i-%i: %s\n", num - from, (void*)connection, from, num - 1, names.c_str());
     }
 
-    void RefreshServerPackageMaps(UNetConnection* connection) {
-        if (Globals::netDriver) {
-            uintptr_t masterMap = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(Globals::netDriver) + 0x90); // UNetDriver::MasterMap
-            RefreshPackageMap(reinterpret_cast<void*>(masterMap), "master");
+    static int PackageMapCount(void* mapObject) {
+        return mapObject ? *reinterpret_cast<int*>(reinterpret_cast<uintptr_t>(mapObject) + 0x58) : 0; // UPackageMap::List.Num
+    }
+
+    static void* MasterPackageMap() {
+        return Globals::netDriver ? *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(Globals::netDriver) + 0x90) : nullptr; // UNetDriver::MasterMap
+    }
+
+    // A package map entry's Parent must be a live object before UPackageMap::Compute (it reads the
+    // package's generation table and name) runs over the list.
+    static bool IsLiveObject(void* p) {
+        __try {
+            int index = *reinterpret_cast<int*>(reinterpret_cast<uintptr_t>(p) + 0x30); // UObject::ObjectInternalInteger
+            TArray<UObject*>* objects = UObject::GObjObjects();
+            return objects && objects->ArrayData && index >= 0 && index < objects->ArrayCount && objects->ArrayData[index] == p;
         }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // Same package in two FPackageInfo entries: name (+0x0) and GUID (+0x10), the test
+    // UPackageMap::AddPackageInfo (battleborn+0x1ef60) uses.
+    static bool SamePackageInfo(uintptr_t a, uintptr_t b) {
+        return memcmp(reinterpret_cast<void*>(a), reinterpret_cast<void*>(b), 8) == 0
+            && memcmp(reinterpret_cast<void*>(a + 0x10), reinterpret_cast<void*>(b + 0x10), 16) == 0;
+    }
+
+    // Object references go out as positions in the connection's package list, and the client's list
+    // mirrors that list entry for entry (whole list at welcome, then each NMT_Uses appended). So a
+    // connection's list may only GROW AT THE END. AddNetPackages (battleborn+0x1eb40) must never run
+    // on a connection map: it empties the list and rebuilds it in the engine's current net-package
+    // order, which shifts every entry after a package the server unloaded. Run 20261007-053702: the
+    // master map went 1045 -> 1019 after on-demand unloads, both connection maps were then rebuilt to
+    // 1046 and only position 1045 was sent; positions 1019-1044 meant different packages on the
+    // server and on the clients, and both clients crashed together (0xC0000005 battleborn+0xe8ac23).
+    //
+    // This appends, through UPackageMap::AddPackageInfo (slot 0x248, battleborn+0x1ef60: an entry
+    // with the same name+GUID is only updated in place, otherwise a copy is appended; then Compute),
+    // every master-map entry the connection does not list yet, in the master's order, and sends
+    // exactly the appended entries. The master's entries are already marked present remotely
+    // (RefreshPackageMap), so the copies go into the name map. Returns how many were appended.
+    static int AppendMissingPackages(UNetConnection* connection, const char* label) {
+        void* master = MasterPackageMap();
+        void* mapObject = connection ? connection->PackageMap : nullptr;
+        if (!master || !mapObject || mapObject == master)
+            return 0;
+        uintptr_t map = reinterpret_cast<uintptr_t>(mapObject);
+        uintptr_t masterList = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(master) + 0x60);
+        int masterNum = PackageMapCount(master);
+        int before = PackageMapCount(mapObject);
+        if (!masterList || masterNum <= 0)
+            return 0;
+
+        // Entries whose package object is gone: clear the dangling Parent first (Compute skips an
+        // entry with no Parent; the position stays, so nothing shifts).
+        int cleared = 0;
+        uintptr_t list = *reinterpret_cast<uintptr_t*>(map + 0x60);
+        for (int i = 0; i < before && list; i++) {
+            void** parent = reinterpret_cast<void**>(list + static_cast<uintptr_t>(i) * 0x50 + 0x8);
+            if (*parent && !IsLiveObject(*parent)) {
+                *parent = nullptr;
+                cleared++;
+            }
+        }
+
+        void** vtable = *reinterpret_cast<void***>(map);
+        auto addPackageInfo = reinterpret_cast<void (*)(void*, void*)>(vtable[0x248 / 8]); // UPackageMap::AddPackageInfo
+        int updated = 0;
+        for (int m = 0; m < masterNum; m++) {
+            uintptr_t info = masterList + static_cast<uintptr_t>(m) * 0x50;
+            int num = PackageMapCount(mapObject);
+            list = *reinterpret_cast<uintptr_t*>(map + 0x60); // reallocated by appends
+            int found = -1;
+            for (int i = 0; i < num && list; i++) {
+                if (SamePackageInfo(list + static_cast<uintptr_t>(i) * 0x50, info)) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found >= 0) {
+                // Listed already. A package that was unloaded and loaded again is a new object:
+                // AddPackageInfo points the existing entry (same position) at it.
+                if (*reinterpret_cast<void**>(list + static_cast<uintptr_t>(found) * 0x50 + 0x8) == *reinterpret_cast<void**>(info + 0x8))
+                    continue;
+                updated++;
+            }
+            addPackageInfo(mapObject, reinterpret_cast<void*>(info));
+        }
+        if (cleared && !updated && PackageMapCount(mapObject) == before)
+            reinterpret_cast<void (*)(void*)>(vtable[0x230 / 8])(mapObject); // UPackageMap::Compute
+
+        int after = PackageMapCount(mapObject);
+        if (after != before || updated || cleared)
+            printf("[NETWORKING] %s package map appended: %i -> %i packages (master %i), %i entries re-pointed at a reloaded package, %i dangling package pointers cleared, %i in the name map\n",
+                label, before, after, masterNum, updated, cleared, *reinterpret_cast<int*>(map + 0x68));
+        if (after < before) {
+            printf("[NETWORKING] WARNING: %s package list shrank (%i -> %i); not sending anything\n", label, before, after);
+            return 0;
+        }
+        SendNewPackageInfos(connection, before);
+        return after - before;
+    }
+
+    // A player is "in the match" once it has spawned: its controller has a live pawn, or its hero has
+    // been applied (PSI.PlayerClass, set by SwitchToPendingPlayerClass right before the pawn spawns;
+    // it stays set while the player is dead between lives). A player in character select has neither.
+    static bool IsInMatch(UNetConnection* c) {
+        constexpr uint64_t kPendingKill = 0x2000000000000000ull; // same flag as PawnUtils::kPendingKill
+        APlayerController* pc = c ? c->Actor : nullptr;
+        if (!pc || (pc->ObjectFlags & kPendingKill))
+            return false;
+        APawn* p = pc->Pawn;
+        if (p && !(p->ObjectFlags & kPendingKill) && !p->bDeleteMe)
+            return true;
+        if (pc->IsA(APoplarPlayerController::StaticClass())) {
+            APoplarPlayerStateInfo* psi = reinterpret_cast<APoplarPlayerController*>(pc)->PoplarPSI;
+            if (psi && psi->PlayerClass)
+                return true;
+        }
+        return false;
+    }
+
+    // Every joined player's connection that is IN THE MATCH (live, has its controller, welcomed with a
+    // package list, has spawned). A player still in character select is never touched: its map stays
+    // at its welcome size until its own spawn, whose package gate (Hooks.cpp step 3) then fails and
+    // catches the map up with everything loaded by then, its own skin and taunt included. Run
+    // 20261007-055347: the first player's spawn appended 254 packages to the other player's map while
+    // that player was in character select; its class gate then passed early, so its own spawn never
+    // refreshed the map, and SwitchToPendingPlayerClass(Class_DeathBlade) applied nothing 40 times
+    // ("client has package yes", pawn none) until the run timed out.
+    static std::vector<UNetConnection*> JoinedConnections() {
+        std::vector<UNetConnection*> out;
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            UNetConnection* c = sp.Connection;
+            if (!c || !IsLiveConnection(c) || !c->Actor || !c->PackageMap || PackageMapCount(c->PackageMap) <= 0)
+                continue;
+            if (!IsInMatch(c))
+                continue;
+            if (std::find(out.begin(), out.end(), c) == out.end())
+                out.push_back(c);
+        }
+        return out;
+    }
+
+    static std::string PlayerNameForConnection(UNetConnection* c) {
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            if (sp.Connection == c)
+                return sp.Name;
+        }
+        return "unknown player";
+    }
+
+    // A spawn: the spawning player's map gets the packages loaded since its welcome (its hero), and
+    // every other joined player's map gets them too. Run 20261007-042539: only the spawning player's
+    // map was refreshed, so c2 (spawned first, 1041 entries) never got GD_DeathBlade_DefaultSkin that
+    // c1's later spawn loaded; the server wrote c1's skin as None for c2 and c1's Rath had no body on
+    // c2. Every map is append-only (AppendMissingPackages), so the clients' lists stay aligned.
+    void RefreshServerPackageMaps(UNetConnection* connection) {
+        void* master = MasterPackageMap();
+        if (master)
+            RefreshPackageMap(master, "master");
         if (connection && connection->PackageMap) {
-            int before = *reinterpret_cast<int*>(reinterpret_cast<uintptr_t>(connection->PackageMap) + 0x58);
-            RefreshPackageMap(connection->PackageMap, "connection");
-            SendNewPackageInfos(connection, before);
+            char label[160];
+            snprintf(label, sizeof(label), "spawning player %s's connection %p", PlayerNameForConnection(connection).c_str(), (void*)connection);
+            AppendMissingPackages(connection, label);
+        }
+        for (UNetConnection* c : JoinedConnections()) {
+            if (c == connection)
+                continue;
+            char label[160];
+            snprintf(label, sizeof(label), "other player %s's connection %p (in the match; a player is spawning)", PlayerNameForConnection(c).c_str(), (void*)c);
+            AppendMissingPackages(c, label);
+        }
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            UNetConnection* c = sp.Connection;
+            if (!c || c == connection || !IsLiveConnection(c) || !c->Actor || IsInMatch(c))
+                continue;
+            printf("[NETWORKING] other player %s's connection %p is not in the match yet (no pawn, no hero applied): package map left at %i; its own spawn catches it up\n",
+                sp.Name.c_str(), (void*)c, PackageMapCount(c->PackageMap));
+        }
+    }
+
+    // Server, once per new player pawn: its skin (SkinData.SkinDef, what gives the pawn its body on
+    // the clients) must be in every joined player's package map, or that client receives None and
+    // the pawn has no body there. The skin's package can load after the spawn's package refresh (a
+    // substituted default skin loads at SwitchToPendingPlayerClass), so check, and catch every map
+    // up (append-only) when one is missing it. The engine re-sends a reference it could not map.
+    void SyncNewPawnSkin(APawn* pawn, const char* who) {
+        if (!pawn || !pawn->IsA(APoplarPawn::StaticClass()) || !Globals::netDriver)
+            return;
+        UObject* skin = reinterpret_cast<APoplarPawn*>(pawn)->SkinData.SkinDef;
+        if (!skin)
+            return;
+        std::vector<UNetConnection*> joined = JoinedConnections();
+        std::string missing;
+        for (UNetConnection* c : joined) {
+            if (!PackageMapSupportsObject(c, skin))
+                missing += (missing.empty() ? "" : ", ") + PlayerNameForConnection(c) + " (" + std::to_string(PackageMapCount(c->PackageMap)) + " packages)";
+        }
+        static int logged = 0;
+        if (missing.empty()) {
+            if (logged < 20) {
+                logged++;
+                printf("[NETWORKING] skin check: %s's new pawn skin %s is in all %zu in-match players' package maps\n",
+                    who, skin->GetFullName().c_str(), joined.size());
+            }
+            return;
+        }
+        printf("[NETWORKING] skin check: %s's new pawn skin %s is NOT in the package map of: %s; catching every in-match player's map up\n",
+            who, skin->GetFullName().c_str(), missing.c_str());
+        void* master = MasterPackageMap();
+        if (master)
+            RefreshPackageMap(master, "master (a new pawn's skin)");
+        for (UNetConnection* c : joined) {
+            char label[160];
+            snprintf(label, sizeof(label), "player %s's connection %p (a new pawn's skin)", PlayerNameForConnection(c).c_str(), (void*)c);
+            AppendMissingPackages(c, label);
+        }
+        for (UNetConnection* c : joined) {
+            if (!PackageMapSupportsObject(c, skin))
+                printf("[NETWORKING] skin check: %s's skin %s still not in %s's package map (%i packages)\n",
+                    who, skin->GetFullName().c_str(), PlayerNameForConnection(c).c_str(), PackageMapCount(c->PackageMap));
         }
     }
 
