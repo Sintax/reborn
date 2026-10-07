@@ -1,9 +1,11 @@
 #include "GameState.hpp"
 #include "Autopilot.hpp"
 #include "Combat.hpp"
+#include "Constants.hpp"
 #include "Diagnostics.hpp"
 #include "Engine.hpp"
 #include "Globals.hpp"
+#include "Hooks.hpp"
 #include "LaunchOptions.hpp"
 #include "PawnUtils.hpp"
 #include "Utils.hpp"
@@ -123,6 +125,66 @@ namespace GameState {
             return name.empty() ? std::string("unnamed") : name;
         }
 
+        // --- Which hero is it, and does it wear its own skin? ------------------------------------
+        //
+        // Before co-op over the internet every hero has to load as the one picked, in its own skin
+        // (s3 runs 20261006-023201, -025246: a ModernSoldier in RocketHawk's skin had no body).
+
+        // Display name ("Oscar Mike") of a hero token ("ModernSoldier"), matched without case;
+        // "" when the token is no known hero.
+        std::string DisplayNameOf(const std::string& token) {
+            if (token.empty()) return "";
+            for (const auto& [cls, display] : Constants::CharacterLookupTable)
+                if (_stricmp(cls.c_str(), token.c_str()) == 0) return display;
+            return "";
+        }
+
+        // The hero the -rbcharacter option asks for as a display name (the autopilot also takes the
+        // class token), the option as given when it names no known hero, "" when not set.
+        std::string RequestedHero() {
+            const std::string& want = LaunchOptions::Get().character;
+            if (want.empty()) return "";
+            for (const std::string& name : Constants::CharacterSelectCharacterTable)
+                if (name == want) return name;
+            std::string display = DisplayNameOf(want);
+            return display.empty() ? want : display;
+        }
+
+        // A pawn's hero as a display name when its class maps to one ("Class_ModernSoldier" in
+        // GD_ModernSoldier_Streaming -> "Oscar Mike"), else the class (or archetype) name.
+        // known says whether it mapped.
+        std::string PawnHero(APawn* p, bool& known) {
+            known = false;
+            if (p->IsA(APoplarPawn::StaticClass())) {
+                UObject* def = reinterpret_cast<APoplarPawn*>(p)->PoplarPlayerClassDef;
+                if (!Gone(def)) {
+                    std::string name = def->GetName();
+                    std::string display = DisplayNameOf(name.rfind("Class_", 0) == 0 ? name.substr(6) : name);
+                    if (display.empty()) display = DisplayNameOf(Hooks::HeroTokenOf(def));
+                    if (!display.empty()) { known = true; return display; }
+                }
+            }
+            return HeroOf(p);
+        }
+
+        // "" when the pawn wears its own hero's skin (or it cannot tell), else which skin is
+        // another known hero's: the skin definition, or the replicated skin (SkinData). Skins from
+        // packages that name no hero are never counted.
+        std::string WrongSkin(APawn* p) {
+            if (!p->IsA(APoplarPawn::StaticClass())) return "";
+            APoplarPawn* pp = reinterpret_cast<APoplarPawn*>(p);
+            UObject* def = pp->PoplarPlayerClassDef;
+            if (Gone(def)) return "";
+            UObject* skins[] = { pp->SkinDefinition, pp->SkinData.SkinDef };
+            for (UObject* skin : skins) {
+                if (Gone(skin) || !Hooks::SkinIsOtherHeros(skin, def)) continue;
+                std::string owner = DisplayNameOf(Hooks::HeroTokenOf(skin));
+                if (owner.empty()) continue;
+                return owner + "'s skin " + skin->GetName() + " on " + def->GetName();
+            }
+            return "";
+        }
+
         std::string DisconnectReason() {
             std::string line = Diagnostics::LastLineContaining("Failure");
             if (line.empty()) return "";
@@ -200,9 +262,29 @@ namespace GameState {
                 j["pawn_visible"] = nullptr;
                 j["pawn_body_missing"] = nullptr;
             }
-            // Other living human players' pawns this client has, and those without a visible body
-            // ("name (hero): what is missing"). Bots are left out.
+            // Own hero: requested_hero (the -rbcharacter pick), pawn_hero (what loaded) and
+            // hero_matches (null with no pick, no pawn, or a hero that maps to no display name).
+            // pawn_skin_ok false (pawn_skin_wrong says which) when it wears another hero's skin.
+            std::string requested = RequestedHero();
+            j["requested_hero"] = requested.empty() ? nlohmann::json(nullptr) : nlohmann::json(requested);
+            j["pawn_hero"] = nullptr;
+            j["hero_matches"] = nullptr;
+            j["pawn_skin_ok"] = nullptr;
+            j["pawn_skin_wrong"] = nullptr;
+            if (own) {
+                bool known = false;
+                std::string hero = PawnHero(own, known);
+                j["pawn_hero"] = hero;
+                if (known && !requested.empty()) j["hero_matches"] = hero == requested;
+                std::string wrong = WrongSkin(own);
+                j["pawn_skin_ok"] = wrong.empty();
+                if (!wrong.empty()) j["pawn_skin_wrong"] = wrong;
+            }
+            // Other living human players' pawns this client has, those without a visible body
+            // ("name (hero): what is missing") and those in another hero's skin ("name (hero):
+            // which skin"). Bots are left out.
             nlohmann::json othersInvisible = nlohmann::json::array();
+            nlohmann::json othersWrongSkin = nlohmann::json::array();
             int othersSeen = 0;
             for (APoplarPlayerPawn* p : SDKUtils::GetAllOfClass<APoplarPlayerPawn>()) {
                 if (!LivePawnInWorld(p) || (hasPawn && (APawn*)p == pc->Pawn) || !IsHumanPawn(p)) continue;
@@ -211,9 +293,12 @@ namespace GameState {
                 std::string why = MissingBody(p, true);
                 NoteBody("other player " + PlayerNameOf(p), p, why);
                 if (!why.empty()) othersInvisible.push_back(PlayerNameOf(p) + " (" + HeroOf(p) + "): " + why);
+                std::string wrong = WrongSkin(p);
+                if (!wrong.empty()) othersWrongSkin.push_back(PlayerNameOf(p) + " (" + HeroOf(p) + "): " + wrong);
             }
             j["others_seen"] = othersSeen;
             j["others_invisible"] = othersInvisible;
+            j["others_wrong_skin"] = othersWrongSkin;
             bool inMenu = map.empty() || map.find("MenuMap") != std::string::npos;
             j["connected"] = role == "client" ? !inMenu : true;
             j["disconnect_reason"] = DisconnectReason();

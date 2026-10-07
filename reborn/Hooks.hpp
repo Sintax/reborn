@@ -9,8 +9,16 @@
 #include "imgui/imgui_stdlib.h"
 #include "safetyhook.hpp"
 #include "BB/SdkHeaders.hpp"
+#include <string>
 
 namespace Hooks {
+    // "GD_ModernSoldier_Streaming" -> "ModernSoldier": the hero token of an object's outermost
+    // GD_<Hero>_ package, "" when it has none. Also used by GameState's skin check.
+    std::string HeroTokenOf(UObject* o);
+
+    // True when the skin is known to be another hero's than the class (both have a hero token).
+    bool SkinIsOtherHeros(UObject* skin, UObject* classDef);
+
     extern SafetyHookInline ProcessRemoteFunction;
 
     bool ProcessRemoteFunctionHook(AActor* actor, UFunction* function, void* params, void* stack);
