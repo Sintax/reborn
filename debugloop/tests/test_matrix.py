@@ -65,7 +65,7 @@ def test_pair_scenario_swaps_in_both_heroes():
     assert "-rbcharacter=Shayne & Aurox" in args["c1"] and "-rbcharacter=Kid Ultra" in args["c2"]
     assert sum(a.startswith("-rbcharacter=") for a in args["c1"] + args["c2"]) == 2
     assert args["server"] == base.processes[0].args
-    assert "-rbseed=1" in args["c1"] and "-rbcombat" in args["c2"]
+    assert "-rbseed=1" in args["c1"] and "-rbautopilot" in args["c2"]
 
 
 # The sweep
