@@ -101,9 +101,27 @@ namespace Combat {
 
         void Exec(const wchar_t* c) { Engine::ExecConsoleCommand(c); }
 
+        // Why the last census left out the other pawns (diagnostics, in /combat "census.dropped").
+        enum Drop { DropGone, DropTornOff, DropNotInLevel, DropDead, DropNotEnemy, DropCount };
+        int g_dropped[DropCount] = { 0 };
+        nlohmann::json g_othersSample = nlohmann::json::array();   // first few other pawns, as the census saw them
+
+        // A minion's health as its ResourcePoolManager replicates it: HealthPool names the manager
+        // and the pool's slot there (ReplicatedValueStates is the replicated copy of each pool's value).
+        // -1 when the manager or the slot is not known on this machine.
+        float ReplicatedPoolHealth(APawn* p) {
+            AResourcePoolManager* m = p->HealthPool.PoolManager;
+            uint8_t i = p->HealthPool.PoolIndexInManager;
+            if (Gone(m) || i >= 16) return -1.f;
+            if (m->ReplicatedPoolIdentities[i].PoolGUID != p->HealthPool.PoolGUID) return -1.f;
+            return m->ReplicatedValueStates[i].CurrentValue;
+        }
+
         void Census(APoplarPlayerController* pc) {
             g_enemies.clear();
             g_censusPawns = g_censusLive = 0;
+            for (int& d : g_dropped) d = 0;
+            g_othersSample = nlohmann::json::array();
             g_friend = 0;
             g_friendDist = 1e12f;
             g_friendKinds[0] = g_friendKinds[1] = g_friendKinds[2] = 0;
@@ -112,15 +130,61 @@ namespace Combat {
             APoplarPawn* mePop = reinterpret_cast<APoplarPawn*>(me);
             AWorldInfo* wi = pc->WorldInfo;
             if (Gone(wi)) return;
+            const bool client = wi->NetMode == ENetMode::NM_Client;
+            const uint8_t myTeam = me->GetTeamNum();
             FVector eye = Eye(me);
             int viewYaw = pc->Rotation.Yaw;
             int guard = 0;
             for (APawn* p = wi->PawnList; p && guard < 2000; p = p->NextPawn, guard++) {
                 g_censusPawns++;
-                if (p == me || !PawnUtils::LivePawnInWorld(p)) continue;
-                if (p->GetHealth() <= 0.f) continue;
+                if (p == me) continue;
+                Drop drop = DropCount;
+                if (Gone(p) || p->bDeleteMe) drop = DropGone;
+                else if (p->bTearOff) drop = DropTornOff;
+                else if (!p->Outer || !p->Outer->IsA(ULevel::StaticClass())) drop = DropNotInLevel;
+
+                // Health. A player's or bot hero's pool replicates through its PRI. A minion has no
+                // PRI, and on a networked client GetHealth can read 0 for a live one (live run
+                // 20261007-071315: the client's PawnList had 4 Dojo minions, the census counted 0
+                // live), so fall back to the value its pool manager replicates; if that is unknown
+                // too, it counts as alive (health -1 = unknown) unless it has gone ragdoll.
+                float health = 0.f, nativeHealth = 0.f, poolHealth = -1.f;
+                const bool minion = Gone(p->PlayerReplicationInfo);
+                if (drop == DropCount) {
+                    nativeHealth = health = p->GetHealth();
+                    bool alive = health > 0.f;
+                    if (!alive && client && minion) {
+                        poolHealth = ReplicatedPoolHealth(p);
+                        if (poolHealth > 0.f) { health = poolHealth; alive = true; }
+                        else if (poolHealth < 0.f && p->Physics != EPhysics::PHYS_RigidBody) { health = -1.f; alive = true; }
+                    }
+                    if (!alive) drop = DropDead;
+                }
+
+                // Enemy. On a client the native IFF can lack what it needs for a minion (its AI
+                // controller and allegiance live on the server), so a minion on another known team
+                // counts as an enemy too.
+                bool nativeEnemy = false, enemy = false;
+                uint8_t team = 255;
+                if (drop == DropCount) {
+                    nativeEnemy = enemy = mePop->IsEnemy(p);
+                    team = p->GetTeamNum();
+                    if (!enemy && client && minion && team != 255 && myTeam != 255 && team != myTeam) enemy = true;
+                }
+
+                if (g_othersSample.size() < 6) {
+                    g_othersSample.push_back({ {"name", Gone(p) ? std::string("gone") : PawnUtils::HeroOf(p)},
+                        {"kind", Gone(p) ? std::string("?") : PawnUtils::KindOf(p)},
+                        {"dropped", drop == DropGone ? "gone" : drop == DropTornOff ? "torn_off" : drop == DropNotInLevel ? "not_in_level"
+                                  : drop == DropDead ? "dead" : enemy ? "no (enemy)" : "no (not enemy)"},
+                        {"health", health}, {"get_health", nativeHealth}, {"pool_health", poolHealth},
+                        {"team", (int)team}, {"my_team", (int)myTeam}, {"is_enemy_native", nativeEnemy},
+                        {"physics", Gone(p) ? -1 : (int)p->Physics} });
+                }
+                if (drop != DropCount) { g_dropped[drop]++; continue; }
                 g_censusLive++;
-                if (!mePop->IsEnemy(p)) {
+                if (!enemy) {
+                    g_dropped[DropNotEnemy]++;
                     // A friendly bot hero: the game's own AI walks it along the lanes to the fight.
                     std::string kind = PawnUtils::KindOf(p);
                     g_friendKinds[kind == "bot" ? 0 : kind == "player" ? 1 : 2]++;
@@ -150,8 +214,8 @@ namespace Combat {
                 // "Can I see it" = the renderer drew it in the last moment. FastTrace through
                 // ProcessEvent said false for minions in plain view (live run 20261006-042128).
                 e.visible = wi->TimeSeconds - p->LastRenderTime < kSeenWithinS;
-                e.health = p->GetHealth();
-                e.team = p->GetTeamNum();
+                e.health = health;   // -1 = unknown (a client-side minion, see above)
+                e.team = team;
                 g_enemies.push_back(e);
             }
             std::sort(g_enemies.begin(), g_enemies.end(),
@@ -267,7 +331,8 @@ namespace Combat {
         }
 
         void LearnReach(float dt, const Enemy* t, bool firing) {
-            if (!firing || !t) { g_noDamageS = 0.f; return; }
+            // Health -1 = unknown (a client-side minion): no drop to learn from, keep the reach as is.
+            if (!firing || !t || t->health < 0.f) { g_noDamageS = 0.f; return; }
             if (t->id != g_reachTarget || t->health < g_reachTargetHealth) {   // new target, or it got hurt
                 // A hit near or past the learned reach: it was too short (shots at an enemy behind
                 // cover can shrink it), so grow it back.
@@ -564,7 +629,11 @@ namespace Combat {
                         {"following", g_friend ? nlohmann::json(HexId(g_friend)) : nlohmann::json(nullptr)},
                         {"friend_distance", g_friend ? nlohmann::json(g_friendDist) : nlohmann::json(nullptr)},
                         {"friendly_bots", g_friendKinds[0]}, {"friendly_players", g_friendKinds[1]},
-                        {"friendly_other", g_friendKinds[2]} };
+                        {"friendly_other", g_friendKinds[2]},
+                        {"dropped", { {"gone", g_dropped[DropGone]}, {"torn_off", g_dropped[DropTornOff]},
+                                      {"not_in_level", g_dropped[DropNotInLevel]}, {"dead", g_dropped[DropDead]},
+                                      {"not_enemy", g_dropped[DropNotEnemy]} }},
+                        {"others", g_othersSample} };
         j["stats"] = StatsJson();
         return j.dump();
     }

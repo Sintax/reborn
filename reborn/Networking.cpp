@@ -1,6 +1,7 @@
 #include "Networking.hpp"
 
 #include <algorithm>
+#include <map>
 #include <psapi.h>
 
 namespace ServerNetworking {
@@ -665,6 +666,179 @@ namespace ServerNetworking {
         return false;
     }
 
+    // Helpers for the [MINIONS] logging below (read-only).
+    static double NowSeconds() { return GetTickCount64() / 1000.0; }
+
+    static UObject* OutermostOf(UObject* o) {
+        while (o && o->Outer) o = o->Outer;
+        return o;
+    }
+
+    static std::string NameOrNoneOf(UObject* o) { return o ? o->GetName() : std::string("None"); }
+
+    // [MINIONS] server, every few seconds: the non-player pawns in WorldInfo.PawnList by archetype,
+    // and per player whether each has an actor channel and whether that player's package map knows
+    // its archetype; plus the minion spawners' state. Compare with the client's [MINIONS] line:
+    // none here = the server never spawned them; here with channels but none on the client = they
+    // did not replicate.
+    void LogMinionCensus() {
+        AWorldInfo* wi = nullptr;
+        std::vector<UNetConnection*> conns;
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            UNetConnection* c = sp.Connection;
+            if (!c || !IsLiveConnection(c))
+                continue;
+            conns.push_back(c);
+            if (!wi && c->Actor && !(c->Actor->ObjectFlags & 0x2000000000000000ull))
+                wi = c->Actor->WorldInfo;
+        }
+        if (!wi)
+            return;
+
+        struct Group { int count = 0; std::string cls, pkg; std::vector<int> channels; std::vector<bool> inMap; };
+        std::map<std::string, Group> groups;
+        int total = 0, players = 0, guard = 0;
+        for (APawn* p = wi->PawnList; p && guard < 2000; p = p->NextPawn, guard++) {
+            total++;
+            if (p->ObjectFlags & 0x2000000000000000ull || p->bDeleteMe)
+                continue;
+            if (p->Controller && p->Controller->IsA(APlayerController::StaticClass())) {
+                players++;
+                continue;
+            }
+            std::string key = p->ObjectArchetype ? p->ObjectArchetype->GetName() : p->Class->GetName();
+            Group& g = groups[key];
+            if (!g.count) {
+                g.cls = p->Class->GetName();
+                g.pkg = NameOrNoneOf(OutermostOf(p->ObjectArchetype));
+                g.channels.assign(conns.size(), 0);
+                for (UNetConnection* c : conns)
+                    g.inMap.push_back(p->ObjectArchetype ? PackageMapSupportsObject(c, p->ObjectArchetype) : true);
+            }
+            g.count++;
+            for (size_t i = 0; i < conns.size(); i++)
+                if (GetActorChannelForActor(p, conns[i]))
+                    g.channels[i]++;
+        }
+
+        std::string line;
+        for (auto& [name, g] : groups) {
+            line += (line.empty() ? "" : "; ") + std::to_string(g.count) + " " + name + " (" + g.cls + ", package " + g.pkg;
+            for (size_t i = 0; i < conns.size(); i++)
+                line += ", " + PlayerNameForConnection(conns[i]) + ": channels " + std::to_string(g.channels[i]) + "/" + std::to_string(g.count)
+                    + " archetype in map " + (g.inMap[i] ? "yes" : "NO");
+            line += ")";
+        }
+
+        int spawners = 0, permitted = 0, active = 0, spawned = 0;
+        std::string waves;
+        for (APoplarMinionSpawner* s : SDKUtils::GetAllOfClass<APoplarMinionSpawner>()) {
+            if (!s || (s->ObjectFlags & 0x2000000000000000ull) || !s->Outer || !s->Outer->IsA(ULevel::StaticClass()))
+                continue;
+            spawners++;
+            permitted += s->HasPermissionToSpawn ? 1 : 0;
+            active += s->bActiveSpawn ? 1 : 0;
+            spawned += s->bHasSpawned ? 1 : 0;
+            if (spawners <= 6)
+                waves += (waves.empty() ? "" : ",") + std::to_string(s->CurrentMinionWaveIndex);
+        }
+        int matchState = (wi->GRI && wi->GRI->IsA(APoplarGameReplicationInfo::StaticClass()))
+            ? (int)reinterpret_cast<APoplarGameReplicationInfo*>(wi->GRI)->CurrentMatchState.State : -1;
+
+        char head[300];
+        snprintf(head, sizeof head, "[MINIONS] server: match state %i, PawnList %i pawns (%i players'), %i others: ", matchState, total, players, total - players);
+        char tail[300];
+        snprintf(tail, sizeof tail, " | minion spawners %i (permission %i, active %i, has spawned %i, wave index %s)",
+            spawners, permitted, active, spawned, waves.empty() ? "-" : waves.c_str());
+        std::string out = std::string(head) + (line.empty() ? "none" : line) + tail;
+
+        static std::string last;
+        static double lastAt = -100.0;
+        double now = NowSeconds();
+        if (out != last || now - lastAt >= 30.0) {
+            printf("%s\n", out.c_str());
+            last = out;
+            lastAt = now;
+        }
+    }
+
+    // [MINIONS] server, every half second: each non-player pawn's life, to tell why the Dojo's waves
+    // last under 10 s with nobody shooting (live run 20261007-071315: 1 -> 4 -> 0 between two 5 s
+    // censuses). Logs when one appears (where, health, physics, nearest player, the level's KillZ),
+    // when its health first reaches 0, when it is torn off, and when it leaves the PawnList (last
+    // seen place, lowest Z, health, physics). Died = health 0; fell = Z near or under KillZ;
+    // culled/despawned = left with health and no fall.
+    void TrackMinionLives() {
+        struct Life { std::string name; double born = 0.0; float x = 0, y = 0, z = 0, minZ = 1e9f, vz = 0, health = 0, maxHealth = 0, nearest = -1;
+                      int physics = 0; bool tornOff = false, hidden = false, loggedDead = false, loggedTearOff = false, seen = false; };
+        static std::map<APawn*, Life> lives;
+
+        AWorldInfo* wi = nullptr;
+        std::vector<APawn*> playerPawns;
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            UNetConnection* c = sp.Connection;
+            if (!c || !IsLiveConnection(c) || !c->Actor || (c->Actor->ObjectFlags & 0x2000000000000000ull))
+                continue;
+            if (!wi) wi = c->Actor->WorldInfo;
+            APawn* pp = c->Actor->Pawn;
+            if (pp && !(pp->ObjectFlags & 0x2000000000000000ull) && !pp->bDeleteMe)
+                playerPawns.push_back(pp);
+        }
+        if (!wi) {
+            lives.clear();
+            return;
+        }
+        double now = NowSeconds();
+        for (auto& [p, l] : lives) l.seen = false;
+
+        int guard = 0;
+        for (APawn* p = wi->PawnList; p && guard < 2000; p = p->NextPawn, guard++) {
+            if ((p->ObjectFlags & 0x2000000000000000ull) || p->bDeleteMe || (p->Controller && p->Controller->IsA(APlayerController::StaticClass())))
+                continue;
+            if (std::find(playerPawns.begin(), playerPawns.end(), p) != playerPawns.end())
+                continue;
+            float nearest = -1.0f;
+            for (APawn* pp : playerPawns) {
+                float dx = pp->Location.X - p->Location.X, dy = pp->Location.Y - p->Location.Y, dz = pp->Location.Z - p->Location.Z;
+                float d = sqrtf(dx * dx + dy * dy + dz * dz);
+                if (nearest < 0.0f || d < nearest) nearest = d;
+            }
+            auto it = lives.find(p);
+            bool isNew = it == lives.end();
+            Life& l = lives[p];
+            l.seen = true;
+            if (isNew) {
+                l.name = p->ObjectArchetype ? p->ObjectArchetype->GetName() : p->Class->GetName();
+                l.born = now;
+            }
+            l.x = p->Location.X; l.y = p->Location.Y; l.z = p->Location.Z; l.vz = p->Velocity.Z;
+            l.minZ = (std::min)(l.minZ, p->Location.Z);
+            l.health = p->GetHealth(); l.maxHealth = p->GetMaxHealth();
+            l.physics = (int)p->Physics; l.tornOff = p->bTearOff; l.hidden = p->bHidden; l.nearest = nearest;
+            if (isNew)
+                printf("[MINIONS] server: + %s %p at (%.0f, %.0f, %.0f) health %.0f/%.0f physics %i controller %s, nearest player %.0f units, KillZ %.0f\n",
+                    l.name.c_str(), (void*)p, l.x, l.y, l.z, l.health, l.maxHealth, l.physics, NameOrNoneOf(p->Controller).c_str(), nearest, wi->KillZ);
+            if (l.health <= 0.0f && !l.loggedDead) {
+                l.loggedDead = true;
+                printf("[MINIONS] server: %s %p health 0 after %.1f s at (%.0f, %.0f, %.0f) physics %i, nearest player %.0f units\n",
+                    l.name.c_str(), (void*)p, now - l.born, l.x, l.y, l.z, l.physics, nearest);
+            }
+            if (l.tornOff && !l.loggedTearOff) {
+                l.loggedTearOff = true;
+                printf("[MINIONS] server: %s %p torn off after %.1f s (health %.0f)\n", l.name.c_str(), (void*)p, now - l.born, l.health);
+            }
+        }
+
+        for (auto it = lives.begin(); it != lives.end();) {
+            Life& l = it->second;
+            if (l.seen) { ++it; continue; }
+            printf("[MINIONS] server: - %s %p left the PawnList after %.1f s: last at (%.0f, %.0f, %.0f) vz %.0f, lowest Z %.0f (KillZ %.0f), health %.0f/%.0f, physics %i, torn off %u, hidden %u, nearest player %.0f units\n",
+                l.name.c_str(), (void*)it->first, now - l.born, l.x, l.y, l.z, l.vz, l.minZ, wi->KillZ, l.health, l.maxHealth, l.physics,
+                (unsigned)l.tornOff, (unsigned)l.hidden, l.nearest);
+            it = lives.erase(it);
+        }
+    }
+
     std::vector<AActor*> BuildConsiderList(AWorldInfo* WorldInfo, UNetDriver* NetDriver) {
         std::vector<AActor*> copiedNetworkObjectList;
         std::vector<AActor*> ret = std::vector<AActor*>();
@@ -980,6 +1154,68 @@ namespace ClientNetworking {
             }
         }
         return linked;
+    }
+
+    // [MINIONS] client (and solo), every few seconds: the non-player pawns in this game's
+    // WorldInfo.PawnList by archetype, and the server connection's actor channels, counting those
+    // with no actor (an opening bunch whose archetype did not resolve leaves the channel without an
+    // actor for good). Compare with the server's [MINIONS] line.
+    void LogMinionCensus() {
+        APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+        if (!pc || !pc->WorldInfo || (pc->WorldInfo->ObjectFlags & 0x2000000000000000ull))
+            return;
+        AWorldInfo* wi = pc->WorldInfo;
+
+        std::map<std::string, int> groups;
+        int total = 0, players = 0, guard = 0;
+        for (APawn* p = wi->PawnList; p && guard < 2000; p = p->NextPawn, guard++) {
+            total++;
+            if (p->ObjectFlags & 0x2000000000000000ull || p->bDeleteMe)
+                continue;
+            APlayerReplicationInfo* pri = p->PlayerReplicationInfo;
+            if (p == pc->Pawn || (pri && !(pri->ObjectFlags & 0x2000000000000000ull) && !pri->bBot)) {
+                players++;
+                continue;
+            }
+            std::string name = p->ObjectArchetype ? p->ObjectArchetype->GetName() : p->Class->GetName();
+            if (pri && pri->bBot)
+                name += " (bot)";
+            groups[name]++;
+        }
+        std::string line;
+        for (auto& [name, n] : groups)
+            line += (line.empty() ? "" : ", ") + std::to_string(n) + " " + name;
+
+        std::string channels = "no server connection";
+        uintptr_t world = reinterpret_cast<uintptr_t>(Globals::GetGWorld());
+        uintptr_t netDriver = world ? *reinterpret_cast<uintptr_t*>(world + 0x128) : 0; // UWorld::NetDriver
+        UNetConnection* conn = netDriver ? *reinterpret_cast<UNetConnection**>(netDriver + 0x80) : nullptr; // UNetDriver::ServerConnection
+        if (conn) {
+            int actorChannels = 0, noActor = 0;
+            for (UChannel* ch : conn->Channels) {
+                if (!ch || ch->Class != UActorChannel::StaticClass())
+                    continue;
+                actorChannels++;
+                if (!reinterpret_cast<UActorChannel*>(ch)->Actor)
+                    noActor++;
+            }
+            channels = "actor channels " + std::to_string(actorChannels) + ", " + std::to_string(noActor) + " with no actor | "
+                + ServerNetworking::ClientPackageMapSummary();
+        }
+
+        char head[200];
+        snprintf(head, sizeof head, "[MINIONS] %s: PawnList %i pawns (%i players'), %i others: ",
+            Globals::amStandalone ? "solo" : "client", total, players, total - players);
+        std::string out = std::string(head) + (line.empty() ? "none" : line) + " | " + channels;
+
+        static std::string last;
+        static ULONGLONG lastAt = 0;
+        ULONGLONG now = GetTickCount64();
+        if (out != last || now - lastAt >= 30000) {
+            printf("%s\n", out.c_str());
+            last = out;
+            lastAt = now;
+        }
     }
 
     void JoinServer(std::wstring ip) {

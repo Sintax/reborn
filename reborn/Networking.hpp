@@ -48,6 +48,10 @@ namespace ServerNetworking {
     bool ConnectionFull(UNetConnection* connection);
 
     void TickNetServer(UTcpNetDriver* NetDriver);
+
+    void LogMinionCensus();
+
+    void TrackMinionLives();
 }
 
 namespace ClientNetworking {
@@ -58,4 +62,6 @@ namespace ClientNetworking {
     bool IsNetReady(UNetConnection* connection, int saturate);
 
     void ForceAlwaysNetReady();
+
+    void LogMinionCensus();
 }

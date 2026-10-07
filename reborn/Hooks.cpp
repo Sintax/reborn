@@ -1204,6 +1204,29 @@ namespace Hooks {
             }
         }
 
+        // [MINIONS]: the server's non-player pawns next to each client's, every 5 s (printed when
+        // they change, else every 30 s). See LogMinionCensus in Networking.cpp.
+        {
+            static float sinceMinionLives = 0.0f;
+            sinceMinionLives += DeltaTime;
+            if (Globals::amServer && Globals::netDriver && sinceMinionLives >= 0.5f) {
+                sinceMinionLives = 0.0f;
+                ServerNetworking::TrackMinionLives();
+            }
+            static float sinceMinionCensus = 0.0f;
+            sinceMinionCensus += DeltaTime;
+            if (sinceMinionCensus >= 5.0f) {
+                sinceMinionCensus = 0.0f;
+                if (Globals::amServer) {
+                    if (Globals::netDriver)
+                        ServerNetworking::LogMinionCensus();
+                }
+                else {
+                    ClientNetworking::LogMinionCensus();
+                }
+            }
+        }
+
         if (Globals::amServer) {
             /*
             static float timeSinceLoggedChannels = 0.0f;
