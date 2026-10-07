@@ -9,4 +9,4 @@ expect_map = "Dojo_P"
 [[process]]
 name = "solo"
 role = "solo"
-args = ["-rbautopilot", "-rbsolomap=Dojo_P", "-rbcharacter=Rath"]
+args = ["-rbautopilot", "-rbsolomap=Dojo_P", "-rbcharacter=Oscar Mike"]
