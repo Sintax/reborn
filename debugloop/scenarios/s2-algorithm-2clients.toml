@@ -13,9 +13,9 @@ args = ["-rbservermap=Caverns_P"]
 [[process]]
 name = "c1"
 role = "client"
-args = ["-rbautopilot", "-rbcombat", "-rbcharacter=Rath", "-rbseed=1"]
+args = ["-rbautopilot", "-rbcharacter=Rath", "-rbseed=1"]
 
 [[process]]
 name = "c2"
 role = "client"
-args = ["-rbautopilot", "-rbcombat", "-rbcharacter=Oscar Mike", "-rbseed=2"]
+args = ["-rbautopilot", "-rbcharacter=Oscar Mike", "-rbseed=2"]

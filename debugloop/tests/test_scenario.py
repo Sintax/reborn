@@ -61,12 +61,11 @@ def test_smoke_limits_leave_room_past_the_startup_timeout():
             assert s.time_limit_s >= 270 > STARTUP_TIMEOUT_S, s.name
 
 
-def test_ladder_clients_fight():
-    """Steps 1-3 run with the combat brain, so the ladder tests shooting, dying and respawning.
-    Step 0 (solo load test) keeps the plain autopilot."""
+def test_solo_has_no_combat():
+    """Step 0 (solo load test) keeps the plain autopilot. Clients in steps 1-3 may run the combat
+    brain (-rbcombat); it is switched off while basic join/spawn/visibility bugs keep recurring
+    (see the bb-autofix skill) and switched back on once those pass."""
     for s in scenario.load_all():
         for p in s.processes:
-            if p.role == "client":
-                assert "-rbcombat" in p.args, s.name
             if p.role == "solo":
                 assert "-rbcombat" not in p.args, s.name

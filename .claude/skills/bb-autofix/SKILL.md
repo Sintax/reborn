@@ -9,6 +9,14 @@ To stop the loop: if running under `/loop` dynamic mode, call ScheduleWakeup wit
 
 Work from the repo root `C:\Users\djsin\Documents\GitHub\Battleborn-Server\reborn`, on branch `agent/autofix`. Never push. Never change Windows settings. Never close a game window the loop did not start.
 
+## Combat brain: off while basics are broken
+
+The user's rule: the smart player controls (the combat brain, `-rbcombat` in the client args of `debugloop/scenarios/s1-*`, `s2-*`, `s3-*`) are an extra failure point. If basic bugs keep coming back (invisible players, a client stuck in character select or never getting a pawn, startup timeouts, or similar join/spawn bugs across several attempts), remove `-rbcombat` from those scenarios so the ladder tests only the server's main functions. Commit only those scenario files (`fix(debugloop): ...`), then run `python -m debugloop.loop reset-stop` so the loop accepts the new HEAD.
+
+Once the ladder passes cleanly without it, put `-rbcombat` back on the clients and let the ladder run again. If the basic bugs return with it on, turn it off again and tell the user.
+
+Current setting: OFF (since 2026-10-07, while `invisible:IceScort_P` and character-select timeouts kept recurring).
+
 ## 1. Run the next test
 
 Run `python -m debugloop.loop next` in the background with a 110-minute timeout, and wait for the notification. It builds and deploys the current code before the test, so it can take a while. Act on the exit code:
