@@ -185,3 +185,23 @@ def test_build_failure_runs_nothing(tmp_path):
     d.build = lambda: type("B", (), {"ok": False, "output": "error C2065"})()
     assert matrix.sweep(d, HEROES[:2], 1, False) == matrix.HARNESS
     assert d.ran == []
+
+
+def test_network_pair_scenario_goes_through_the_relay():
+    from debugloop import netem
+    base = scenario.find_scenario(matrix.BASE_SCENARIO)
+    text = matrix.scenario_text(base, "matrix-x-net-bad", ["Kid Ultra", "Marquis"], netem.PRESETS["bad"])
+    assert scenario.parse(text, base.path).network == netem.PRESETS["bad"]
+    assert scenario.parse(matrix.scenario_text(base, "y", ["Kid Ultra", "Marquis"]), base.path).network is None
+
+
+def test_network_sweep_keeps_its_own_results_and_names_its_runs(tmp_path):
+    matrix.sweep(matrix_deps(tmp_path, {}), HEROES[:2], 1, False)
+    d = matrix_deps(tmp_path, {})
+    assert matrix.sweep(d, HEROES[:2], 1, False, "bad") == matrix.OK
+    assert d.ran == ["matrix-alani-ambra-net-bad"]
+    assert sorted(p.name for p in (tmp_path / "state").iterdir()) == \
+        ["matrix-net-bad.json", "matrix-net-bad.md", "matrix.json", "matrix.md"]
+    assert '"bad" internet relay' in (tmp_path / "state" / "matrix-net-bad.md").read_text()
+    d2 = matrix_deps(tmp_path, {})
+    assert matrix.sweep(d2, HEROES[:2], 1, True, "bad") == matrix.OK and d2.ran == []

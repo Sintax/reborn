@@ -17,10 +17,11 @@ import re
 import sys
 import tempfile
 import traceback
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from . import config, deploy, loop, run, scenario
+from . import config, deploy, loop, netem, run, scenario
 from .state import atomic_write
 
 BASE_SCENARIO = "s2-algorithm-2clients-smoke"
@@ -83,14 +84,19 @@ def _toml_str(v) -> str:
     return json.dumps(v)   # a JSON string is a valid TOML basic string
 
 
-def scenario_text(base: scenario.Scenario, name: str, heroes: list[str]) -> str:
-    """The base scenario as TOML, renamed, with the clients' -rbcharacter set to heroes in order."""
+def scenario_text(base: scenario.Scenario, name: str, heroes: list[str],
+                  network: netem.Impairment | None = None) -> str:
+    """The base scenario as TOML, renamed, with the clients' -rbcharacter set to heroes in order,
+    and through the internet relay with network's settings (default: the base scenario's)."""
     lines = [f"name = {_toml_str(name)}", f"step = {base.step}", f"smoke = {str(base.smoke).lower()}",
              f"time_limit_s = {base.time_limit_s}", f"pass_when = {_toml_str(base.pass_when)}",
              f"required_passes = {base.required_passes}"]
     if base.expect_map:
         lines.append(f"expect_map = {_toml_str(base.expect_map)}")
     lines.append(f"expect_combat = {str(base.expect_combat).lower()}")
+    network = network or base.network
+    if network:
+        lines += ["", "[network]"] + [f"{k} = {v}" for k, v in asdict(network).items()]
     want = iter(heroes)
     for p in base.processes:
         args = list(p.args)
@@ -147,10 +153,10 @@ def row_of(item: dict, r: run.RunResult) -> dict:
 # Results files
 
 
-def load_results(state_dir: Path, resume: bool) -> dict:
+def load_results(state_dir: Path, resume: bool, stem: str = "matrix") -> dict:
     """matrix.json's rows when resuming; otherwise a fresh file, keeping an old one aside as
     matrix-<time>.json so hours of results are never lost to a forgotten --resume."""
-    f = state_dir / "matrix.json"
+    f = state_dir / f"{stem}.json"
     if not f.exists():
         return {"started": datetime.now().isoformat(timespec="seconds"), "rows": []}
     old = _read_json(f)
@@ -158,7 +164,7 @@ def load_results(state_dir: Path, resume: bool) -> dict:
         return old
     if resume:
         print(f"note: {f} is unreadable; starting over and keeping it aside")
-    f.replace(f.with_name(f"matrix-{datetime.fromtimestamp(f.stat().st_mtime):%Y%m%d-%H%M%S}.json"))
+    f.replace(f.with_name(f"{stem}-{datetime.fromtimestamp(f.stat().st_mtime):%Y%m%d-%H%M%S}.json"))
     return {"started": datetime.now().isoformat(timespec="seconds"), "rows": []}
 
 
@@ -170,8 +176,9 @@ def render_md(results: dict) -> str:
     rows = results.get("rows", [])
     n_pass = sum(r["outcome"] == "pass" for r in rows)
     lines = ["# Hero matrix", "",
-             f"Co-op story mission ({BASE_SCENARIO}) with two players per run. "
-             f"Started {results.get('started', '?')}.", "",
+             f"Co-op story mission ({BASE_SCENARIO}) with two players per run"
+             + (f", through the \"{results['network']}\" internet relay" if results.get("network") else "")
+             + f". Started {results.get('started', '?')}.", "",
              f"{n_pass} pass, {len(rows) - n_pass} fail, of {len(rows)} runs so far.", ""]
     heroes: dict[str, list[str]] = {}
     for r in rows:
@@ -194,25 +201,32 @@ def render_md(results: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def save_results(state_dir: Path, results: dict) -> None:
+def save_results(state_dir: Path, results: dict, stem: str = "matrix") -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write(state_dir / "matrix.json", json.dumps(results, indent=2))
-    atomic_write(state_dir / "matrix.md", render_md(results))
+    atomic_write(state_dir / f"{stem}.json", json.dumps(results, indent=2))
+    atomic_write(state_dir / f"{stem}.md", render_md(results))
+
+
+def results_stem(network: str | None) -> str:
+    """Relay sweeps keep their own results file, so they never set a direct sweep's aside."""
+    return f"matrix-net-{network}" if network else "matrix"
 
 
 # The sweep
 
 
-def _run_pair(d, base: scenario.Scenario, item: dict) -> run.RunResult:
+def _run_pair(d, base: scenario.Scenario, item: dict, network: str | None = None) -> run.RunResult:
     """Write the pair's scenario to a temporary file (never into scenarios/, where the ladder would
     pick it up) and run it. The run folder keeps its own copy."""
     with tempfile.TemporaryDirectory(prefix="bbmatrix-") as tmp:
         path = Path(tmp) / f"{item['name']}.toml"
-        path.write_text(scenario_text(base, item["name"], [item["c1"], item["c2"]]), encoding="utf-8")
+        name = item["name"] + (f"-net-{network}" if network else "")
+        imp = netem.PRESETS[network] if network else None
+        path.write_text(scenario_text(base, name, [item["c1"], item["c2"]], imp), encoding="utf-8")
         return d.run(scenario.load(path))
 
 
-def sweep(d, heroes: list[str], rounds: int, resume: bool) -> int:
+def sweep(d, heroes: list[str], rounds: int, resume: bool, network: str | None = None) -> int:
     if d.play_alive() is not None:
         print("a play session is running; end it with `python -m debugloop.loop stop-play` first")
         return PLAY_SESSION
@@ -222,13 +236,14 @@ def sweep(d, heroes: list[str], rounds: int, resume: bool) -> int:
     except (scenario.ScenarioError, run.HarnessError) as e:
         print(f"HARNESS ERROR: {e}")
         return HARNESS
-    results = load_results(d.state_dir, resume)
-    results["heroes"], results["rounds"] = heroes, rounds
+    stem = results_stem(network)
+    results = load_results(d.state_dir, resume, stem)
+    results["heroes"], results["rounds"], results["network"] = heroes, rounds, network
     items = plan(heroes, rounds)
     done = {r["name"] for r in results["rows"]}
     todo = [it for it in items if it["name"] not in done]
     print(f"matrix: {len(items)} pairs over {rounds} round(s), {len(items) - len(todo)} already done")
-    save_results(d.state_dir, results)
+    save_results(d.state_dir, results, stem)
     if todo:
         b = d.build()   # once for the whole sweep
         if not b.ok:
@@ -246,7 +261,7 @@ def sweep(d, heroes: list[str], rounds: int, resume: bool) -> int:
             return PLAY_SESSION
         print(f"[{i}/{len(todo)}] round {item['round']}: c1 {item['c1']}, c2 {item['c2']}", flush=True)
         try:
-            r = _run_pair(d, base, item)
+            r = _run_pair(d, base, item, network)
             if r.outcome.kind != "pass" and not r.signature:
                 raise run.HarnessError(f"run {r.run_id} ended '{r.outcome.kind}' with no signature")
         except Exception as e:   # a harness problem, not a result: never recorded, so --resume retries it
@@ -261,14 +276,14 @@ def sweep(d, heroes: list[str], rounds: int, resume: bool) -> int:
             continue
         errors = 0
         results["rows"].append(row_of(item, r))
-        save_results(d.state_dir, results)
+        save_results(d.state_dir, results, stem)
         print(f"  {r.outcome.kind.upper()} {r.signature or ''} {r.outcome.detail}".rstrip())
     names = {it["name"] for it in items}
     rows = [r for r in results["rows"] if r["name"] in names]
     n_pass, missing = sum(r["outcome"] == "pass" for r in rows), len(items) - len(rows)
     print(f"MATRIX DONE: {n_pass} pass, {len(rows) - n_pass} fail"
           + (f", {missing} not run (harness errors; rerun with --resume)" if missing else "")
-          + f"  (table: {d.state_dir / 'matrix.md'})")
+          + f"  (table: {d.state_dir / (stem + '.md')})")
     if n_pass < len(rows):
         return FAILED
     return HARNESS if missing else OK   # a pair that never ran proves nothing
@@ -297,7 +312,10 @@ def main(argv=None, deps=None) -> int:
     ap.add_argument("--heroes", help="comma-separated hero names (default: every hero)")
     ap.add_argument("--rounds", type=int, default=2,
                     help="rounds; each plays every hero, later ones with new partners and c1/c2 swapped")
-    ap.add_argument("--resume", action="store_true", help="skip pairs already in state/matrix.json")
+    ap.add_argument("--resume", action="store_true", help="skip pairs already in the results file")
+    ap.add_argument("--network", choices=sorted(netem.PRESETS),
+                    help="play every pair through the internet relay with this preset "
+                         "(results in state/matrix-net-<preset>.json/.md)")
     a = ap.parse_args(argv)
     try:
         heroes = parse_heroes(a.heroes, all_heroes())
@@ -307,7 +325,7 @@ def main(argv=None, deps=None) -> int:
     if a.rounds < 1:
         print("HARNESS ERROR: --rounds must be 1 or more")
         return HARNESS
-    return sweep(deps or loop.Deps(), heroes, a.rounds, a.resume)
+    return sweep(deps or loop.Deps(), heroes, a.rounds, a.resume, a.network)
 
 
 if __name__ == "__main__":
