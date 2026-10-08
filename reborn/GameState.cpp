@@ -13,6 +13,7 @@
 #include <Windows.h>
 #include <Psapi.h>
 #include <atomic>
+#include <algorithm>
 #include <map>
 #pragma comment(lib, "psapi.lib")
 
@@ -185,6 +186,90 @@ namespace GameState {
             return "";
         }
 
+        // --- Computer-controlled characters and summons, for the server-vs-client check ---------
+        //
+        // Every networked non-player pawn (story enemies, lane minions, pets) and every networked
+        // actor a player pawn instigated (summons, deployables, mines), one entry each. The test kit
+        // (debugloop/npcsync.py) compares the server's list with each client's: a character the server
+        // has near a player that the player lacks, one only the client has, or one without a body.
+        // Client-only actors (effects the client spawns itself) are left out: on a client only
+        // actors whose authority is the server (RemoteRole == Authority) count.
+        constexpr size_t kMaxNpcs = 250;
+
+        bool Networked(AActor* a) {
+            return Globals::amServer ? a->RemoteRole != ENetRole::ROLE_None
+                                     : a->RemoteRole == ENetRole::ROLE_Authority;
+        }
+
+        nlohmann::json IntLoc(AActor* a) {
+            return { (int)a->Location.X, (int)a->Location.Y, (int)a->Location.Z };
+        }
+
+        bool IsPlayerPawn(APawn* p) {
+            return !Gone(p) && !Gone(p->PlayerReplicationInfo);
+        }
+
+        nlohmann::json NpcCensus(int& pawnCount, int& thingCount, nlohmann::json& skipped) {
+            nlohmann::json out = nlohmann::json::array();
+            pawnCount = thingCount = 0;
+            // Networked dynamic actors left out, as "reason: class" -> count, so a summon the list
+            // misses can be found (npc_skipped in /state).
+            std::map<std::string, int> skips;
+            auto skip = [&](const char* why, AActor* a) { skips[std::string(why) + ": " + a->Class->GetName()]++; };
+            for (AActor* a : SDKUtils::GetAllOfClass<AActor>()) {
+                if (Gone(a) || IsDefault(a) || a->bDeleteMe || a->bStatic || !a->WorldInfo || !Networked(a))
+                    continue;
+                bool pawn = a->IsA(APawn::StaticClass());
+                if (pawn && IsPlayerPawn(reinterpret_cast<APawn*>(a)))
+                    continue;
+                if (a->IsA(AInfo::StaticClass()) || a->IsA(AController::StaticClass()) ||
+                    a->IsA(AInventory::StaticClass()) || a->IsA(APlayerStateInfo::StaticClass()))
+                    continue;
+                if (a->bTearOff) { skip("torn off", a); continue; }
+                // Never sent to other players: owner-only actors and hidden ones (UE3 does not
+                // replicate a hidden actor; hazard volumes are hidden pawns). A client's copy hidden
+                // while the server's is not shows up as "missing" instead.
+                if (a->bOnlyRelevantToOwner) { skip("owner only", a); continue; }
+                if (a->bHidden) { skip("hidden", a); continue; }
+                std::string owner;
+                if (pawn) {
+                    APawn* p = reinterpret_cast<APawn*>(a);
+                    if (!LivePawnInWorld(p) || p->GetHealth() <= 0.0f) { skip("dead", a); continue; }
+                    if (IsPlayerPawn(p->Instigator) && p->Instigator != p) owner = PlayerNameOf(p->Instigator);
+                } else {
+                    if (a->IsA(AEmitter::StaticClass())) { skip("effect", a); continue; }
+                    // Only things players made: instigated by a player pawn, or owned by one.
+                    APawn* by = IsPlayerPawn(a->Instigator) ? a->Instigator
+                              : (a->Owner && a->Owner->IsA(APawn::StaticClass()) && IsPlayerPawn(reinterpret_cast<APawn*>(a->Owner)))
+                                    ? reinterpret_cast<APawn*>(a->Owner) : nullptr;
+                    if (!by) { skip("not a player's", a); continue; }
+                    owner = PlayerNameOf(by);
+                }
+                (pawn ? pawnCount : thingCount)++;
+                if (out.size() >= kMaxNpcs) continue;
+                nlohmann::json e;
+                e["k"] = pawn ? "pawn" : "thing";
+                e["a"] = a->ObjectArchetype && !IsDefault(a->ObjectArchetype) ? a->ObjectArchetype->GetName() : a->Class->GetName();
+                e["c"] = a->Class->GetName();
+                e["p"] = IntLoc(a);
+                if (!owner.empty()) e["own"] = owner;
+                if (pawn) {
+                    APawn* p = reinterpret_cast<APawn*>(a);
+                    e["hp"] = (int)p->GetHealth();
+                    // A dedicated server draws nothing: only a missing body counts there.
+                    std::string why = MissingBody(p, !Globals::amServer);
+                    if (!why.empty()) e["body"] = why;
+                }
+                out.push_back(std::move(e));
+            }
+            std::vector<std::pair<int, std::string>> top;
+            for (auto& [k, n] : skips) top.push_back({ -n, k });
+            std::sort(top.begin(), top.end());
+            skipped = nlohmann::json::object();
+            for (size_t i = 0; i < top.size() && i < 25; i++) skipped[top[i].second] = -top[i].first;
+            return out;
+        }
+
         std::string DisconnectReason() {
             std::string line = Diagnostics::LastLineContaining("Failure");
             if (line.empty()) return "";
@@ -215,6 +300,13 @@ namespace GameState {
         j["match_state"] = matchState;
         j["match_over"] = !Diagnostics::LastLineContaining("Match ended").empty() ||
                           matchState >= (int)EMatchState::MatchState_Ended;
+        if (!Globals::amStandalone && Globals::GetGWorld()) {
+            int pawns = 0, things = 0;
+            nlohmann::json skipped;
+            j["npcs"] = NpcCensus(pawns, things, skipped);
+            j["npc_skipped"] = skipped;
+            j["npc_counts"] = { {"pawns", pawns}, {"things", things} };
+        }
 
         if (Globals::amServer) {
             nlohmann::json locs = nlohmann::json::object();

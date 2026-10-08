@@ -34,6 +34,12 @@ class Scenario:
     expect_combat: bool = False
     # Clients reach the server through the "bad internet" relay (debugloop/netem.py); None = direct.
     network: netem.Impairment | None = None
+    # The runner presses each client's skill buttons in turn every this many seconds (0 = never), so
+    # heroes make their pets and summons. Button presses only: no aiming or moving (not -rbcombat).
+    cast_skills_every_s: int = 0
+    # Fail on computer-controlled characters (enemies, minions, summons) that differ between the
+    # server and a client: missing near a player, a ghost only the client has, or without a body.
+    check_npcs: bool = False
 
 
 def parse(text: str, path: Path) -> Scenario:
@@ -63,6 +69,12 @@ def parse(text: str, path: Path) -> Scenario:
             network = netem.impairment_from(d["network"])
         except netem.NetworkError as e:
             raise ScenarioError(f"{path}: {e}") from e
+    cast = d.get("cast_skills_every_s", 0)
+    if not isinstance(cast, int) or isinstance(cast, bool) or cast < 0:
+        raise ScenarioError(f"{path}: cast_skills_every_s must be a whole number of seconds, 0 or more")
+    check_npcs = d.get("check_npcs", False)
+    if not isinstance(check_npcs, bool):
+        raise ScenarioError(f"{path}: check_npcs must be true or false")
     procs = []
     for p in d.get("process", []):
         if p.get("role") not in ROLES:
@@ -78,7 +90,7 @@ def parse(text: str, path: Path) -> Scenario:
         raise ScenarioError(f"{path}: clients need exactly one server")
     return Scenario(name, step, bool(d.get("smoke", False)), need("time_limit_s", int),
                     pass_when, int(d.get("required_passes", 1)), d.get("expect_map"),
-                    procs, path, expect_combat, network)
+                    procs, path, expect_combat, network, cast, check_npcs)
 
 
 def load(path: Path) -> Scenario:
@@ -95,10 +107,10 @@ def ladder(step: int, smoke: bool = False) -> list[Scenario]:
 
 
 def find_scenario(name: str) -> Scenario:
-    # selftest/ and net/ (internet-relay runs) are found by name but are not on the ladder.
-    for p in list(config.SCENARIOS_DIR.glob("*.toml")) + list(
-            (config.SCENARIOS_DIR / "selftest").glob("*.toml")) + list(
-            (config.SCENARIOS_DIR / "net").glob("*.toml")):
+    # selftest/, net/ (internet relay) and npc/ (minions and summons) are found by name but are
+    # not on the ladder.
+    for p in list(config.SCENARIOS_DIR.glob("*.toml")) + [
+            q for sub in ("selftest", "net", "npc") for q in (config.SCENARIOS_DIR / sub).glob("*.toml")]:
         s = load(p)
         if s.name == name:
             return s

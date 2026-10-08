@@ -14,7 +14,7 @@ from pathlib import Path
 
 import psutil
 
-from . import config, launch, netem, scenario, screenshot, signature
+from . import config, launch, netem, npcsync, scenario, screenshot, signature
 from .outcome import STARTUP_TIMEOUT_S, Outcome, ProcessRecord, Sample, classify, milestone
 
 
@@ -42,6 +42,20 @@ def _get_state(port: int) -> tuple[dict | None, int | None]:
         return None, e.code
     except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, ValueError):
         return None, None
+
+
+def _act(port: int, action: str) -> bool:
+    """Press one button in a client (POST /act). False when the game refused or did not answer."""
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/act", data=json.dumps({"action": action}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r:
+            return r.status == 200
+    except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, ValueError):
+        return False
+
+
+SKILL_BUTTONS = ("skill1", "skill2", "ultimate")
 
 
 def _identity(pid: int) -> dict | None:
@@ -192,6 +206,27 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
     relays: netem.RelaySet | None = None
     t0 = time.time()
     next_shot = [screenshot.SHOT_EVERY_S]
+    casts = {"next": float(scn.cast_skills_every_s), "turn": 0, "pressed": {}, "confirm": []}
+
+    def press_skills(elapsed: float):
+        """Each client with a pawn presses its next skill button (skill 1, skill 2, ultimate, ...),
+        and at the next poll confirms it: aimed skills (placed bombs, traps) wait for that."""
+        if not scn.cast_skills_every_s:
+            return
+        for name in casts["confirm"]:
+            _act(ports[name], "confirm")
+        casts["confirm"] = []
+        if elapsed < casts["next"]:
+            return
+        casts["next"] = elapsed + scn.cast_skills_every_s
+        button = SKILL_BUTTONS[casts["turn"] % len(SKILL_BUTTONS)]
+        casts["turn"] += 1
+        for spec in scn.processes:
+            last = next((s for s in reversed(samples) if s.name == spec.name), None)
+            if spec.role == "client" and last and last.state and last.state.get("has_pawn"):
+                if _act(ports[spec.name], button):
+                    casts["pressed"][spec.name] = casts["pressed"].get(spec.name, 0) + 1
+                    casts["confirm"].append(spec.name)
 
     def take_shots(label: str):
         if shots:
@@ -256,6 +291,7 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
                 (run_dir / f"{sp.name}.log").exists()
                 and "Match ended" in (run_dir / f"{sp.name}.log").read_text(errors="replace")
                 for sp in servers)
+            press_skills(elapsed)
             if elapsed >= next_shot[0]:
                 take_shots(f"{int(elapsed):04d}s")
                 next_shot[0] += screenshot.SHOT_EVERY_S
@@ -282,9 +318,12 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
                 pass
         collect_game_dumps(run_dir, t0, config.GAME_LOGS_DIR)
 
+    o = check_npcs(scn, samples, o, run_dir)
     sig = signature.make(o, scn)
     elapsed = time.time() - t0
     (run_dir / "combat.json").write_text(json.dumps(last_combat_stats(samples), indent=2))
+    if scn.cast_skills_every_s:
+        (run_dir / "skills.json").write_text(json.dumps(casts["pressed"], indent=2))
     result = RunResult(run_id, scn.name, o, sig, run_dir, round(elapsed, 1),
                        milestone(samples), combat_warnings(samples, elapsed))
     (run_dir / "result.json").write_text(json.dumps(
@@ -292,6 +331,25 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
     if o.kind == "pass":
         prune_dumps_for_pass(result)
     return result
+
+
+def check_npcs(scn, samples, o: Outcome, run_dir: Path) -> Outcome:
+    """Write npcsync.json when the games reported their characters; with check_npcs, a run that
+    otherwise passed fails on the longest server/client disagreement (debugloop/npcsync.py)."""
+    if not any(s.state and "npcs" in s.state for s in samples):
+        return o
+    rep = npcsync.analyse(samples)
+    try:
+        (run_dir / "npcsync.json").write_text(json.dumps(rep.to_json(), indent=2))
+    except OSError:
+        pass
+    fails = rep.failures()
+    if not scn.check_npcs or o.kind != "pass" or not fails:
+        return o
+    worst = fails[0]
+    more = f" (and {len(fails) - 1} more, see npcsync.json)" if len(fails) > 1 else ""
+    return Outcome("npcsync", worst.describe() + more, worst.client, "playing",
+                   code=f"{worst.kind}:{worst.archetype}")
 
 
 def _last_combat(samples) -> dict[str, dict]:

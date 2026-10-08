@@ -80,7 +80,8 @@ def bb_order(instance: str, mode: str | None = None, target: str | None = None,
 @_guard
 def bb_act(instance: str, action: str, duration_s: float | None = None) -> str:
     """One-off action: jump, fire_start, fire_stop, fire_burst (for duration_s, default 0.5), altfire,
-    melee, skill1, skill2, ultimate, use, sprint_start, sprint_stop."""
+    melee, skill1, skill2, ultimate, confirm (casts an aimed skill), cancel_skill, use, sprint_start,
+    sprint_stop."""
     return json.dumps(play.act(play.resolve(instance), action, duration_s))
 
 

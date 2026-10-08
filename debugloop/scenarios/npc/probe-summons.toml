@@ -1,0 +1,24 @@
+# Trial run: which actors do summon heroes make? Two players in co-op, skill buttons every 6 s.
+name = "probe-summons"
+step = 2
+smoke = true
+time_limit_s = 240
+pass_when = "survive"
+required_passes = 1
+expect_map = "Caverns_P"
+cast_skills_every_s = 6
+
+[[process]]
+name = "server"
+role = "server"
+args = ["-rbservermap=Caverns_P"]
+
+[[process]]
+name = "c1"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Shayne & Aurox", "-rbseed=1"]
+
+[[process]]
+name = "c2"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Ernest", "-rbseed=2"]

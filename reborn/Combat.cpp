@@ -697,6 +697,10 @@ namespace Combat {
         else if (a == "skill1") pc->StartActionSkillBySlot(EActionSkillSlot::ASS_SlotOne);
         else if (a == "skill2") pc->StartActionSkillBySlot(EActionSkillSlot::ASS_SlotTwo);
         else if (a == "ultimate") pc->StartActionSkillBySlot(EActionSkillSlot::ASS_SlotThree);
+        // Aimed skills (placed bombs, traps, rifts) wait in an aiming preview after the press;
+        // confirm casts the one being aimed, like releasing the key or clicking.
+        else if (a == "confirm") pc->ConfirmActionSkill();
+        else if (a == "cancel_skill") pc->CancelActionSkill();
         else if (a == "use") pc->Use();
         else if (a == "sprint_start") pc->BeginSprint();
         else if (a == "sprint_stop") pc->EndSprint();

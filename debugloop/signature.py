@@ -51,6 +51,8 @@ def make(o: Outcome, scn: Scenario) -> str | None:
         return f"desync:{scn.expect_map or 'unknown'}"
     if o.kind in ("fell", "invisible", "wronghero", "wrongskin", "nocombat"):
         return f"{o.kind}:{scn.expect_map or 'unknown'}"
+    if o.kind == "npcsync":   # code: "<missing|ghost|invisible>:<archetype>" (debugloop/npcsync.py)
+        return f"npcsync:{o.code}"
     if o.kind == "timeout":
         return f"timeout:{o.phase}"
     return f"{o.kind}:unknown"
