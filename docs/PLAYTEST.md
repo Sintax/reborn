@@ -9,12 +9,9 @@ When they do, the logs tell us why, so please send them.
 ### What you need
 
 1. Your own copy of Battleborn installed through Steam (the final Steam version).
-2. Windows 10 or 11, 64-bit.
-3. The Microsoft Visual C++ 2015-2022 Redistributable (x64). Most gaming PCs already
-   have it. If the game closes right away after installing the mod, get it from
-   https://aka.ms/vs/17/release/vc_redist.x64.exe
-4. The playtest zip from the host (`Reborn-Playtest-<version>.zip`).
-5. The Steam loader files. Battleborn's online service is gone, so the game is started
+2. Windows 10 or 11, 64-bit, or Linux with Wine or Proton (see "Playing on Linux" below).
+3. The playtest zip from the host (`Reborn-Playtest-<version>.zip`).
+4. The Steam loader files. Battleborn's online service is gone, so the game is started
    through a small loader instead of Steam. If your zip is named `...-with-loader.zip`,
    you already have them. If not, ask the host for these four files:
    `steamclient_loader_x64.exe`, `steamclient.dll`, `steamclient64.dll`,
@@ -37,6 +34,26 @@ When they do, the logs tell us why, so please send them.
 3. At the main menu, choose a public mode (Story or Versus). A server browser opens.
 4. Click **Direct Connect**, type the address the host gives you, and click **Start!**
 5. Pick your hero, lock in, and play.
+
+### Playing on Linux (Wine or Proton)
+
+The mod rides inside a file called `dxgi.dll`. Wine normally ignores a `dxgi.dll` in the
+game folder and uses its own, so the mod never starts. You can tell: no black mod console
+appears, and Direct Connect does nothing useful. Install the same way as above, then:
+
+- **Proton (Steam):** in Steam, add `steamclient_loader_x64.exe` as a non-Steam game,
+  force a Proton version in its Compatibility settings, and set its launch options to
+  `WINEDLLOVERRIDES="dxgi=n,b" %command%`. Start it from Steam.
+- **Plain Wine, Lutris or Bottles:** use a 64-bit prefix with DXVK installed. Add a DLL
+  override for `dxgi` set to "native, then builtin" (in `winecfg`, Libraries tab, or the
+  runner's DLL overrides), or start it with
+  `WINEDLLOVERRIDES="dxgi=n,b" wine steamclient_loader_x64.exe` from the `Win64` folder.
+
+The mod's log notes `running under Wine` near the top, so the host can tell. Your logs
+are inside the Wine prefix: `drive_c/users/<your name>/Documents/RebornLogs` (under
+Proton the name is `steamuser`, and the prefix is in `steamapps/compatdata/<id>/pfx`).
+`CollectLogs.bat` may not be able to zip them under Wine; if it says so, zip the newest
+folder there yourself and send it.
 
 ### When something goes wrong
 

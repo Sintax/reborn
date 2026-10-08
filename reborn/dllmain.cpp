@@ -110,6 +110,10 @@ void MainThread() {
     {
         const auto& opt = LaunchOptions::Get();
         Diagnostics::Init(opt.runDir, opt.instance, opt.hangSeconds);
+        // Wine (and Proton) export this from ntdll; real Windows does not. Logs then show a Linux player.
+        if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"))
+            if (auto wineVersion = reinterpret_cast<const char* (__cdecl*)()>(GetProcAddress(ntdll, "wine_get_version")))
+                std::printf("[LAUNCH] running under Wine %s\n", wineVersion());
         for (auto& e : opt.errors) std::printf("[LAUNCH] bad value: %ls\n", e.c_str());
         for (auto& u : opt.unknown) std::printf("[LAUNCH] unknown flag: %ls\n", u.c_str());
         if (opt.debugPort)

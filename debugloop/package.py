@@ -18,7 +18,7 @@ from . import build, config, launch
 
 DIST = config.REPO / "dist"
 DXGI_PROJECT = config.REPO / "dxgi" / "dxgi.vcxproj"
-DXGI_DLL = config.REPO / "x64" / "Release" / "dxgi.dll"
+DXGI_DLL = config.REPO / "dxgi" / "x64" / "Release" / "dxgi.dll"   # where dxgi.vcxproj builds it
 LOADER_INI = "ColdClientLoader.ini"
 
 COLLECT_LOGS_BAT = r"""@echo off
@@ -30,10 +30,18 @@ for /f "delims=" %%d in ('dir /b /ad /o-d "%LOGS%"') do ( set "NEWEST=%%d" & got
 :found
 set "OUT=%USERPROFILE%\Desktop\RebornLogs-%NEWEST%.zip"
 powershell -NoProfile -Command "Compress-Archive -Force -Path '%LOGS%\%NEWEST%','%USERPROFILE%\Documents\My Games\Battleborn\PoplarGame\Logs\Launch.log' -DestinationPath '%OUT%'" 2>nul
-if not exist "%OUT%" powershell -NoProfile -Command "Compress-Archive -Force -Path '%LOGS%\%NEWEST%' -DestinationPath '%OUT%'"
+if not exist "%OUT%" powershell -NoProfile -Command "Compress-Archive -Force -Path '%LOGS%\%NEWEST%' -DestinationPath '%OUT%'" 2>nul
+if not exist "%OUT%" goto nozip
 echo Saved %OUT%
 echo Send that file to the host.
 pause
+exit /b 0
+:nozip
+rem No PowerShell (for example under Wine on Linux): the player zips the folder themselves.
+echo Could not make a zip here. Zip this folder yourself and send it to the host:
+echo   %LOGS%\%NEWEST%
+pause
+exit /b 1
 """
 
 

@@ -30,3 +30,13 @@ def test_with_loader_adds_loader_files_or_names_the_missing_one(tmp_path):
         (win64 / f).write_bytes(b"x")
     out = package.make_zip(tmp_path / "o.zip", "abc", True, win64, mod, dxgi)
     assert package.LOADER_INI in zipfile.ZipFile(out).namelist()
+
+
+def test_zip_takes_the_proxy_from_where_its_project_builds_it():
+    assert package.DXGI_DLL.parents[2] == package.DXGI_PROJECT.parent
+
+
+def test_log_collector_does_not_claim_a_zip_it_could_not_make():
+    bat = package.COLLECT_LOGS_BAT
+    assert bat.index('if not exist "%OUT%" goto nozip') < bat.index("echo Saved")
+    assert "Zip this folder yourself" in bat
