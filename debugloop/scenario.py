@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from . import config
+from . import config, netem
 
 ROLES = ("server", "client", "solo")
 
@@ -32,6 +32,8 @@ class Scenario:
     path: Path
     # The map has enemies to fight: a combat-brain player that never fires or casts is a failure.
     expect_combat: bool = False
+    # Clients reach the server through the "bad internet" relay (debugloop/netem.py); None = direct.
+    network: netem.Impairment | None = None
 
 
 def parse(text: str, path: Path) -> Scenario:
@@ -53,6 +55,14 @@ def parse(text: str, path: Path) -> Scenario:
     expect_combat = d.get("expect_combat", False)
     if not isinstance(expect_combat, bool):
         raise ScenarioError(f"{path}: expect_combat must be true or false")
+    network = None
+    if "network" in d:
+        if not isinstance(d["network"], dict):
+            raise ScenarioError(f"{path}: [network] must be a table")
+        try:
+            network = netem.impairment_from(d["network"])
+        except netem.NetworkError as e:
+            raise ScenarioError(f"{path}: {e}") from e
     procs = []
     for p in d.get("process", []):
         if p.get("role") not in ROLES:
@@ -68,7 +78,7 @@ def parse(text: str, path: Path) -> Scenario:
         raise ScenarioError(f"{path}: clients need exactly one server")
     return Scenario(name, step, bool(d.get("smoke", False)), need("time_limit_s", int),
                     pass_when, int(d.get("required_passes", 1)), d.get("expect_map"),
-                    procs, path, expect_combat)
+                    procs, path, expect_combat, network)
 
 
 def load(path: Path) -> Scenario:
@@ -85,8 +95,10 @@ def ladder(step: int, smoke: bool = False) -> list[Scenario]:
 
 
 def find_scenario(name: str) -> Scenario:
+    # selftest/ and net/ (internet-relay runs) are found by name but are not on the ladder.
     for p in list(config.SCENARIOS_DIR.glob("*.toml")) + list(
-            (config.SCENARIOS_DIR / "selftest").glob("*.toml")):
+            (config.SCENARIOS_DIR / "selftest").glob("*.toml")) + list(
+            (config.SCENARIOS_DIR / "net").glob("*.toml")):
         s = load(p)
         if s.name == name:
             return s

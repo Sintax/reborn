@@ -14,7 +14,7 @@ from pathlib import Path
 
 import psutil
 
-from . import config, launch, scenario, screenshot, signature
+from . import config, launch, netem, scenario, screenshot, signature
 from .outcome import STARTUP_TIMEOUT_S, Outcome, ProcessRecord, Sample, classify, milestone
 
 
@@ -121,13 +121,13 @@ def preconditions(runs_dir: Path, n_processes: int = 0) -> None:
                            "another program holds them")
 
 
-def _args(spec, port: int, run_dir: Path, n_clients: int) -> list[str]:
+def _args(spec, port: int, run_dir: Path, n_clients: int, join_port: int = config.SERVER_PORT) -> list[str]:
     a = launch.base_args(spec.role) + list(spec.args) + [
         f"-rbinstance={spec.name}", f"-rbdebugport={port}", f"-rbrundir={run_dir}"]
     if spec.role == "server":
         a.append(f"-rbplayers={n_clients}")
     if spec.role == "client":
-        a.append(f"-rbjoin=127.0.0.1:{config.SERVER_PORT}")
+        a.append(f"-rbjoin=127.0.0.1:{join_port}")
     return a
 
 
@@ -189,6 +189,7 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
     killed: set[str] = set()
     samples: list[Sample] = []
     active = runs_dir / "active.json"
+    relays: netem.RelaySet | None = None
     t0 = time.time()
     next_shot = [screenshot.SHOT_EVERY_S]
 
@@ -237,11 +238,15 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
                 if handles[spec.name].exit_code() is not None or time.time() - t0 > STARTUP_TIMEOUT_S:
                     break
                 time.sleep(poll_s)
+        if scn.network:
+            relays = netem.RelaySet.start([p.name for p in others if p.role == "client"],
+                                          config.SERVER_PORT, scn.network)
         for i, spec in enumerate(others):
             if i:
                 time.sleep(5 if poll_s >= 1 else 0.5)
+            join = relays.port(spec.name) if relays and spec.role == "client" else config.SERVER_PORT
             handles[spec.name] = launcher.start(spec.name, spec.role,
-                                                _args(spec, ports[spec.name], run_dir, n_clients))
+                                                _args(spec, ports[spec.name], run_dir, n_clients, join))
             save_active()
 
         while True:
@@ -269,6 +274,12 @@ def run_scenario(scn, launcher=None, runs_dir: Path = config.RUNS_DIR, poll_s: f
             finally:
                 h.close()
         active.unlink(missing_ok=True)
+        if relays:
+            relays.stop()
+            try:
+                relays.write_stats(run_dir / "netem.json")
+            except OSError:
+                pass
         collect_game_dumps(run_dir, t0, config.GAME_LOGS_DIR)
 
     sig = signature.make(o, scn)

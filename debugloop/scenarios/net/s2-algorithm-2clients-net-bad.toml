@@ -1,0 +1,27 @@
+# Two players in co-op on The Algorithm, each through the "bad" internet relay (debugloop/netem.py).
+# Not part of the ladder: run with  python -m debugloop.run s2-algorithm-2clients-net-bad
+name = "s2-algorithm-2clients-net-bad"
+step = 2
+smoke = true
+time_limit_s = 300
+pass_when = "survive"
+required_passes = 1
+expect_map = "Caverns_P"
+
+[network]
+preset = "bad"
+
+[[process]]
+name = "server"
+role = "server"
+args = ["-rbservermap=Caverns_P"]
+
+[[process]]
+name = "c1"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Oscar Mike", "-rbseed=1"]
+
+[[process]]
+name = "c2"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Marquis", "-rbseed=2"]
