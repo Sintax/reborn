@@ -357,7 +357,8 @@ namespace Diagnostics {
     }
 
     void Init(const std::wstring& runDir, const std::wstring& instance, int hangSeconds) {
-        g_instance = instance;
+        // A plain launch (a playtester's game) has no -rbinstance; name its files "game", not ".log".
+        g_instance = instance.empty() ? L"game" : instance;
         g_hangSeconds = hangSeconds;
         g_runDir = runDir.empty() ? DefaultRunDir() : runDir;
         std::error_code ec;

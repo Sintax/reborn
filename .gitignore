@@ -367,3 +367,6 @@ debugloop/native/
 debugloop/ghidra/out/
 __pycache__/
 .pytest_cache/
+
+# Playtest packages
+dist/
