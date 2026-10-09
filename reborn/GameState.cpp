@@ -234,7 +234,8 @@ namespace GameState {
                 std::string owner;
                 if (pawn) {
                     APawn* p = reinterpret_cast<APawn*>(a);
-                    if (!LivePawnInWorld(p) || p->GetHealth() <= 0.0f) { skip("dead", a); continue; }
+                    float hp = PawnUtils::MinionHealth(p, !Globals::amServer);   // -1 = alive, health unknown
+                    if (!LivePawnInWorld(p) || hp == 0.0f) { skip("dead", a); continue; }
                     if (IsPlayerPawn(p->Instigator) && p->Instigator != p) owner = PlayerNameOf(p->Instigator);
                 } else {
                     if (a->IsA(AEmitter::StaticClass())) { skip("effect", a); continue; }
@@ -255,7 +256,8 @@ namespace GameState {
                 if (!owner.empty()) e["own"] = owner;
                 if (pawn) {
                     APawn* p = reinterpret_cast<APawn*>(a);
-                    e["hp"] = (int)p->GetHealth();
+                    float hp = PawnUtils::MinionHealth(p, !Globals::amServer);
+                    if (hp >= 0.0f) e["hp"] = (int)hp;   // left out: alive, health not known on this client
                     // A dedicated server draws nothing: only a missing body counts there.
                     std::string why = MissingBody(p, !Globals::amServer);
                     if (!why.empty()) e["body"] = why;

@@ -106,16 +106,7 @@ namespace Combat {
         int g_dropped[DropCount] = { 0 };
         nlohmann::json g_othersSample = nlohmann::json::array();   // first few other pawns, as the census saw them
 
-        // A minion's health as its ResourcePoolManager replicates it: HealthPool names the manager
-        // and the pool's slot there (ReplicatedValueStates is the replicated copy of each pool's value).
-        // -1 when the manager or the slot is not known on this machine.
-        float ReplicatedPoolHealth(APawn* p) {
-            AResourcePoolManager* m = p->HealthPool.PoolManager;
-            uint8_t i = p->HealthPool.PoolIndexInManager;
-            if (Gone(m) || i >= 16) return -1.f;
-            if (m->ReplicatedPoolIdentities[i].PoolGUID != p->HealthPool.PoolGUID) return -1.f;
-            return m->ReplicatedValueStates[i].CurrentValue;
-        }
+        using PawnUtils::ReplicatedPoolHealth;
 
         void Census(APoplarPlayerController* pc) {
             g_enemies.clear();
