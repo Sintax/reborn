@@ -1,0 +1,27 @@
+# Step 4: two players with computer-controlled characters around them, pressing their skills.
+# Fails when the server and a player's game disagree about an enemy, lane minion or pet
+# (missing near the player, a ghost, or no body): debugloop/npcsync.py.
+name = "s4-algorithm-2clients-npcs"
+step = 4
+smoke = false
+time_limit_s = 480
+pass_when = "survive"
+required_passes = 2
+expect_map = "Caverns_P"
+cast_skills_every_s = 8
+check_npcs = true
+
+[[process]]
+name = "server"
+role = "server"
+args = ["-rbservermap=Caverns_P"]
+
+[[process]]
+name = "c1"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Ernest", "-rbseed=1"]
+
+[[process]]
+name = "c2"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Shayne & Aurox", "-rbseed=2"]

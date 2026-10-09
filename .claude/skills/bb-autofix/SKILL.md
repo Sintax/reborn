@@ -17,6 +17,10 @@ Once the ladder passes cleanly without it, put `-rbcombat` back on the clients a
 
 Current setting: OFF until the user says otherwise (2026-10-07). The user concluded the automated player control is not helping ("this is a human thing"); do not turn it back on yourself.
 
+## The ladder
+
+Step 0 solo Dojo; 1 server + 1 player in the Dojo; 2 two players in the co-op mission; 3 two players in a Meltdown match with bots; 4 two players with enemies, lane minions and their own skills (pressed every 8 s, no aiming), failing when the server and a player's game disagree about a computer-controlled character (`npcsync` signatures: `npcsync:missing|ghost|invisible:<archetype>`, details in the run's `npcsync.json`). Step 5 is human players.
+
 ## 1. Run the next test
 
 Run `python -m debugloop.loop next` in the background with a 110-minute timeout, and wait for the notification. It builds and deploys the current code before the test, so it can take a while. Act on the exit code:
@@ -26,7 +30,7 @@ Run `python -m debugloop.loop next` in the background with a 110-minute timeout,
 | 0 | test passed | If the output says `NOW AT STEP`, send a push notification: "Battleborn loop reached step N". End the iteration. |
 | 2 | harness error | Read the message. If it says a game is already running, push-notify the user once ("close the game so the loop can continue") and end the iteration. Otherwise end the iteration (the loop retries). |
 | 3 | stopped | Read the `STOPPED:` line in the command output. For harness-error stops it is also shown by `python -m debugloop.loop status`. If the reason is harness errors with a Python traceback, go to section 4. If the reason is the wrong branch or uncommitted changes, push-notify the reason and stop the loop. Never switch branches, stash or commit to fix this yourself. Otherwise push-notify the reason and stop the loop. |
-| 4 | ladder done | Push-notify "Steps 0-3 pass. Ready for human players." Stop the loop. |
+| 4 | ladder done | Push-notify "Steps 0-4 pass. Ready for human players." Stop the loop. |
 | 6 | a play session is still running | If you started it in this iteration (section 1b), run `python -m debugloop.loop stop-play` and run `next` again. Otherwise someone is playing it: push-notify "A Battleborn play session is still running; the loop is paused until it ends (`python -m debugloop.loop stop-play`)" and stop the loop. |
 | 10 | bug found | Go to section 2. |
 | any other exit code | unexpected | Push-notify the last 20 lines of the output and stop the loop. |

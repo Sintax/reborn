@@ -1,0 +1,27 @@
+# Step 4: two players with computer-controlled characters around them, pressing their skills.
+# Fails when the server and a player's game disagree about an enemy, lane minion or pet
+# (missing near the player, a ghost, or no body): debugloop/npcsync.py.
+name = "s4-meltdown-2clients-npcs"
+step = 4
+smoke = false
+time_limit_s = 600
+pass_when = "survive"
+required_passes = 1
+expect_map = "IceScort_P"
+cast_skills_every_s = 8
+check_npcs = true
+
+[[process]]
+name = "server"
+role = "server"
+args = ["-rbservermap=IceScort_P?SpawnBotsTeamA=4?SpawnBotsTeamB=4"]
+
+[[process]]
+name = "c1"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Ernest", "-rbseed=1"]
+
+[[process]]
+name = "c2"
+role = "client"
+args = ["-rbautopilot", "-rbcharacter=Shayne & Aurox", "-rbseed=2"]

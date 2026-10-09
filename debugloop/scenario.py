@@ -6,6 +6,9 @@ from typing import Literal
 from . import config, netem
 
 ROLES = ("server", "client", "solo")
+# The last automated ladder step: 4 = two players with enemies, lane minions and skills, checked
+# server-vs-client (check_npcs). After it come human players.
+LAST_STEP = 4
 
 
 class ScenarioError(ValueError):
@@ -53,8 +56,8 @@ def parse(text: str, path: Path) -> Scenario:
         return d[k]
     name = need("name", str)
     step = need("step", int)
-    if not 0 <= step <= 3:
-        raise ScenarioError(f"{path}: step must be 0-3, got {step}")
+    if not 0 <= step <= LAST_STEP:
+        raise ScenarioError(f"{path}: step must be 0-{LAST_STEP}, got {step}")
     pass_when = d.get("pass_when", "survive")
     if pass_when not in ("survive", "match_end"):
         raise ScenarioError(f"{path}: pass_when must be survive|match_end")

@@ -117,3 +117,11 @@ def test_other_failures_are_left_alone(tmp_path):
     srv = {t: [npc("Thrall", 500)] for t in range(0, 40, 2)}
     o = run.check_npcs(_scn(tmp_path), rounds(srv, {}), Outcome("crash", code="C0000005"), tmp_path)
     assert o.kind == "crash"
+
+
+def test_server_only_things_are_counted_but_not_required_on_clients():
+    bomb = npc("Bomb", 300, k="thing", c="PoplarServerSideProjectile")
+    f = npcsync.compare_round([bomb], [], [0, 0, 0])
+    assert f == {"missing": [], "ghost": [], "invisible": []}
+    rep = npcsync.analyse(rounds({t: [bomb] for t in range(0, 30, 2)}, {}))
+    assert rep.failures() == [] and rep.archetypes == {"Bomb": 1}

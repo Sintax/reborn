@@ -480,11 +480,12 @@ def cmd_next(d: Deps) -> int:
     if st.consecutive_passes >= scn.required_passes:
         st.step, st.consecutive_passes, st.scenario_index = st.step + 1, 0, 0
         msg += f" -> NOW AT STEP {st.step}"
-    if st.step > 3:
-        st.stopped_reason = "steps 0-3 complete; step 4 needs human players"
+    if st.step > scenario.LAST_STEP:
+        st.stopped_reason = (f"steps 0-{scenario.LAST_STEP} complete; "
+                             f"step {scenario.LAST_STEP + 1} needs human players")
     st.save(d.state_dir)
     print(msg)
-    return LADDER_DONE if st.step > 3 else OK
+    return LADDER_DONE if st.step > scenario.LAST_STEP else OK
 
 
 def _record_failed_run(d, L, r) -> None:

@@ -68,7 +68,9 @@ def compare_round(server_npcs: list[dict], client_npcs: list[dict], me: list | N
     cli = [e for e in client_npcs if _alive(e) and e.get("p")]
     used: set[int] = set()
     for s in sorted(srv, key=lambda e: _dist(e["p"], me)):
-        if _dist(s["p"], me) > RELEVANT_UNITS:
+        # Player-made things (bombs, mines: PoplarServerSideProjectile) mostly live on the server
+        # only, by design; the client draws an effect. Only characters must be on both.
+        if s.get("k") != "pawn" or _dist(s["p"], me) > RELEVANT_UNITS:
             continue
         best, best_d = None, MATCH_UNITS
         for i, c in enumerate(cli):
@@ -84,7 +86,7 @@ def compare_round(server_npcs: list[dict], client_npcs: list[dict], me: list | N
             if cli[best].get("body"):
                 out["invisible"].append(cli[best])
     for i, c in enumerate(cli):
-        if i in used or _dist(c["p"], me) > RELEVANT_UNITS:
+        if i in used or c.get("k") != "pawn" or _dist(c["p"], me) > RELEVANT_UNITS:
             continue
         if not any(s.get("a") == c.get("a") and _dist(s["p"], c["p"]) <= MATCH_UNITS for s in srv):
             out["ghost"].append(c)
@@ -131,7 +133,8 @@ def analyse(samples, server: str = "server") -> Report:
         found = compare_round(srv.state["npcs"], s.state["npcs"], me)
         rep.rounds[s.name] = rep.rounds.get(s.name, 0) + 1
         rep.compared[s.name] = rep.compared.get(s.name, 0) + sum(
-            1 for e in srv.state["npcs"] if _alive(e) and e.get("p") and _dist(e["p"], me) <= RELEVANT_UNITS)
+            1 for e in srv.state["npcs"] if e.get("k") == "pawn" and _alive(e) and e.get("p")
+            and _dist(e["p"], me) <= RELEVANT_UNITS)
         prev = open_eps.get(s.name, [])
         now_open: list[Episode] = []
         for kind, entries in found.items():

@@ -29,7 +29,7 @@ All paths below are relative to the repo root `C:\Users\djsin\Documents\GitHub\B
 - Retention: delete dumps of passing runs; keep the 3 newest dumps per bug.
 - Debug server binds 127.0.0.1 only. Ports: first instance 18080, then +1. Game server port 7777.
 - Free disk below 2048 MB: refuse to run.
-- Ladder: step 0 solo mission loads, 3 passes in a row. Step 1 server + 1 autopilot, 15 min on training map, 3 in a row. Step 2 two autopilots play a story mission 30 min with no crash, freeze, disconnect or desync, 2 in a row. Step 3 PvP match with bots runs to the end, 2 in a row. Step 4 humans (out of scope for automation).
+- Ladder: step 0 solo mission loads, 3 passes in a row. Step 1 server + 1 autopilot, 15 min on training map, 3 in a row. Step 2 two autopilots play a story mission 30 min with no crash, freeze, disconnect or desync, 2 in a row. Step 3 PvP match with bots runs to the end, 2 in a row. Step 4 (added 2026-10-09) two players with story enemies and Meltdown lane minions, pressing their skills, with the server and both clients agreeing on every computer-controlled character (`check_npcs`, debugloop/npcsync.py). Step 5 humans (out of scope for automation).
 
 ## Review Focus
 
