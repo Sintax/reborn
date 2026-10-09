@@ -47,7 +47,8 @@ namespace ServerNetworking {
 
             float sum = std::accumulate(Globals::Telemetry::Tickrates.begin(), Globals::Telemetry::Tickrates.end(), 0.0f);
 
-            averageTickrate = sum / Globals::Telemetry::Tickrates.size();
+            // No samples since the last poll (no net driver yet): 0, not 0/0 = NaN.
+            averageTickrate = Globals::Telemetry::Tickrates.empty() ? 0.0f : sum / Globals::Telemetry::Tickrates.size();
 
             Globals::Telemetry::Tickrates.clear();
         }
