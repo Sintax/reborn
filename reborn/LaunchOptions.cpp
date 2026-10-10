@@ -49,6 +49,7 @@ namespace LaunchOptions {
             else if (key == L"-rbautopilot") o.autopilot = true;
             else if (key == L"-rbcombat") o.combat = true;
             else if (key == L"-rbjoin" && !val.empty()) o.join = val;
+            else if (key == L"-rbbrowse") o.browse = true;
             else if (key == L"-rbhost" && !val.empty()) o.host = val;
             else if (key == L"-rbsolomap" && !val.empty()) o.soloMap = val;
             else if (key == L"-rbservermap" && !val.empty()) o.serverMap = val;
