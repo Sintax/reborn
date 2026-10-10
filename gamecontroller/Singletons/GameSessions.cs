@@ -6,12 +6,14 @@ namespace gamecontroller.Singletons
 	public class GameSessions
 	{
 		private readonly LobbySingleton _lobbySingleton;
+		private readonly IServerLauncher _launcher;
 
 		public List<int> ports = [7777, 7778, 7779];
 
-		public GameSessions(LobbySingleton lobbySingleton)
+		public GameSessions(LobbySingleton lobbySingleton, IServerLauncher launcher)
 		{
 			_lobbySingleton = lobbySingleton;
+			_launcher = launcher;
 		}
 
 		public List<int> GetAvailablePorts()
@@ -63,9 +65,9 @@ namespace gamecontroller.Singletons
 
 				gameInstance.Port = port;
 
-				var proc = Process.Start(new ProcessStartInfo("Serverborn.exe", "-SEEKFREEPACKAGEMAP -SEEKFREELOADINGPCCONSOLE GameCoordinator localhost:5000 "+gameInstance.MyGuid.ToString()));
-
-				gameInstance.PID = proc.Id;
+				// Same launch options as the roster servers (ServerRoster.cs); the map comes from server-config.
+				gameInstance.PID = _launcher.Launch("rb-lobby-" + port, "-windowed -nosound -nomoviestartup -NOSPLASH -nullrhi -rbinstance=rb-lobby-" + port
+					+ " -rbcoordinator=localhost:5000 -rbcoordinatorkey=" + gameInstance.MyGuid);
 
 				gameInstance.ConnectionString = "open " + await GetPublicIp() + ":" + port.ToString();
 

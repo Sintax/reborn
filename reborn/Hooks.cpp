@@ -1165,7 +1165,8 @@ namespace Hooks {
 
                 reinterpret_cast<void* (*)(UWorld*, UNetConnection*)>(Globals::baseAddress + 0x045b060)(world, connection);
             }
-            else if (!ServerSettings::amRunningWithGameCoordinator) {
+            else {
+                // No lobby told us who is coming (LAN, Direct Connect, or a server-browser roster server): welcome whoever arrives.
                 printf("[NETWORKING] Welcoming a new player!\n");
 
                 Globals::ServerPlayer serverPlayer = Globals::ServerPlayer("LAN Player", "PoplarPlayerNameIdentifierDefinition GD_RocketHawk.NameId_RocketHawk", "", "", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_MaxShield_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_ShieldPen_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_HealthRegen_Legendary_LLC2");

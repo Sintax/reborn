@@ -31,9 +31,15 @@ When they do, the logs tell us why, so please send them.
 1. Double-click `steamclient_loader_x64.exe` in the `Win64` folder. Do not start the game
    from Steam; the mod needs the loader.
 2. A black console window opens next to the game. Leave it open; that is the mod talking.
-3. At the main menu, choose a public mode (Story or Versus). A server browser opens.
-4. Click **Direct Connect**, type the address the host gives you, and click **Start!**
-5. Pick your hero, lock in, and play.
+3. At the main menu, choose a public mode (Story or Versus). A server browser opens and
+   lists the games running on the Reborn server, with how many players are in each.
+4. Click **Join** on a game that says **Joinable!**. (Or click **Direct Connect** and type
+   an address a friend gives you.)
+5. Pick your hero, lock in, and play. The match starts when enough players have joined.
+
+If the list is empty, click **Refresh Server Browser**; if it stays empty, the Reborn
+server is down or your network blocks it. Direct Connect still works. To use a different
+matchmaking server, add `-rbcoordinator=ADDRESS:5000` to the game's launch options.
 
 ### Playing on Linux (Wine or Proton)
 
@@ -72,7 +78,25 @@ Nothing in the logs is personal beyond your Windows user name in file paths.
 
 ## For the host
 
-### Start a game
+### Start a game from inside Battleborn
+
+No Python needed. This works for solo play too: set the players to 1.
+
+1. Start the game with `steamclient_loader_x64.exe` as usual.
+2. At the main menu, choose a public mode (Story, Operations or Versus). The server browser opens.
+3. Click **Host Game**.
+4. Pick the mission or map, and how many players (including you). The match starts once that many
+   have joined.
+5. Click **Host Game!** The mod starts a server on your PC in the background. This takes a minute
+   or two, then your game joins it by itself.
+6. Friends join with **Direct Connect** to your address (see "Let your friend reach you" below).
+
+The server's window stays minimised on the taskbar. It closes when the match ends, when you close
+your game, or when you host another game. If Windows asks whether to allow `Serverborn.exe`
+through the firewall, say yes, or friends cannot reach you. That prompt can hide behind the game:
+check the taskbar.
+
+### Start a game with Python
 
 From the repo folder, with the latest build already deployed by the debug loop:
 

@@ -114,12 +114,15 @@ void MainThread() {
         if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"))
             if (auto wineVersion = reinterpret_cast<const char* (__cdecl*)()>(GetProcAddress(ntdll, "wine_get_version")))
                 std::printf("[LAUNCH] running under Wine %s\n", wineVersion());
+        // A server started by the in-game "Host Game" keeps its console out of the host's way.
+        if (!opt.readyEvent.empty())
+            if (HWND console = GetConsoleWindow()) ShowWindow(console, SW_SHOWMINNOACTIVE);
         for (auto& e : opt.errors) std::printf("[LAUNCH] bad value: %ls\n", e.c_str());
         for (auto& u : opt.unknown) std::printf("[LAUNCH] unknown flag: %ls\n", u.c_str());
         if (opt.debugPort)
-            std::printf("[LAUNCH] options: instance=\"%ls\" character=\"%s\" join=\"%ls\" solomap=\"%ls\" servermap=\"%ls\" players=%d seed=%u rundir=\"%ls\"\n",
+            std::printf("[LAUNCH] options: instance=\"%ls\" character=\"%s\" join=\"%ls\" solomap=\"%ls\" servermap=\"%ls\" players=%d seed=%u rundir=\"%ls\" coordinator=\"%s\"\n",
                         opt.instance.c_str(), opt.character.c_str(), opt.join.c_str(), opt.soloMap.c_str(),
-                        opt.serverMap.c_str(), opt.players, opt.seed, opt.runDir.c_str());
+                        opt.serverMap.c_str(), opt.players, opt.seed, opt.runDir.c_str(), opt.coordinator.c_str());
         if (!g_instanceMutex.empty())
             std::printf("[LAUNCH] single-instance mutex is %ls (rename hook %s, already-running guard %s)\n",
                         g_instanceMutex.c_str(), g_createMutexW ? "hooked" : "FAILED",

@@ -282,7 +282,19 @@ namespace GameState {
         }
     }
 
-    void SetListening(bool listening) { g_listening = listening; }
+    void SetListening(bool listening) {
+        g_listening = listening;
+        // A server started by "Host Game" tells the host's game it can connect now (LocalHost.cpp).
+        const std::wstring& name = LaunchOptions::Get().readyEvent;
+        if (listening && !name.empty()) {
+            HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, name.c_str());
+            std::printf("[HOST] listening; telling the host's game %s\n", ready ? "to join" : "failed (it has closed?)");
+            if (ready) {
+                SetEvent(ready);
+                CloseHandle(ready);
+            }
+        }
+    }
 
     std::string SnapshotJson() {
         const auto& opt = LaunchOptions::Get();

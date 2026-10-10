@@ -174,6 +174,11 @@ namespace GameCoordinator {
         }
     };
 
+    // "host:port" of the matchmaking service: -rbcoordinator, else the built-in default.
+    std::string Endpoint();
+    // The client used for every call to the service, made on first use.
+    httplib::Client& Client();
+
     void RefreshServerBrowser();
 
     void RefreshWaitingForPlayers();

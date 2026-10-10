@@ -49,8 +49,12 @@ namespace LaunchOptions {
             else if (key == L"-rbautopilot") o.autopilot = true;
             else if (key == L"-rbcombat") o.combat = true;
             else if (key == L"-rbjoin" && !val.empty()) o.join = val;
+            else if (key == L"-rbhost" && !val.empty()) o.host = val;
             else if (key == L"-rbsolomap" && !val.empty()) o.soloMap = val;
             else if (key == L"-rbservermap" && !val.empty()) o.serverMap = val;
+            else if (key == L"-rbreadyevent" && !val.empty()) o.readyEvent = val;
+            else if (key == L"-rbcoordinator" && !val.empty()) o.coordinator = Narrow(val);
+            else if (key == L"-rbcoordinatorkey" && !val.empty()) o.coordinatorKey = Narrow(val);
             else if (key == L"-rbplayers") { if (ToInt(val, 1, 10, n)) o.players = n; else o.errors.push_back(a); }
             else if (key == L"-rbcharacter" && !val.empty()) o.character = Narrow(val);
             else if (key == L"-rbseed") { if (ToInt(val, 0, INT_MAX, n)) o.seed = (unsigned)n; else o.errors.push_back(a); }

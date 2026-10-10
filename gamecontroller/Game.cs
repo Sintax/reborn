@@ -1,3 +1,4 @@
+﻿using gamecontroller.Singletons;
 using gamecontroller.Models;
 using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
@@ -118,6 +119,13 @@ namespace gamecontroller
         public DateTime LastServerCheckIn { get; set; }
         public DateTime CreationTime { get; set; }
 
+        // Server-browser roster (ServerRoster.cs); null for lobby-launched games.
+        public RosterSlot? Slot { get; set; }
+        public int CurrentNumPlayers { get; set; }
+        public bool MatchStarted { get; set; }
+        public bool HasCheckedIn { get; set; }
+        public bool Finished { get; set; }
+
         public GameInstance()
         {
             MyGuid = Guid.NewGuid().ToString();
@@ -141,7 +149,20 @@ namespace gamecontroller
 
 		public int MaxNumPlayers { get; set; }
 
+        // UDP port the server should listen on (Init.cpp reads "port").
+        public int Port { get; set; } = 7777;
+
         public List<PlayerConfig> PlayerConfigs { get; set; }
+
+        // A roster server: no lobby, so no per-player picks.
+        public GameCreationConfig(string instanceName, string mapMode, string serverStartupCommand, int maxNumPlayers)
+        {
+            InstanceName = instanceName;
+            HumanReadableInstanceMapMode = mapMode;
+            ServerStartupCommand = serverStartupCommand;
+            MaxNumPlayers = maxNumPlayers;
+            PlayerConfigs = new List<PlayerConfig>();
+        }
 
 		public GameCreationConfig(Lobby lobby) //string InstanceName, string HumanReadableInstanceMapMode, string ServerStartupCommand, List<LobbyPlayer> lobbyPlayers
 		{
