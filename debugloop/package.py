@@ -18,7 +18,7 @@ from . import build, config, launch
 
 DIST = config.REPO / "dist"
 DXGI_PROJECT = config.REPO / "dxgi" / "dxgi.vcxproj"
-DXGI_DLL = config.REPO / "x64" / "Release" / "dxgi.dll"
+DXGI_DLL = config.REPO / "dxgi" / "x64" / "Release" / "dxgi.dll"   # msbuild on the project, not the .sln
 LOADER_INI = "ColdClientLoader.ini"
 
 COLLECT_LOGS_BAT = r"""@echo off
