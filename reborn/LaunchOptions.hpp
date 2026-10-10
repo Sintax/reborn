@@ -10,9 +10,13 @@ namespace LaunchOptions {
         bool autopilot = false;
         bool combat = false;          // client: autopilot fights (Combat.cpp) instead of wandering
         std::wstring join;            // client: "IP:PORT" to connect to
+        std::wstring host;            // client: press "Host Game" for this map at the menu (LocalHost.cpp)
         std::wstring soloMap;         // solo: map to open
         std::wstring serverMap;       // server: travel URL, e.g. "Dojo_P" or "IceScort_P?SpawnBotsTeamA=4"
         int players = 0;              // server: players to wait for (0 = keep default)
+        std::wstring readyEvent;      // server: named event to set once it is listening (LocalHost.cpp)
+        std::string coordinator;      // "host:port" of the matchmaking service (empty = Constants::GameCoordinatorEndpoint)
+        std::string coordinatorKey;   // server: the token the service gave this server; with coordinator, turns on coordinator mode
         std::string character;        // display name from Constants::CharacterSelectCharacterTable
         unsigned int seed = 0;
         int hangSeconds = 60;

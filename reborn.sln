@@ -9,6 +9,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dxgi", "dxgi\dxgi.vcxproj",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "gamecontroller", "gamecontroller\gamecontroller.csproj", "{B8157F14-0327-4680-9FA9-5EAF7FC8633C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "gamecontroller.Tests", "gamecontroller.Tests\gamecontroller.Tests.csproj", "{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -55,6 +57,18 @@ Global
 		{B8157F14-0327-4680-9FA9-5EAF7FC8633C}.Release|x64.Build.0 = Release|Any CPU
 		{B8157F14-0327-4680-9FA9-5EAF7FC8633C}.Release|x86.ActiveCfg = Release|Any CPU
 		{B8157F14-0327-4680-9FA9-5EAF7FC8633C}.Release|x86.Build.0 = Release|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Debug|x64.Build.0 = Debug|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Debug|x86.Build.0 = Debug|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Release|x64.ActiveCfg = Release|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Release|x64.Build.0 = Release|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Release|x86.ActiveCfg = Release|Any CPU
+		{FFD46CE4-BDC2-4A6E-97BA-D05349BC076B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -55,3 +55,29 @@ def test_server_starts_with_the_same_flags_as_the_host_launcher():
         assert f"{flag} " in ps1, flag
     assert f"-rbinstance=$Name" in ps1 and f'$Name = "{serverkit.SERVER_NAME}"' in ps1
 
+
+
+def test_matchmaking_service_goes_in_its_own_folder(tmp_path):
+    mod, dxgi, win64 = _files(tmp_path)
+    published = tmp_path / "publish"
+    (published / "sub").mkdir(parents=True)
+    (published / "gamecontroller.exe").write_bytes(b"g")
+    (published / "appsettings.json").write_text("{}")
+    (published / "sub" / "x.dll").write_bytes(b"x")
+    out = serverkit.make_zip(tmp_path / "o.zip", "abc", win64, mod, dxgi, matchmaking=published)
+    names = set(zipfile.ZipFile(out).namelist())
+    assert {"matchmaking/gamecontroller.exe", "matchmaking/appsettings.json", "matchmaking/sub/x.dll",
+            "StartMatchmaking.bat", "StopMatchmaking.bat"} <= names
+
+
+def test_without_matchmaking_the_kit_is_as_before(tmp_path):
+    mod, dxgi, win64 = _files(tmp_path)
+    names = set(zipfile.ZipFile(serverkit.make_zip(tmp_path / "o.zip", "abc", win64, mod, dxgi)).namelist())
+    assert not any(n.startswith("matchmaking/") for n in names)
+    assert "StartMatchmaking.bat" in names   # the scripts are always there; they say what is missing
+
+
+def test_firewall_opens_every_port_the_matchmaking_service_needs():
+    bat = (serverkit.FILES / "OpenFirewall.bat").read_text(encoding="utf-8")
+    assert "protocol=UDP localport=7777-7779" in bat
+    assert "protocol=TCP localport=5000" in bat

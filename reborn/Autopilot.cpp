@@ -5,6 +5,7 @@
 #include "Globals.hpp"
 #include "Hooks.hpp"
 #include "LaunchOptions.hpp"
+#include "LocalHost.hpp"
 #include "Metagame.hpp"
 #include "Overlay.hpp"
 #include "Utils.hpp"
@@ -154,6 +155,15 @@ namespace Autopilot {
                 Exec(Globals::LaunchCommand);
             } else if (!opt.join.empty()) {
                 Overlay::StartLaunchSequence(_wcsdup((L"open " + opt.join).c_str()));
+            } else if (!opt.host.empty()) {
+                // Same as the player pressing Host Game. A retry rejoins a server that is already up.
+                if (LocalHost::GetStatus() == LocalHost::Status::Running) {
+                    Globals::amStandalone = false;
+                    Overlay::StartLaunchSequence(L"open 127.0.0.1");
+                } else if (LocalHost::GetStatus() != LocalHost::Status::Starting) {
+                    std::string map(opt.host.begin(), opt.host.end());
+                    LocalHost::Start(map, map, opt.players > 0 ? opt.players : 1);
+                }
             }
             SetPhase(Phase::Launching);
         }
@@ -294,6 +304,8 @@ namespace Autopilot {
             if (g_phaseTime > 5.f) Launch();
             break;
         case Phase::Launching:
+            // Our own server is still starting: that is not a stuck launch.
+            if (LocalHost::GetStatus() == LocalHost::Status::Starting) g_phaseTime = 0.f;
             if (g_phaseTime > kLaunchTimeout) {
                 std::printf("[AUTOPILOT] launch timed out after %.0fs, retrying\n", kLaunchTimeout);
                 SetPhase(Phase::MenuReady);
@@ -306,7 +318,7 @@ namespace Autopilot {
                 break;
             }
             if (!inMenu && pc) {
-                if (!opt.join.empty() && !Globals::CharacterSelectHasLockedIn) SetPhase(Phase::CharacterSelect);
+                if ((!opt.join.empty() || !opt.host.empty()) && !Globals::CharacterSelectHasLockedIn) SetPhase(Phase::CharacterSelect);
                 else if (pc->Pawn) SetPhase(Phase::Playing);
             }
             break;

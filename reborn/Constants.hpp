@@ -5,7 +5,8 @@
 #include <unordered_map>
 
 namespace Constants {
-    const std::string GameCoordinatorEndpoint = "localhost:5000";
+    // The matchmaking service (gamecontroller) on the rented server; -rbcoordinator=host:port overrides it.
+    const std::string GameCoordinatorEndpoint = "216.226.149.110:5000";
 
     const std::vector<std::string> CharacterSelectCharacterTable = {
         "Alani",

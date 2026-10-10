@@ -8,12 +8,12 @@ namespace gamecontroller.Middleware
 	// You may need to install the Microsoft.AspNetCore.Http.Abstractions package into your project
 	public class RCONAuth
 	{
-		private readonly string _RCONToken;
+		// Without RCON_TOKEN nothing is RCON-authorised; the service still runs (telemetry posts just land nowhere).
+		private readonly string? _RCONToken;
 
 		public RCONAuth()
 		{
-			_RCONToken = Environment.GetEnvironmentVariable("RCON_TOKEN") ??
-						 throw new InvalidOperationException("RCON_TOKEN environment variable is not set");
+			_RCONToken = Environment.GetEnvironmentVariable("RCON_TOKEN");
 		}
 
 		public async Task<bool> HasValidRCONAuth(HttpContext context)
@@ -30,7 +30,7 @@ namespace gamecontroller.Middleware
 				token = token.Substring(7);
 			}
 
-			if (string.IsNullOrEmpty(token) || !string.Equals(token, _RCONToken, StringComparison.Ordinal))
+			if (string.IsNullOrEmpty(token) || _RCONToken == null || !string.Equals(token, _RCONToken, StringComparison.Ordinal))
 			{
 				return false;
 			}

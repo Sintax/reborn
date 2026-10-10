@@ -2,12 +2,28 @@
 
 #include "Globals.hpp"
 #include "Constants.hpp"
+#include "LaunchOptions.hpp"
+
+namespace GameCoordinator {
+    std::string Endpoint() {
+        const auto& opt = LaunchOptions::Get();
+        return opt.coordinator.empty() ? Constants::GameCoordinatorEndpoint : opt.coordinator;
+    }
+
+    httplib::Client& Client() {
+        if (!Globals::GameCoordinatorHttpClient.get()) {
+            Globals::GameCoordinatorHttpClient = std::make_shared<httplib::Client>(Endpoint());
+            // A service that is down should cost a few seconds, not a frozen menu.
+            Globals::GameCoordinatorHttpClient->set_connection_timeout(3);
+            Globals::GameCoordinatorHttpClient->set_read_timeout(5);
+        }
+        return *Globals::GameCoordinatorHttpClient;
+    }
+}
 
 namespace GameCoordinator {
     void Login(std::string name) {
-        if (!Globals::GameCoordinatorHttpClient.get()) {
-            Globals::GameCoordinatorHttpClient = std::make_shared<httplib::Client>(Constants::GameCoordinatorEndpoint);
-        }
+        Client();
 
         nlohmann::json payload = nlohmann::json();
 
@@ -95,9 +111,7 @@ namespace GameCoordinator {
     void CreateGame(std::string InstanceName, std::string HumanReadableInstanceMapMode, std::string ServerStartupCommand, int MaxNumPlayers, std::string Password) {
         httplib::Result result;
 
-        if (!Globals::GameCoordinatorHttpClient.get()) {
-            Globals::GameCoordinatorHttpClient = std::make_shared<httplib::Client>(Constants::GameCoordinatorEndpoint);
-        }
+        Client();
 
         nlohmann::json jsonObj = nlohmann::json();
 
@@ -113,20 +127,18 @@ namespace GameCoordinator {
             {"Authorization", bearer.c_str()}
         };
 
-        Globals::GameCoordinatorHttpClient.get()->Post("/api/games", headers, jsonObj.dump(), "application/json");
+        Client().Post("/api/games", headers, jsonObj.dump(), "application/json");
     }
 
     void RefreshServerBrowser() {
         httplib::Result result;
 
-        if (!Globals::GameCoordinatorHttpClient.get()) {
-            Globals::GameCoordinatorHttpClient = std::make_shared<httplib::Client>(Constants::GameCoordinatorEndpoint);
-        }
+        Client();
 
-        result = Globals::GameCoordinatorHttpClient.get()->Get("/api/games");
+        result = Client().Get("/api/games");
 
         if (!result || result->status != 200) {
-            std::cout << "[NETWORKING] Failed to refresh server list!" << std::endl;
+            std::cout << "[NETWORKING] Failed to refresh server list from " << Endpoint() << std::endl;
             return;
         }
 
@@ -144,21 +156,22 @@ namespace GameCoordinator {
     void RefreshWaitingForPlayers() {
         httplib::Result result;
 
-        if (!Globals::GameCoordinatorHttpClient.get()) {
-            Globals::GameCoordinatorHttpClient = std::make_shared<httplib::Client>(Constants::GameCoordinatorEndpoint);
-        }
+        Client();
 
-        result = Globals::GameCoordinatorHttpClient.get()->Get("/api/games");
+        result = Client().Get("/api/games");
 
         if (!result || result->status != 200) {
             std::cout << "[NETWORKING] Failed to refresh server list!" << std::endl;
             return;
         }
 
-        std::vector<nlohmann::json> entries = nlohmann::json::parse(result->body).get<std::vector<nlohmann::json>>();
-
-        if (Globals::MatchIndex < entries.size()) {
-            Globals::CurrentMatchEntry = ServerBrowserEntry(entries[Globals::MatchIndex]);
+        // Find the game we joined by its address: the list can reorder between refreshes.
+        for (const nlohmann::json& entry : nlohmann::json::parse(result->body)) {
+            ServerBrowserEntry candidate(entry);
+            if (candidate.ServerConnectString == Globals::CurrentMatchEntry.ServerConnectString) {
+                Globals::CurrentMatchEntry = candidate;
+                break;
+            }
         }
 
         return;

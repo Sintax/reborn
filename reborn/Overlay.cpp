@@ -5,6 +5,9 @@
 #include "GameCoordinator.hpp"
 #include "Constants.hpp"
 #include "Hooks.hpp"
+#include "LocalHost.hpp"
+
+#include <algorithm>
 
 namespace Overlay {
     void OpenServerBrowser() {
@@ -580,26 +583,41 @@ namespace Overlay {
             ImGui::End();
         }
 
-        if (Globals::CreateGameOpen) {
-            //std::string InstanceName, std::string HumanReadableInstanceMapMode, std::string ServerStartupCommand, int MaxNumPlayers, std::string Password
-            
-            static std::string InstanceName = "";
+        // The server started by "Host Game" is ready: join it like a Direct Connect to this PC.
+        if (LocalHost::TakeReadyToJoin()) {
+            Globals::amStandalone = false;
+            Globals::ConnectedToGameCoordinatorMatch = false;
+            StartLaunchSequence(L"open 127.0.0.1");
+        }
 
-            static std::pair<std::string, std::string> MapMode = std::make_pair("Supercharge - Ziggurat", "open Wishbone_P");
+        LocalHost::Status hostStatus = LocalHost::GetStatus();
+        if (hostStatus == LocalHost::Status::Starting || hostStatus == LocalHost::Status::Failed) {
+            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.4f, 0), ImGuiCond_Always);
+            ImGui::Begin("Hosting", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::SetWindowFontScale(2.0f);
+            ImGui::TextWrapped("%s", LocalHost::GetStatusText().c_str());
+            if (hostStatus == LocalHost::Status::Starting) {
+                if (ImGui::Button("Cancel", ImVec2(-1.0f, 0))) LocalHost::Stop();
+            }
+            else if (ImGui::Button("Close", ImVec2(-1.0f, 0))) {
+                LocalHost::Dismiss();
+            }
+            ImGui::End();
+        }
+
+        if (Globals::CreateGameOpen) {
+            static std::pair<std::string, std::string> MapMode = std::make_pair("Story - The Algorithm", "open Caverns_P");
 
             static int MaxNumPlayers = 1;
 
-            static std::string Password = "";
-
-            ImGui::Begin("Create a Match", &Globals::CreateGameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+            ImGui::Begin("Host a Game", &Globals::CreateGameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
             ImGui::SetWindowFontScale(2.0f);
 
-            ImGui::InputText("Instance name", &InstanceName);
-
             ImGui::PushID("MapMode");
 
-            static std::string mapModeDisplay = "Supercharge - Ziggurat";
+            static std::string mapModeDisplay = "Story - The Algorithm";
 
             mapModeDisplay = MapMode.first;
 
@@ -623,14 +641,22 @@ namespace Overlay {
 
             ImGui::PopID();
 
-            ImGui::SliderInt("Required Players to Start", &MaxNumPlayers, 1, 15);
+            // Story missions and operations take up to 5 players; versus up to 10.
+            const bool pve = MapMode.first.starts_with("Story") || MapMode.first.starts_with("Operations");
+            const int maxPlayers = pve ? 5 : 10;
+            MaxNumPlayers = std::clamp(MaxNumPlayers, 1, maxPlayers);
+            ImGui::SliderInt("Players (including you)", &MaxNumPlayers, 1, maxPlayers);
 
-            ImGui::InputText("RCON Password", &Password);
+            ImGui::TextWrapped("The match starts when this many players have joined. Friends join with Direct Connect to your PC's address (UDP port 7777).");
 
-            if (ImGui::Button("Create Game!", ImVec2(-1.0f, 0))) {
+            const bool busy = LocalHost::GetStatus() == LocalHost::Status::Starting;
+            if (busy) ImGui::BeginDisabled();
+            if (ImGui::Button("Host Game!", ImVec2(-1.0f, 0))) {
                 Globals::CreateGameOpen = false;
-                GameCoordinator::CreateGame(InstanceName, MapMode.first, MapMode.second, MaxNumPlayers, Password);
+                std::string map = MapMode.second.starts_with("open ") ? MapMode.second.substr(5) : MapMode.second;
+                LocalHost::Start(map, MapMode.first, MaxNumPlayers);
             }
+            if (busy) ImGui::EndDisabled();
             ImGui::End();
         }
 
@@ -700,7 +726,7 @@ namespace Overlay {
             float spacing = ImGui::GetStyle().ItemSpacing.x;
             float buttonWidth = (availWidth - spacing) * 0.25f;
 
-            if (ImGui::Button("RCON Admin", ImVec2(buttonWidth, 0))) {
+            if (ImGui::Button("Host Game", ImVec2(buttonWidth, 0))) {
                 Globals::ServerBrowserOpen = false;
                 Globals::CreateGameOpen = true;
             }
@@ -776,6 +802,7 @@ namespace Overlay {
                         Globals::ServerBrowserOpen = false;
 
                         Globals::MatchIndex = i;
+                        Globals::CurrentMatchEntry = server;   // the waiting screen follows this game by its address
                         Globals::ConnectedToGameCoordinatorMatch = true;
 
                         std::wstring wLaunchCommand = std::wstring(server.ServerConnectString.begin(), server.ServerConnectString.end());

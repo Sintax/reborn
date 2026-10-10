@@ -20,6 +20,15 @@ int main() {
     CHECK(s.serverMap == L"IceScort_P?SpawnBotsTeamA=4");
     CHECK(s.players == 2);
 
+    // Matchmaking: the client points at the coordinator; a coordinator-launched server also gets its key.
+    auto c = LaunchOptions::Parse(L"Battleborn.exe -rbcoordinator=216.226.149.110:5000");
+    CHECK(c.coordinator == "216.226.149.110:5000");
+    CHECK(c.coordinatorKey.empty());
+    auto g = LaunchOptions::Parse(L"Serverborn.exe -rbinstance=rb-algo -rbcoordinator=localhost:5000 -rbcoordinatorkey=abc-123");
+    CHECK(g.coordinator == "localhost:5000");
+    CHECK(g.coordinatorKey == "abc-123");
+    CHECK(g.errors.empty() && g.unknown.empty());
+
     auto d = LaunchOptions::Parse(L"Battleborn.exe");
     CHECK(d.instance == L"game" && d.debugPort == 0 && d.hangSeconds == 60 && !d.autopilot);
 

@@ -6,7 +6,8 @@ using gamecontroller.Models;
 
 namespace gamecontroller.Controllers
 {
-    // TODO: Refactor this whole thing, clients used to hit here but no longer, so this should be refactored to reflect it's server only nature
+    // The game's server browser reads the list here; game servers report in with their X-Server-Token.
+    // Servers come from the roster (ServerRoster.cs) or, for the lobby flow, from a lobby's GameInstance.
 
     [ApiController]
     [Route("api/games")]
@@ -14,51 +15,65 @@ namespace gamecontroller.Controllers
     {
         private readonly ILogger<Game> _logger;
 
-        private readonly GameSessions _gameSessions;
-
         private readonly LobbySingleton _lobbySingleton;
 
-        public Game(ILogger<Game> logger, LobbySingleton lobbySingleton)
+        private readonly ServerRoster _roster;
+
+        public Game(ILogger<Game> logger, LobbySingleton lobbySingleton, ServerRoster roster)
         {
             _logger = logger;
             _lobbySingleton = lobbySingleton;
+            _roster = roster;
+        }
+
+        [HttpGet]
+        public List<ServerBrowserEntry> GetGames()
+        {
+            return _roster.BrowserEntries();
+        }
+
+        private string? ServerToken()
+        {
+            return HttpContext.Request.Headers.TryGetValue("X-Server-Token", out var authHeader) ? authHeader.ToString() : null;
+        }
+
+        private Lobby? LobbyForToken(string token)
+        {
+            return _lobbySingleton.Lobbies.FirstOrDefault(l => l.GameInstance != null && l.GameInstance.MyGuid.Equals(token));
         }
 
         [HttpGet("server-config")]
         public GameCreationConfig? GetServerConfig()
         {
-			if (HttpContext.Request.Headers.TryGetValue("X-Server-Token", out var authHeader))
+            string? token = ServerToken();
+            if (token != null)
             {
-                foreach(Lobby lobby in _lobbySingleton.Lobbies)
+                GameCreationConfig? config = _roster.ConfigFor(token) ?? LobbyForToken(token)?.GameInstance?.Config;
+                if (config != null)
                 {
-                    if(lobby.GameInstance != null && lobby.GameInstance.MyGuid.Equals(authHeader))
-                    {
-                        return lobby.GameInstance.Config;
-                    }
+                    config.Port = _roster.Instances.FirstOrDefault(i => i.MyGuid == token)?.Port
+                        ?? LobbyForToken(token)?.GameInstance?.Port ?? 7777;
+                    return config;
                 }
             }
 
-			HttpContext.Response.StatusCode = 401;
+            HttpContext.Response.StatusCode = 401;
             return null;
         }
 
         [HttpPost("server-allow-player-join")]
         public void PostServerPoll([FromBody] AllowPlayerJoin playerJoin)
         {
-			if (HttpContext.Request.Headers.TryGetValue("X-Server-Token", out var authHeader))
-			{
-                foreach (Lobby lobby in _lobbySingleton.Lobbies)
-                {
-                    if (lobby.GameInstance != null && lobby.GameInstance.MyGuid.Equals(authHeader))
-                    {
-                        lobby.PlayerIndexToAllowJoin = playerJoin.PlayerIndex;
-                        lobby.AllowJoin = true;
+            string? token = ServerToken();
+            Lobby? lobby = token != null ? LobbyForToken(token) : null;
+            if (lobby != null)
+            {
+                lobby.PlayerIndexToAllowJoin = playerJoin.PlayerIndex;
+                lobby.AllowJoin = true;
 
-                        HttpContext.Response.StatusCode = 200;
-                        return;
-                    }
-				}
-			}
+                HttpContext.Response.StatusCode = 200;
+                return;
+            }
 
             HttpContext.Response.StatusCode = 401;
             return;
@@ -67,17 +82,22 @@ namespace gamecontroller.Controllers
         [HttpPost("server-match-natural-shutdown")]
         public void ServerMatchNaturalShutdown()
         {
-            if (HttpContext.Request.Headers.TryGetValue("X-Server-Token", out var authHeader))
+            string? token = ServerToken();
+            if (token != null)
             {
-                foreach (Lobby lobby in _lobbySingleton.Lobbies)
+                if (_roster.MarkFinished(token))
                 {
-                    if (lobby.GameInstance != null && lobby.GameInstance.MyGuid.Equals(authHeader))
-                    {
-                        lobby.MatchShutdown();
+                    HttpContext.Response.StatusCode = 200;
+                    return;
+                }
 
-                        HttpContext.Response.StatusCode = 200;
-                        return;
-                    }
+                Lobby? lobby = LobbyForToken(token);
+                if (lobby != null)
+                {
+                    lobby.MatchShutdown();
+
+                    HttpContext.Response.StatusCode = 200;
+                    return;
                 }
             }
 
@@ -86,18 +106,26 @@ namespace gamecontroller.Controllers
         }
 
         [HttpPost("server-poll")]
-        public void ServerPoll()
+        public void ServerPoll([FromBody] ServerPollBody body)
         {
-            if (HttpContext.Request.Headers.TryGetValue("X-Server-Token", out var authHeader))
+            string? token = ServerToken();
+            if (token != null)
             {
-                foreach (Lobby lobby in _lobbySingleton.Lobbies)
+                if (_roster.RecordPoll(token, body.ConnectedPlayers, body.HumansHaveStarted, DateTime.UtcNow)) return;
+
+                Lobby? lobby = LobbyForToken(token);
+                if (lobby != null && lobby.GameInstance != null)
                 {
-                    if (lobby.GameInstance != null && lobby.GameInstance.MyGuid.Equals(authHeader))
-                    {
-                        lobby.GameInstance.LastServerCheckIn = DateTime.UtcNow;
-                    }
+                    lobby.GameInstance.LastServerCheckIn = DateTime.UtcNow;
                 }
             }
         }
+    }
+
+    // What the game server sends every five seconds (Networking.cpp GameControllerPoll).
+    public class ServerPollBody
+    {
+        public int ConnectedPlayers { get; set; }
+        public bool HumansHaveStarted { get; set; }
     }
 }

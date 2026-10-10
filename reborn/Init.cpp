@@ -156,6 +156,12 @@ namespace Init {
 
     void FetchGameCoordinatorConfig() {
         httplib::Result result = Globals::GameCoordinatorHttpClient.get()->Get("/api/games/server-config");
+        if (!result || result->status != 200) {
+            std::printf("[NETWORKING] the matchmaking service did not answer server-config (%s); keeping the command-line map\n",
+                        result ? std::to_string(result->status).c_str() : httplib::to_string(result.error()).c_str());
+            ServerSettings::amRunningWithGameCoordinator = false;
+            return;
+        }
 
         std::string response = result->body;
 
@@ -170,24 +176,18 @@ namespace Init {
     }
 
     void ServerConfig() {
-        LPWSTR cmdLine = GetCommandLineW();
-        int argc;
-        LPWSTR* argv = CommandLineToArgvW(cmdLine, &argc);
-
-        if (argc > 3) {
-            if (std::wstring(argv[3]).contains(L"GameCoordinator")) {
-                ServerSettings::amRunningWithGameCoordinator = true;
-            }
+        // A server the matchmaking service started: -rbcoordinator=host:port -rbcoordinatorkey=<token>.
+        // It asks the service which map to run and reports players back (Networking.cpp GameControllerPoll).
+        const auto& opt = LaunchOptions::Get();
+        if (!opt.coordinator.empty() && !opt.coordinatorKey.empty()) {
+            ServerSettings::amRunningWithGameCoordinator = true;
         }
 
         if (ServerSettings::amRunningWithGameCoordinator) {
-            std::cout << "[NETWORKING] Init in game coordinator mode!" << std::endl;
+            std::cout << "[NETWORKING] Init in game coordinator mode: " << opt.coordinator << std::endl;
 
-            std::wstring wBase(argv[4]);
-            ServerSettings::GameCoordinatorBase = std::string(wBase.begin(), wBase.end());
-
-            std::wstring wKey(argv[5]);
-            ServerSettings::GameCoordinatorKey = std::string(wKey.begin(), wKey.end());
+            ServerSettings::GameCoordinatorBase = opt.coordinator;
+            ServerSettings::GameCoordinatorKey = opt.coordinatorKey;
 
             Globals::GameCoordinatorHttpClient = std::make_shared<httplib::Client>(ServerSettings::GameCoordinatorBase);
 
@@ -199,7 +199,6 @@ namespace Init {
         }
 
         {
-            const auto& opt = LaunchOptions::Get();
             if (!ServerSettings::amRunningWithGameCoordinator && !opt.serverMap.empty()) {
                 ServerSettings::MapString = _wcsdup((L"open " + opt.serverMap).c_str());
                 std::printf("[OPTIONS] server map %ls\n", ServerSettings::MapString);
