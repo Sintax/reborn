@@ -2,6 +2,7 @@
 #include "Combat.hpp"
 #include "Constants.hpp"
 #include "Engine.hpp"
+#include "GameCoordinator.hpp"
 #include "Globals.hpp"
 #include "Hooks.hpp"
 #include "LaunchOptions.hpp"
@@ -155,6 +156,25 @@ namespace Autopilot {
                 Exec(Globals::LaunchCommand);
             } else if (!opt.join.empty()) {
                 Overlay::StartLaunchSequence(_wcsdup((L"open " + opt.join).c_str()));
+            } else if (opt.browse) {
+                // Same as the player opening the server browser and pressing Join on the first open game.
+                GameCoordinator::RefreshServerBrowser();
+                const GameCoordinator::ServerBrowserEntry* pick = nullptr;
+                for (const auto& e : Globals::ServerBrowserEntries)
+                    if (!e.MatchStarted && e.CurrentNumPlayers < e.MaxNumPlayers) { pick = &e; break; }
+                if (!pick) {
+                    std::printf("[AUTOPILOT] server browser at %s lists no joinable game (%zu entries); trying again in 5 s\n",
+                                GameCoordinator::Endpoint().c_str(), Globals::ServerBrowserEntries.size());
+                    SetPhase(Phase::MenuReady);
+                    return;
+                }
+                std::printf("[AUTOPILOT] joining \"%s\" (%s) via %s\n", pick->InstanceName.c_str(),
+                            pick->HumanReadableInstanceMapMode.c_str(), pick->ServerConnectString.c_str());
+                Globals::amStandalone = false;
+                Globals::CurrentMatchEntry = *pick;
+                Globals::ConnectedToGameCoordinatorMatch = true;
+                std::wstring cmd(pick->ServerConnectString.begin(), pick->ServerConnectString.end());
+                Overlay::StartLaunchSequence(_wcsdup(cmd.c_str()));
             } else if (!opt.host.empty()) {
                 // Same as the player pressing Host Game. A retry rejoins a server that is already up.
                 if (LocalHost::GetStatus() == LocalHost::Status::Running) {
@@ -278,7 +298,7 @@ namespace Autopilot {
         if (!inMenu && Globals::GetGWorld()) g_leftMenu = true;
 
         // While joined: what this client knows about its pawn, every 2 s (prints on change).
-        if (!inMenu && !opt.join.empty() && (g_phase == Phase::CharacterSelect || g_phase == Phase::Playing)) {
+        if (!inMenu && (!opt.join.empty() || opt.browse) && (g_phase == Phase::CharacterSelect || g_phase == Phase::Playing)) {
             g_possessionLogTimer -= dt;
             if (g_possessionLogTimer <= 0.f) {
                 g_possessionLogTimer = 2.f;
@@ -318,7 +338,7 @@ namespace Autopilot {
                 break;
             }
             if (!inMenu && pc) {
-                if ((!opt.join.empty() || !opt.host.empty()) && !Globals::CharacterSelectHasLockedIn) SetPhase(Phase::CharacterSelect);
+                if ((!opt.join.empty() || opt.browse || !opt.host.empty()) && !Globals::CharacterSelectHasLockedIn) SetPhase(Phase::CharacterSelect);
                 else if (pc->Pawn) SetPhase(Phase::Playing);
             }
             break;

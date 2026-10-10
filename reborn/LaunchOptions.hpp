@@ -10,6 +10,7 @@ namespace LaunchOptions {
         bool autopilot = false;
         bool combat = false;          // client: autopilot fights (Combat.cpp) instead of wandering
         std::wstring join;            // client: "IP:PORT" to connect to
+        bool browse = false;          // client autopilot: join the first joinable game in the server browser
         std::wstring host;            // client: press "Host Game" for this map at the menu (LocalHost.cpp)
         std::wstring soloMap;         // solo: map to open
         std::wstring serverMap;       // server: travel URL, e.g. "Dojo_P" or "IceScort_P?SpawnBotsTeamA=4"

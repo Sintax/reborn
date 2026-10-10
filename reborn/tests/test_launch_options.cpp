@@ -24,6 +24,8 @@ int main() {
     auto c = LaunchOptions::Parse(L"Battleborn.exe -rbcoordinator=216.226.149.110:5000");
     CHECK(c.coordinator == "216.226.149.110:5000");
     CHECK(c.coordinatorKey.empty());
+    CHECK(!c.browse);
+    CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbautopilot -rbbrowse").browse);
     auto g = LaunchOptions::Parse(L"Serverborn.exe -rbinstance=rb-algo -rbcoordinator=localhost:5000 -rbcoordinatorkey=abc-123");
     CHECK(g.coordinator == "localhost:5000");
     CHECK(g.coordinatorKey == "abc-123");
