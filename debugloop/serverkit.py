@@ -46,12 +46,14 @@ def readme(version: str) -> str:
     return crlf(f"Battleborn Reborn server kit {version}\n\n" + doc)
 
 
-def publish_coordinator(out: Path = COORDINATOR_PUBLISH) -> Path:
-    """Publish the matchmaking service with the .NET runtime inside, for a machine without .NET."""
+def publish_coordinator(out: Path = COORDINATOR_PUBLISH, self_contained: bool = True) -> Path:
+    """Publish the matchmaking service. Self-contained carries the .NET runtime inside, for a
+    machine without .NET; without it the output is small and needs .NET 8 installed."""
     if out.exists():
         shutil.rmtree(out)
-    p = subprocess.run(["dotnet", "publish", str(COORDINATOR_PROJECT), "-c", "Release", "-r", "win-x64",
-                        "--self-contained", "-o", str(out), "--nologo", "-v", "q"],
+    runtime = ["-r", "win-x64", "--self-contained"] if self_contained else []
+    p = subprocess.run(["dotnet", "publish", str(COORDINATOR_PROJECT), "-c", "Release", *runtime,
+                        "-o", str(out), "--nologo", "-v", "q"],
                        capture_output=True, text=True)
     if p.returncode != 0 or not (out / "gamecontroller.exe").exists():
         raise RuntimeError("publish of the matchmaking service failed:\n" + p.stdout + p.stderr)
