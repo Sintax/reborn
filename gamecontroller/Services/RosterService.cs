@@ -20,7 +20,9 @@ namespace gamecontroller.Services
 		{
 			_logger.LogInformation("Roster: {Count} game(s) in {Settings}", _config.GetSection("Roster").GetChildren().Count(),
 				Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
-			_roster.PublicIp = _config["PublicIp"];
+			// A JSON null in appsettings.json reads back as "", not null.
+			string? configuredIp = _config["PublicIp"];
+			_roster.PublicIp = string.IsNullOrEmpty(configuredIp) ? null : configuredIp;
 			while (_roster.PublicIp == null && !stoppingToken.IsCancellationRequested)
 			{
 				try
