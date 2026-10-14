@@ -1,7 +1,7 @@
 """Build the playtester download: dist/Reborn-Playtest-<commit>.zip.
 
-    python -m debugloop.package                # mod files, instructions, log collector
-    python -m debugloop.package --with-loader  # also the Steam loader files from your game folder
+    python -m tools.package                # mod files, instructions, log collector
+    python -m tools.package --with-loader  # also the Steam loader files from your game folder
                                                # (for a friend you send it to directly)
 
 The zip unpacks into the game's Binaries\\Win64 folder. Instructions: docs/PLAYTEST.md.
@@ -81,7 +81,7 @@ def make_zip(out: Path, version: str, with_loader: bool, win64: Path = config.WI
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python -m debugloop.package", description=__doc__,
+    p = argparse.ArgumentParser(prog="python -m tools.package", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--with-loader", action="store_true", help="include the Steam loader files")
     p.add_argument("--no-build", action="store_true", help="zip the DLLs already built")

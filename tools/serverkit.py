@@ -1,8 +1,8 @@
 """Build the kit for running the server on another Windows machine (a rented one, say):
 dist/Reborn-ServerKit-<commit>.zip.
 
-    python -m debugloop.serverkit             # build the mod, then zip
-    python -m debugloop.serverkit --no-build  # zip the DLLs already built
+    python -m tools.serverkit             # build the mod, then zip
+    python -m tools.serverkit --no-build  # zip the DLLs already built
 
 The zip unpacks into that machine's Battleborn\\Binaries\\Win64 folder. It holds the Steam
 loader files from your game folder, so keep it to your own machines. Instructions:
@@ -86,7 +86,7 @@ def make_zip(out: Path, version: str, win64: Path = config.WIN64, mod_dll: Path 
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python -m debugloop.serverkit", description=__doc__,
+    p = argparse.ArgumentParser(prog="python -m tools.serverkit", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--no-build", action="store_true", help="zip the DLLs already built")
     a = p.parse_args(argv)

@@ -1,4 +1,0 @@
-pytest>=8
-psutil>=6
-minidump>=0.0.24
-mcp>=2.3

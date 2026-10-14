@@ -22,8 +22,8 @@ not need a graphics card.
    Loaders like this are often flagged even though they are harmless.
 6. **Double-click `OpenFirewall.bat`** and say yes when Windows asks for administrator
    rights. This lets players through Windows Firewall.
-7. **Open the hosting company's firewall too.** On the company's website (for example the
-   hosting control panel), allow incoming **UDP ports 7777 to 7779** and **TCP port 5000**.
+7. **Open the hosting company's firewall too.** On the company's website (its control
+   panel), allow incoming **UDP ports 7777 to 7779** and **TCP port 5000**.
    This step can't be done from inside the machine.
 
 ## Matchmaking: games players can see and join from the menu
@@ -73,40 +73,3 @@ The server's logs are in `Documents\RebornLogs`, in a folder that starts with
 `reborn-server-`. `reborn-server.log` is everything the server printed. If it crashed, the
 same folder has a crash dump (`.dmp`) and a short crash report (`.json`).
 `CollectLogs.bat` zips the newest folder onto the Desktop.
-
-## For Claude on the server machine
-
-You are setting up a Battleborn Reborn dedicated server on this machine. The owner remotes
-in; nobody plays the game on this machine. Steps, with checks:
-
-1. Find the game folder: the `Binaries\Win64` folder that holds `Battleborn.exe` (often
-   `C:\Program Files (x86)\Steam\steamapps\common\Battleborn` or a `SteamLibrary` folder on
-   another drive). Check the drive has room; the full install is about 47 GB.
-2. Make sure `steam.exe` is not running (`Get-Process steam`). If it is, ask the owner
-   before closing it.
-3. Unzip the kit into that `Win64` folder, overwriting files. Confirm `dxgi.dll`,
-   `reborn.dll` and `steamclient_loader_x64.exe` are present afterwards; Defender
-   sometimes removes the loader.
-4. Run `OpenFirewall.bat` (it needs administrator rights). Then confirm the rules exist with
-   `Get-NetFirewallRule -DisplayName "Battleborn Reborn server"` and
-   `Get-NetFirewallRule -DisplayName "Battleborn Reborn matchmaking"`.
-5. Run a check that starts nothing:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File .\StartServer.ps1 -Map Caverns_P -Players 1 -DryRun`.
-   It should end with "Dry run: everything is in place".
-6. Start it for real: `.\StartServer.bat -Map Caverns_P -Players 1`.
-7. Within a minute the newest `Documents\RebornLogs\reborn-server-*\reborn-server.log` should contain
-   `Game networking listening on port 7777`, and
-   `Get-NetUDPEndpoint -LocalPort 7777` should show the server listening.
-8. Remind the owner that the hosting company's firewall must allow **UDP 7777-7779** and
-   **TCP 5000**; that step is on their website, not on this machine.
-9. Matchmaking, if the kit has a `matchmaking` folder: stop any hand-started server
-   (`StopServer.bat`), then run `StartMatchmaking.bat`. Within two minutes
-   `Invoke-RestMethod http://localhost:5000/api/games` should list one game with
-   `serverConnectString` = `open <public ip>:7777`, and a `Serverborn.exe` process should be
-   running with `-rbcoordinator=localhost:5000` on its command line
-   (`Get-CimInstance Win32_Process -Filter "name='Serverborn.exe'" | Select CommandLine`).
-   The service's own output is in its window; it says "Public address: ..." once it knows it.
-
-If the server exits early, read the newest `reborn-server.log` and any `.json` crash report in
-that folder, and report what they say. Do not change the game's files beyond unzipping the
-kit.

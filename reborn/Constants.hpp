@@ -4,9 +4,17 @@
 #include <string>
 #include <unordered_map>
 
+// LocalSettings.hpp is not in git; it can define REBORN_COORDINATOR as "host:port".
+#if __has_include("LocalSettings.hpp")
+#include "LocalSettings.hpp"
+#endif
+#ifndef REBORN_COORDINATOR
+#define REBORN_COORDINATOR "gc.bereborn.dev:5000"
+#endif
+
 namespace Constants {
-    // The matchmaking service (gamecontroller) on the rented server; -rbcoordinator=host:port overrides it.
-    const std::string GameCoordinatorEndpoint = "SERVER-IP-REMOVED:5000";
+    // The matchmaking service (gamecontroller); -rbcoordinator=host:port overrides it.
+    const std::string GameCoordinatorEndpoint = REBORN_COORDINATOR;
 
     const std::vector<std::string> CharacterSelectCharacterTable = {
         "Alani",

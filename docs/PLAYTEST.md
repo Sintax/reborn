@@ -98,10 +98,10 @@ check the taskbar.
 
 ### Start a game with Python
 
-From the repo folder, with the latest build already deployed by the debug loop:
+From the repo folder, with the mod built and copied into your game folder:
 
 ```
-python -m debugloop.host
+python -m tools.host
 ```
 
 This starts the server on The Algorithm, waiting for 2 players, and starts your own game
@@ -125,7 +125,7 @@ The server listens on UDP port 7777. Pick one:
 ### Make the download
 
 ```
-python -m debugloop.package
+python -m tools.package
 ```
 
 This builds the mod and writes `dist/Reborn-Playtest-<commit>.zip`. Add `--with-loader`

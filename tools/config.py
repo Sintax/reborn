@@ -6,11 +6,7 @@ MOD_PROJECT = REPO / "reborn" / "reborn.vcxproj"
 MOD_DLL = REPO / "reborn" / "x64" / "Release" / "reborn.dll"
 GAME_DIR = Path(os.environ.get("BB_GAME_DIR", r"D:\SteamLibrary\steamapps\common\Battleborn"))
 WIN64 = GAME_DIR / "Binaries" / "Win64"
-PKG = REPO / "debugloop"
-RUNS_DIR = PKG / "runs"
-STATE_DIR = PKG / "state"
-SCENARIOS_DIR = PKG / "scenarios"
-NATIVE_OUT = PKG / "native"
+PKG = Path(__file__).resolve().parent
 LOG_DIR = Path(os.environ["USERPROFILE"]) / "Documents" / "RebornLogs"
 # The game's own crash handler writes POPLAR-*.dmp here.
 GAME_LOGS_DIR = Path(os.environ["USERPROFILE"]) / "Documents" / "My Games" / "Battleborn" / "PoplarGame" / "Logs"

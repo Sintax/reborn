@@ -21,8 +21,8 @@ int main() {
     CHECK(s.players == 2);
 
     // Matchmaking: the client points at the coordinator; a coordinator-launched server also gets its key.
-    auto c = LaunchOptions::Parse(L"Battleborn.exe -rbcoordinator=SERVER-IP-REMOVED:5000");
-    CHECK(c.coordinator == "SERVER-IP-REMOVED:5000");
+    auto c = LaunchOptions::Parse(L"Battleborn.exe -rbcoordinator=203.0.113.10:5000");
+    CHECK(c.coordinator == "203.0.113.10:5000");
     CHECK(c.coordinatorKey.empty());
     CHECK(!c.browse);
     CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbautopilot -rbbrowse").browse);

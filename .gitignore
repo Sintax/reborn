@@ -370,3 +370,13 @@ __pycache__/
 
 # Playtest packages
 dist/
+
+# Local AI tooling, working notes and private settings (kept locally, not published)
+.claude/
+.mcp.json
+CLAUDE.md
+docs/superpowers/
+docs/notes/
+docs/TWO-MACHINES.md
+debugloop/
+reborn/LocalSettings.hpp

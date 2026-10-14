@@ -1,8 +1,8 @@
 """Host a game for human playtesters: the server, and (unless --no-client) the host's own game.
 
-    python -m debugloop.host                      # The Algorithm, waits for 2 players
-    python -m debugloop.host --map Portal_P --players 3
-    python -m debugloop.host --no-client          # server only
+    python -m tools.host                      # The Algorithm, waits for 2 players
+    python -m tools.host --map Portal_P --players 3
+    python -m tools.host --no-client          # server only
 
 Friends join with Direct Connect to the host's address (UDP port 7777). Nothing here is
 graded or killed: close the windows to stop. Logs go to Documents\\RebornLogs as usual.
@@ -29,7 +29,7 @@ def client_args() -> list[str]:
 
 
 def main(argv: list[str] | None = None, launcher=None) -> int:
-    p = argparse.ArgumentParser(prog="python -m debugloop.host", description=__doc__,
+    p = argparse.ArgumentParser(prog="python -m tools.host", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--map", default="Caverns_P", help="map the server opens (default Caverns_P, The Algorithm)")
     p.add_argument("--players", type=int, default=2, help="players the server waits for (default 2)")

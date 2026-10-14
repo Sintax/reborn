@@ -38,7 +38,7 @@ public class ServerRosterTests
     {
         var launcher = new FakeLauncher();
         var roster = new ServerRoster(slots, launcher, new[] { 7777, 7778, 7779 }, "localhost:5000");
-        roster.PublicIp = "SERVER-IP-REMOVED";
+        roster.PublicIp = "203.0.113.10";
         return (roster, launcher);
     }
 
@@ -153,9 +153,9 @@ public class ServerRosterTests
         Assert.Equal("Story - The Algorithm", entries[0].HumanReadableInstanceMapMode);
         Assert.Equal(0, entries[0].CurrentNumPlayers);
         Assert.Equal(5, entries[0].MaxNumPlayers);
-        Assert.Equal("open SERVER-IP-REMOVED:7777", entries[0].ServerConnectString);
+        Assert.Equal("open 203.0.113.10:7777", entries[0].ServerConnectString);
         Assert.False(entries[0].MatchStarted);
-        Assert.Equal("open SERVER-IP-REMOVED:7778", entries[1].ServerConnectString);
+        Assert.Equal("open 203.0.113.10:7778", entries[1].ServerConnectString);
     }
 
     [Fact]

@@ -2,13 +2,13 @@
 
 On the laptop, after pushing the commit:
 
-    python -m debugloop.vm release              # build the mod, upload it as release <commit>
-    python -m debugloop.vm release --no-build   # upload the DLLs already built
+    python -m tools.vm release              # build the mod, upload it as release <commit>
+    python -m tools.vm release --no-build   # upload the DLLs already built
 
 On the VM, from its clone of this repo (Claude there runs it):
 
-    python -m debugloop.vm update               # newest release
-    python -m debugloop.vm update --version abc1234 --no-start
+    python -m tools.vm update               # newest release
+    python -m tools.vm update --version abc1234 --no-start
 
 Only the mod (reborn.dll, reborn.pdb, dxgi.dll, about 11 MB) travels, through the private
 repo Sintax/reborn-builds. The VM checks out the same commit from GitHub, so its scripts and
@@ -193,7 +193,7 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     if not checked_out:
         checkout(version)
         # Carry on with the code of the version just checked out, not the code that started.
-        return subprocess.call([sys.executable, "-m", "debugloop.vm", "update", "--version", version,
+        return subprocess.call([sys.executable, "-m", "tools.vm", "update", "--version", version,
                                 "--win64", str(win64), "--checked-out", *([] if start else ["--no-start"])],
                                cwd=config.REPO)
     print(f"Updating the server to {version}")
@@ -226,7 +226,7 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python -m debugloop.vm", description=__doc__,
+    p = argparse.ArgumentParser(prog="python -m tools.vm", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("release", help="laptop: upload the built mod for the VM")
@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     try:
         if a.cmd == "release":
-            print(f"RELEASE OK {release(build=not a.no_build)}  (VM: python -m debugloop.vm update)")
+            print(f"RELEASE OK {release(build=not a.no_build)}  (VM: python -m tools.vm update)")
             return 0
         return update(a.version, a.win64, start=not a.no_start, checked_out=a.checked_out)
     except VmError as e:
