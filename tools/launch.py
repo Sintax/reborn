@@ -26,6 +26,9 @@ def base_args(role: str) -> list[str]:
 GAME_EXES = ("Battleborn.exe", "Serverborn.exe")
 STEAMID_BASE = 76561197960287930
 LOADER_FILES = ("steamclient_loader_x64.exe", "steamclient64.dll", "steamclient.dll")
+# The Steam loader blocks the game from reaching anything outside the local network unless told
+# not to; servers and players on the internet (the rented server, its matchmaking) need it off.
+CONFIGS_MAIN_INI = "[main::connectivity]\r\ndisable_lan_only=1\r\n"
 
 _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _k32.OpenProcess.restype = ctypes.c_void_p
@@ -121,6 +124,7 @@ def ensure_identity(name: str, exe_name: str, args: list[str], win64: Path = con
     user["user::saves"] = {"local_save_path": str(d / "saves")}
     with open(d / "steam_settings" / "configs.user.ini", "w", encoding="utf-8") as f:
         user.write(f)
+    (d / "steam_settings" / "configs.main.ini").write_bytes(CONFIGS_MAIN_INI.encode())
     return d
 
 

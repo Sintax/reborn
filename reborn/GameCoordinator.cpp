@@ -138,7 +138,8 @@ namespace GameCoordinator {
         result = Client().Get("/api/games");
 
         if (!result || result->status != 200) {
-            std::cout << "[NETWORKING] Failed to refresh server list from " << Endpoint() << std::endl;
+            std::cout << "[NETWORKING] Failed to refresh server list from " << Endpoint() << ": "
+                      << (result ? "HTTP " + std::to_string(result->status) : httplib::to_string(result.error())) << std::endl;
             return;
         }
 

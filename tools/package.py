@@ -72,6 +72,8 @@ def make_zip(out: Path, version: str, with_loader: bool, win64: Path = config.WI
         z.write(mod_dll, "reborn.dll")
         z.writestr("README-PLAYTEST.txt", readme(version))
         z.writestr("CollectLogs.bat", COLLECT_LOGS_BAT.replace("\n", "\r\n"))
+        # Lets the player reach servers on the internet (see launch.CONFIGS_MAIN_INI); no Steam files.
+        z.writestr("steam_settings/configs.main.ini", launch.CONFIGS_MAIN_INI)
         if with_loader:
             for f in (*launch.LOADER_FILES, LOADER_INI):
                 if not (win64 / f).exists():

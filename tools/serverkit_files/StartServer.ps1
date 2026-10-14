@@ -131,6 +131,12 @@ Write-NoBom "$id\steam_settings\configs.user.ini" (@(
     "local_save_path=$id\saves",
     "") -join "`r`n")
 
+# Without this the loader drops the server's replies to players outside the local network.
+Write-NoBom "$id\steam_settings\configs.main.ini" (@(
+    "[main::connectivity]",
+    "disable_lan_only=1",
+    "") -join "`r`n")
+
 if ($DryRun) {
     Write-Host ""
     Write-Host "Dry run: everything is in place. Would start:"

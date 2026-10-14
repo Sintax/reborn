@@ -124,6 +124,8 @@ namespace gamecontroller.Services
 				"[user::saves]",
 				"local_save_path=" + Path.Combine(idDir, "saves"), "",
 			}));
+			// Without this the loader drops the server's replies to players outside the local network.
+			WriteNoBom(Path.Combine(idDir, "steam_settings", "configs.main.ini"), "[main::connectivity]\r\ndisable_lan_only=1\r\n");
 			return idDir;
 		}
 
