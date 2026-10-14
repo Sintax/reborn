@@ -222,9 +222,12 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
             print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]))
         return 1
     for g in games:
-        print(f"Game listed: {g.get('mapMode') or g.get('name')}  {g.get('serverConnectString')}")
+        print(f"Game listed: {g.get('instanceName')}  {g.get('serverConnectString')}")
+    deadline = time.time() + 90   # the game is listed as soon as Serverborn starts; it listens ~20 s later
+    while not newest_log_says_listening() and time.time() < deadline:
+        time.sleep(5)
     if not newest_log_says_listening():
-        print("NOTE: the newest server log does not say it is listening yet; check it in a minute")
+        print("NOTE: after 90 s the newest server log still does not say it is listening; check it")
     print("UPDATE OK")
     return 0
 
