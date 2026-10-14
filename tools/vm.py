@@ -214,8 +214,12 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     start_matchmaking(win64)
     games = wait_for_game()
     if not games:
-        print(f"PROBLEM: no game listed at {GAMES_URL} after 3 minutes; read the matchmaking window "
+        log = win64 / "matchmaking" / "matchmaking.log"
+        print(f"PROBLEM: no game listed at {GAMES_URL} after 3 minutes; read {log} "
               f"and the newest rb-* folder in {config.LOG_DIR}")
+        if log.exists():
+            print("Last lines of the matchmaking log:")
+            print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]))
         return 1
     for g in games:
         print(f"Game listed: {g.get('mapMode') or g.get('name')}  {g.get('serverConnectString')}")

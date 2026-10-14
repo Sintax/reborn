@@ -17,4 +17,5 @@ if not errorlevel 1 (
 if not exist "%~dp0Serverborn.exe" copy /y "%~dp0Battleborn.exe" "%~dp0Serverborn.exe" >nul
 echo Starting the matchmaking service on port 5000. Game servers appear within a minute or two.
 echo Players: choose Story or Versus in the game; the server browser lists this machine's games.
-start "Battleborn Reborn matchmaking" /min "%~dp0matchmaking\gamecontroller.exe"
+echo Its log: %~dp0matchmaking\matchmaking.log
+start "Battleborn Reborn matchmaking" /min /d "%~dp0matchmaking" "%~dp0matchmaking\gamecontroller.exe"

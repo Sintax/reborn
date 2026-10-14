@@ -2,7 +2,10 @@ using gamecontroller.Middleware;
 using gamecontroller.Services;
 using gamecontroller.Singletons;
 
-var builder = WebApplication.CreateBuilder(args);
+// Settings (appsettings.json) come from the service's own folder, wherever it is started from.
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = AppContext.BaseDirectory });
+
+builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(AppContext.BaseDirectory, "matchmaking.log")));
 
 // Add services to the container.
 

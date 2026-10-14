@@ -18,6 +18,8 @@ namespace gamecontroller.Services
 
 		protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 		{
+			_logger.LogInformation("Roster: {Count} game(s) in {Settings}", _config.GetSection("Roster").GetChildren().Count(),
+				Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
 			_roster.PublicIp = _config["PublicIp"];
 			while (_roster.PublicIp == null && !stoppingToken.IsCancellationRequested)
 			{
