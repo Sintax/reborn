@@ -22,7 +22,7 @@ from . import config, launch, package
 
 FILES = config.PKG / "serverkit_files"
 SCRIPTS = ("StartServer.bat", "StartServer.ps1", "StopServer.bat", "OpenFirewall.bat",
-           "StartMatchmaking.bat", "StopMatchmaking.bat")
+           "TightenFirewall.bat", "StartMatchmaking.bat", "StopMatchmaking.bat")
 SERVER_NAME = "reborn-server"
 COORDINATOR_PROJECT = config.REPO / "gamecontroller" / "gamecontroller.csproj"
 COORDINATOR_PUBLISH = config.REPO / "gamecontroller" / "bin" / "serverkit-publish"
