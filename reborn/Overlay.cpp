@@ -872,7 +872,7 @@ namespace Overlay {
             static std::string filter, gameName, lastDefault;
             static int players = 1, botsA = 5, botsB = 5;
             std::string def = StartKey::DefaultGameName(StartKey::PlayerName(), mapMode.first);
-            if (gameName.empty() || gameName == lastDefault) gameName = def;
+            if (gameName == lastDefault) gameName = def;
             lastDefault = def;
 
             ImGui::Begin("Start a Game on the Server", &Globals::StartServerGameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
@@ -934,7 +934,7 @@ namespace Overlay {
             ImGui::End();
         }
 
-        if (!Globals::StartGameStatus.empty()) {
+        if (!Globals::StartGameStatus.empty() || !Globals::PendingStartGuid.empty()) {
             static double lastRefresh = 0.0;
             static bool seenOnce = false;
             const bool pending = !Globals::PendingStartGuid.empty();
@@ -959,6 +959,8 @@ namespace Overlay {
                     const bool vanished = seenOnce && !e;
                     if (vanished || ImGui::GetTime() - Globals::PendingStartSince > 150.0) {
                         Globals::StartGameStatus = "PROBLEM: the server did not start. Its log is on the host machine (matchmaking.log).";
+                        std::string guid = Globals::PendingStartGuid;
+                        std::thread([guid]() { GameCoordinator::CancelGame(guid); }).detach();   // do not leave it holding a slot
                         Globals::PendingStartGuid.clear();
                         seenOnce = false;
                     }

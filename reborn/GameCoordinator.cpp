@@ -131,6 +131,9 @@ namespace GameCoordinator {
         Client().Post("/api/games", headers, jsonObj.dump(), "application/json");
     }
 
+    // Guards Globals::ServerBrowserEntries between RefreshServerBrowser (a worker thread) and FindEntry (the UI thread).
+    static std::mutex g_browserEntriesMutex;
+
     void RefreshServerBrowser() {
         httplib::Result result;
 
@@ -144,13 +147,16 @@ namespace GameCoordinator {
             return;
         }
 
-        Globals::ServerBrowserEntries.clear();
-
         std::vector<nlohmann::json> entries = nlohmann::json::parse(result->body).get<std::vector<nlohmann::json>>();
 
+        // Build the new list on the side, then swap it in, so a reader never sees a half-filled list.
+        std::vector<ServerBrowserEntry> fresh;
         for (nlohmann::json browserEntry : entries) {
-            Globals::ServerBrowserEntries.push_back(ServerBrowserEntry(browserEntry));
+            fresh.push_back(ServerBrowserEntry(browserEntry));
         }
+
+        std::lock_guard<std::mutex> lock(g_browserEntriesMutex);
+        Globals::ServerBrowserEntries = std::move(fresh);
 
         return;
     }
@@ -232,6 +238,7 @@ namespace GameCoordinator {
 
     std::optional<ServerBrowserEntry> FindEntry(const std::string& guid) {
         if (guid.empty()) return std::nullopt;
+        std::lock_guard<std::mutex> lock(g_browserEntriesMutex);
         for (const auto& e : Globals::ServerBrowserEntries)
             if (e.MyGuid == guid) return e;
         return std::nullopt;
