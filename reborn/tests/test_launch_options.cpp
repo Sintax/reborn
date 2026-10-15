@@ -52,6 +52,8 @@ int main() {
     CHECK(sg.botsA == 5 && sg.botsB == 3);
     auto sgDefaults = LaunchOptions::Parse(L"Battleborn.exe -rbautopilot \"-rbstartgame=Story - The Algorithm\"");
     CHECK(sgDefaults.startPlayers == 1 && sgDefaults.botsA == 5 && sgDefaults.botsB == 5);
+    CHECK(!sgDefaults.randomHero);
+    CHECK(LaunchOptions::Parse(L"Serverborn.exe -rbrandomhero -rbinstance=x").randomHero);
     CHECK(!LaunchOptions::Parse(L"Battleborn.exe -rbbots=9,1").errors.empty());
 
     std::puts(failures ? "FAIL" : "PASS");

@@ -3,7 +3,8 @@ using gamecontroller.Models;
 namespace gamecontroller.Singletons
 {
 	// One game server the coordinator keeps running, as written in appsettings.json.
-	public record RosterSlot(string Name, string MapMode, string ServerStartupCommand, int MaxNumPlayers);
+	// "RandomHero": true makes that game server give every player a random hero, whatever they pick.
+	public record RosterSlot(string Name, string MapMode, string ServerStartupCommand, int MaxNumPlayers, bool RandomHero = false);
 
 	// Starts and watches Serverborn.exe processes; swapped for a fake in tests.
 	public interface IServerLauncher
@@ -87,7 +88,8 @@ namespace gamecontroller.Singletons
 
 		private string CommandLine(string instanceName, GameInstance instance) =>
 			"-windowed -nosound -nomoviestartup -NOSPLASH -nullrhi -rbinstance=" + instanceName
-			+ " -rbcoordinator=" + _coordinatorBase + " -rbcoordinatorkey=" + instance.MyGuid;
+			+ " -rbcoordinator=" + _coordinatorBase + " -rbcoordinatorkey=" + instance.MyGuid
+			+ (instance.Slot?.RandomHero == true ? " -rbrandomhero" : "");
 
 		// A game a player asked for from the server browser. It is never relaunched; Alive() retires it.
 		public StartResult StartRequested(GameRequest req, string keyLabel, DateTime now)

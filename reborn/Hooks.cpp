@@ -1,5 +1,6 @@
 #include "Hooks.hpp"
 #include <map>
+#include <random>
 
 #include "Init.hpp"
 #include "Globals.hpp"
@@ -76,6 +77,18 @@ namespace Hooks {
             if (id->CharacterClassId && !id->GetFullName().contains("Default") && id->CharacterClassId->ClassName.ToString() == className)
                 return id;
         }
+        return nullptr;
+    }
+
+    // -rbrandomhero (the matchmaking roster's "RandomHero"): a random hero from the character-select
+    // list, whatever the player picked. Indices that name no loaded hero are skipped.
+    UPoplarPlayerNameIdentifierDefinition* RandomHero() {
+        static std::mt19937 rng{ std::random_device{}() };
+        int n = (int)Constants::CharacterSelectCharacterTable.size();
+        if (n <= 0) return nullptr;
+        std::uniform_int_distribution<int> pick(0, n - 1);
+        for (int tries = 0; tries < n * 3; tries++)
+            if (UPoplarPlayerNameIdentifierDefinition* hero = HeroForSelectIndex(pick(rng))) return hero;
         return nullptr;
     }
 
@@ -871,6 +884,13 @@ namespace Hooks {
                 return;
             }
             sp->AwaitingHeroPick = false;
+            if (LaunchOptions::Get().randomHero) {
+                if (UPoplarPlayerNameIdentifierDefinition* hero = RandomHero()) {
+                    sp->Character = hero;
+                    sp->OptionalSkin = nullptr;   // belonged to the placeholder hero
+                    sp->OptionalTaunt = nullptr;
+                }
+            }
             pc->eventServerSelectCharacter(sp->Character, sp->OptionalSkin, sp->OptionalTaunt, true);
             printf("[SPAWN] attempt %i: %s never picked a hero; selected %s -> pending class %s\n", attempt, sp->Name.c_str(),
                 NameOrNone(sp->Character).c_str(), NameOrNone(pc->PendingPlayerClass).c_str());
@@ -1766,6 +1786,12 @@ namespace Hooks {
             int index = reinterpret_cast<APoplarPlayerController_execServerCharacterSelectInput_Params*>(params)->Index;
             Globals::ServerPlayer* serverPlayer = ConnectionToServerPlayer((UNetConnection*)inputPc->Player);
             UPoplarPlayerNameIdentifierDefinition* picked = HeroForSelectIndex(index);
+            if (picked && serverPlayer && serverPlayer->AwaitingHeroPick && LaunchOptions::Get().randomHero) {
+                if (UPoplarPlayerNameIdentifierDefinition* hero = RandomHero()) {
+                    printf("[SPAWN] random hero for %s: %s (they picked %s)\n", serverPlayer->Name.c_str(), hero->GetName().c_str(), picked->GetName().c_str());
+                    picked = hero;
+                }
+            }
             if (!picked) {
                 printf("[SPAWN] character-select index %i names no known hero; keeping %s\n", index,
                     serverPlayer ? NameOrNone(serverPlayer->Character).c_str() : "none");
