@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <optional>
 
 #include "json.hpp"
 #include "httplib.h"
@@ -198,6 +199,7 @@ namespace GameCoordinator {
     StartResult StartGame(const StartGame::Request& request);
     // DELETE /api/games/{guid}: shuts down a game this player started.
     bool CancelGame(const std::string& guid);
-    // The browser entry for a started game, or nullptr until it is listed.
-    const ServerBrowserEntry* FindEntry(const std::string& guid);
+    // A copy of the browser entry for a started game, or nullopt until it is listed.
+    // A copy, because the browser list is refilled on another thread.
+    std::optional<ServerBrowserEntry> FindEntry(const std::string& guid);
 }

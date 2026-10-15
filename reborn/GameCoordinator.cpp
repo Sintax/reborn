@@ -181,11 +181,23 @@ namespace GameCoordinator {
 }
 
 namespace GameCoordinator {
+    // Start and cancel run on their own threads, and the server may take a while to
+    // spawn the game, so they get a private client instead of the shared Client().
+    static httplib::Client StartClient() {
+        httplib::Client c(Endpoint());
+        c.set_connection_timeout(3);
+        c.set_read_timeout(75);
+        return c;
+    }
+
     static std::string ErrorMessage(const httplib::Result& res, const char* fallback) {
         if (!res) return "Could not reach the server (" + httplib::to_string(res.error()) + ").";
         try {
             auto j = nlohmann::json::parse(res->body);
-            if (j.contains("message")) return j["message"].get<std::string>();
+            if (j.contains("message") && j["message"].is_string()) {
+                std::string m = j["message"].get<std::string>();
+                if (!m.empty()) return m;
+            }
         } catch (...) {}
         return std::string(fallback) + " (HTTP " + std::to_string(res->status) + ").";
     }
@@ -195,7 +207,7 @@ namespace GameCoordinator {
         std::string key = StartKey::Key();
         if (key.empty()) { out.error = "You need a server key from the host (reborn-key.txt in the game's Win64 folder)."; return out; }
         httplib::Headers headers = { {"X-Start-Key", key} };
-        httplib::Result res = Client().Post("/api/games/start", headers, StartGame::ToJson(request), "application/json");
+        httplib::Result res = StartClient().Post("/api/games/start", headers, StartGame::ToJson(request), "application/json");
         if (!res || res->status != 200) { out.error = ErrorMessage(res, "The server refused to start the game"); return out; }
         try {
             auto j = nlohmann::json::parse(res->body);
@@ -211,15 +223,17 @@ namespace GameCoordinator {
     }
 
     bool CancelGame(const std::string& guid) {
-        httplib::Headers headers = { {"X-Start-Key", StartKey::Key()} };
-        httplib::Result res = Client().Delete(("/api/games/" + guid).c_str(), headers);
+        std::string key = StartKey::Key();
+        if (key.empty() || guid.empty()) return false;
+        httplib::Headers headers = { {"X-Start-Key", key} };
+        httplib::Result res = StartClient().Delete(("/api/games/" + guid).c_str(), headers);
         return res && res->status == 200;
     }
 
-    const ServerBrowserEntry* FindEntry(const std::string& guid) {
-        if (guid.empty()) return nullptr;
+    std::optional<ServerBrowserEntry> FindEntry(const std::string& guid) {
+        if (guid.empty()) return std::nullopt;
         for (const auto& e : Globals::ServerBrowserEntries)
-            if (e.MyGuid == guid) return &e;
-        return nullptr;
+            if (e.MyGuid == guid) return e;
+        return std::nullopt;
     }
 }
