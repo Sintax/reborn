@@ -968,7 +968,10 @@ namespace Overlay {
             }
             if (!Globals::StartGameStatus.empty()) {
                 ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-                ImGui::Begin("Starting your game", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove);
+                // A fixed width, height fitted to the text. Auto-resize alone gave wrapped text
+                // no width to wrap into, so every letter landed on its own line.
+                ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.4f, 0.0f), ImGuiCond_Always);
+                ImGui::Begin("Starting your game", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
                 ImGui::SetWindowFontScale(2.0f);
                 ImGui::TextWrapped("%s", Globals::StartGameStatus.c_str());
                 if (ImGui::Button(problem ? "Close" : "Cancel", ImVec2(-1.0f, 0))) {
