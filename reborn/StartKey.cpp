@@ -39,7 +39,13 @@ namespace StartKey {
         size_t dash = mapMode.find(" - ");
         std::string map = dash == std::string::npos ? mapMode : mapMode.substr(dash + 3);
         std::string name = player.empty() ? map : player + "'s " + map;
-        if (name.size() > 40) name.resize(40);
+        if (name.size() > 40) {
+            // Clip to 40 bytes, but never in the middle of a UTF-8 character: back up past
+            // continuation bytes (10xxxxxx) so the cut lands on a character boundary.
+            size_t cut = 40;
+            while (cut > 0 && ((unsigned char)name[cut] & 0xC0) == 0x80) cut--;
+            name.resize(cut);
+        }
         return name;
     }
 

@@ -20,6 +20,25 @@ int main() {
     CHECK(StartKey::DefaultGameName("DJ", "Weird") == "DJ's Weird");
     CHECK(StartKey::DefaultGameName("A very long player name indeed yes", "Operations - Phoebe and the Heart of Ekkunar").size() == 40);
 
+    // Clipping must not slice a multi-byte UTF-8 character: "a" + 25 x "e-acute" puts byte 40 mid-character.
+    {
+        std::string player = "a";
+        for (int i = 0; i < 25; i++) player += "\xC3" "\xA9";
+        std::string r = StartKey::DefaultGameName(player, "Story - X");
+        CHECK(!r.empty() && r.size() <= 40);
+        CHECK((unsigned char)r.back() != 0xC3);
+        // every lead byte must be followed by its continuation byte(s)
+        bool valid = true;
+        for (size_t i = 0; i < r.size();) {
+            unsigned char c = (unsigned char)r[i];
+            size_t len = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0;
+            if (len == 0 || i + len > r.size()) { valid = false; break; }
+            for (size_t k = 1; k < len; k++) if (((unsigned char)r[i + k] & 0xC0) != 0x80) valid = false;
+            i += len;
+        }
+        CHECK(valid);
+    }
+
     std::printf(failures ? "FAILED %d\n" : "OK\n", failures);
     return failures ? 1 : 0;
 }
