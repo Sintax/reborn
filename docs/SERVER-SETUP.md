@@ -46,6 +46,25 @@ Do not run `StartServer.bat` while the service is running: both would want port 
 The service writes what it is doing to its window; the game servers log as usual in
 `Documents\RebornLogs` (folders starting with `rb-`).
 
+## Letting friends start games on the server
+
+Players with a key can press **Start a new game...** in the server browser, pick a map, mode,
+player count and (for Versus) bots per team, and the service starts that game for them. Games
+started this way shut down when the match ends, when nobody joins within 3 minutes, or 1 minute
+after the last player leaves. At most three games run at once (the three ports), counting the
+roster.
+
+1. On your own PC: `python -m tools.vm key <friend>` prints a key and writes
+   `dist\keys\reborn-key-<friend>.txt`.
+2. On this machine: `python -m tools.vm addkey <friend> <key>` puts it into
+   `matchmaking\appsettings.json` under `"StartKeys"`; it is read the next time the service starts
+   (`python -m tools.vm update` restarts it).
+3. Send the friend the file. They save it as `reborn-key.txt` in the game's `Binaries\Win64` folder.
+4. To cut someone off, delete their line from `"StartKeys"` and restart the service.
+
+The timeouts are `"RequestedGame": { "NoJoinSeconds": 180, "EmptySeconds": 60 }` in the same file.
+`matchmaking.log` records which key started each game.
+
 ## Start a game by hand (no matchmaking)
 
 1. Double-click **`StartServer.bat`**.

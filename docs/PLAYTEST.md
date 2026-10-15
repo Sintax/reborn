@@ -76,6 +76,13 @@ Those are the most useful things you can send.
 
 Nothing in the logs is personal beyond your Windows user name in file paths.
 
+## Starting your own game on the host's server
+
+If the host sent you a `reborn-key.txt`, put it in the game's `Binaries\Win64` folder (next to
+`Battleborn.exe`). In the server browser, **Start a new game...** then lets you pick a map and
+mode, how many players to wait for, and bots for Versus. You join automatically when the server is
+ready; friends find the game in the browser. The first time, the game asks for a display name.
+
 ## For the host
 
 ### Start a game from inside Battleborn
