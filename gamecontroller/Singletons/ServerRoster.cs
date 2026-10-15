@@ -28,19 +28,26 @@ namespace gamecontroller.Singletons
 		private readonly string _coordinatorBase;
 		private readonly List<GameInstance> _instances = new();
 		private readonly object _lock = new();
+		private readonly RequestedGameSettings _requested;
+		private static readonly System.Text.RegularExpressions.Regex MapCommandShape = new(@"^open [A-Za-z0-9_]+$");
 
 		// Set once the public address is known; nothing launches before then.
 		public string? PublicIp { get; set; }
 
 		public IReadOnlyList<GameInstance> Instances { get { lock (_lock) return _instances.ToList(); } }
 
-		public ServerRoster(IReadOnlyList<RosterSlot> slots, IServerLauncher launcher, IReadOnlyList<int> ports, string coordinatorBase)
+		public ServerRoster(IReadOnlyList<RosterSlot> slots, IServerLauncher launcher, IReadOnlyList<int> ports, string coordinatorBase,
+			RequestedGameSettings? requested = null)
 		{
 			_slots = slots;
 			_launcher = launcher;
 			_ports = ports;
 			_coordinatorBase = coordinatorBase;
+			_requested = requested ?? new RequestedGameSettings();
 		}
+
+		public static bool IsLateJoinMode(string mapMode) =>
+			mapMode.StartsWith("Story", StringComparison.Ordinal) || mapMode.StartsWith("Operations", StringComparison.Ordinal);
 
 		public static string InstanceNameFor(RosterSlot slot) => "rb-" + new string(slot.Name.ToLowerInvariant().Where(c => char.IsLetterOrDigit(c) || c == '-').ToArray());
 
@@ -72,19 +79,66 @@ namespace gamecontroller.Singletons
 						Config = new GameCreationConfig(slot.Name, slot.MapMode, slot.ServerStartupCommand, slot.MaxNumPlayers),
 						ConnectionString = "open " + PublicIp + ":" + port,
 					};
-					string commandLine = "-windowed -nosound -nomoviestartup -NOSPLASH -nullrhi -rbinstance=" + InstanceNameFor(slot)
-						+ " -rbcoordinator=" + _coordinatorBase + " -rbcoordinatorkey=" + instance.MyGuid;
-					instance.PID = _launcher.Launch(InstanceNameFor(slot), commandLine);
+					instance.PID = _launcher.Launch(InstanceNameFor(slot), CommandLine(InstanceNameFor(slot), instance));
 					_instances.Add(instance);
 				}
 			}
 		}
+
+		private string CommandLine(string instanceName, GameInstance instance) =>
+			"-windowed -nosound -nomoviestartup -NOSPLASH -nullrhi -rbinstance=" + instanceName
+			+ " -rbcoordinator=" + _coordinatorBase + " -rbcoordinatorkey=" + instance.MyGuid;
+
+		// A game a player asked for from the server browser. It is never relaunched; Alive() retires it.
+		public StartResult StartRequested(GameRequest req, string keyLabel, DateTime now)
+		{
+			if (!MapCommandShape.IsMatch(req.MapCommand ?? "")) return StartResult.Refused("That map command is not allowed.");
+			bool lateJoin = IsLateJoinMode(req.MapMode ?? "");
+			int maxPlayers = lateJoin ? 5 : 10;
+			if (req.Players < 1 || req.Players > maxPlayers) return StartResult.Refused($"Players must be 1 to {maxPlayers}.");
+			if (req.BotsTeamA < 0 || req.BotsTeamA > 5 || req.BotsTeamB < 0 || req.BotsTeamB > 5) return StartResult.Refused("Bots per team must be 0 to 5.");
+			if (PublicIp == null) return StartResult.Refused("The server is still finding its public address. Try again in a moment.");
+
+			string command = req.MapCommand!;
+			if (!lateJoin && req.BotsTeamA + req.BotsTeamB > 0)
+				command += "?SpawnBotsTeamA=" + req.BotsTeamA + "?SpawnBotsTeamB=" + req.BotsTeamB;
+
+			lock (_lock)
+			{
+				int port = _ports.FirstOrDefault(p => !_instances.Any(i => i.Port == p));
+				if (port == 0) return StartResult.Refused($"Server is full ({_ports.Count} of {_ports.Count} games running). Try again later.");
+
+				var instance = new GameInstance
+				{
+					Slot = null,
+					KeyLabel = keyLabel,
+					Port = port,
+					CreationTime = now,
+					LastServerCheckIn = now,
+					Config = new GameCreationConfig(req.Name, req.MapMode!, command, req.Players),
+					ConnectionString = "open " + PublicIp + ":" + port,
+				};
+				string name = "rb-req-" + port;
+				instance.PID = _launcher.Launch(name, CommandLine(name, instance));
+				_instances.Add(instance);
+				return StartResult.Started(instance.MyGuid);
+			}
+		}
+
+		public bool Cancel(string guid) => MarkFinished(guid);
 
 		private bool Alive(GameInstance i, DateTime now)
 		{
 			if (i.Finished) return false;
 			if (!_launcher.IsRunning(i.PID)) return false;
 			if (now - i.CreationTime < StartupGrace && !i.HasCheckedIn) return true;
+			if (!i.HasCheckedIn) return false;
+			if (i.Slot == null && i.FirstCheckIn != null)
+			{
+				if (!i.EverHadPlayers && now - i.FirstCheckIn.Value > TimeSpan.FromSeconds(_requested.NoJoinSeconds)) return false;
+				if (i.EverHadPlayers && i.CurrentNumPlayers == 0 && i.LastNonEmpty != null
+					&& now - i.LastNonEmpty.Value > TimeSpan.FromSeconds(_requested.EmptySeconds)) return false;
+			}
 			return now - i.LastServerCheckIn <= CheckInTimeout;
 		}
 
@@ -103,6 +157,8 @@ namespace gamecontroller.Singletons
 			i.MatchStarted = humansHaveStarted;
 			i.LastServerCheckIn = now;
 			i.HasCheckedIn = true;
+			i.FirstCheckIn ??= now;
+			if (connectedPlayers > 0) { i.EverHadPlayers = true; i.LastNonEmpty = now; }
 			return true;
 		}
 
@@ -126,6 +182,9 @@ namespace gamecontroller.Singletons
 					MaxNumPlayers = i.Config.MaxNumPlayers,
 					ServerConnectString = i.ConnectionString,
 					MatchStarted = i.MatchStarted,
+					MyGuid = i.MyGuid,
+					Ready = i.HasCheckedIn,
+					AllowLateJoin = IsLateJoinMode(i.Config.HumanReadableInstanceMapMode),
 				}).ToList();
 			}
 		}
@@ -140,5 +199,8 @@ namespace gamecontroller.Singletons
 		public int MaxNumPlayers { get; set; }
 		public string ServerConnectString { get; set; } = "";
 		public bool MatchStarted { get; set; }
+		public string MyGuid { get; set; } = "";
+		public bool Ready { get; set; }
+		public bool AllowLateJoin { get; set; }
 	}
 }

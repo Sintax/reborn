@@ -126,6 +126,12 @@ namespace gamecontroller
         public bool HasCheckedIn { get; set; }
         public bool Finished { get; set; }
 
+        // On-request games (ServerRoster.StartRequested): who started it and when it was last busy.
+        public string? KeyLabel { get; set; }
+        public DateTime? FirstCheckIn { get; set; }
+        public DateTime? LastNonEmpty { get; set; }
+        public bool EverHadPlayers { get; set; }
+
         public GameInstance()
         {
             MyGuid = Guid.NewGuid().ToString();

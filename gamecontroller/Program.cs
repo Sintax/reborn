@@ -1,4 +1,5 @@
 using gamecontroller.Middleware;
+using gamecontroller.Models;
 using gamecontroller.Services;
 using gamecontroller.Singletons;
 
@@ -30,7 +31,8 @@ builder.Services.AddSingleton(sp =>
 {
     var slots = builder.Configuration.GetSection("Roster").Get<List<RosterSlot>>() ?? new List<RosterSlot>();
     var ports = builder.Configuration.GetSection("GamePorts").Get<List<int>>() ?? new List<int> { 7777, 7778, 7779 };
-    return new ServerRoster(slots, sp.GetRequiredService<IServerLauncher>(), ports, "localhost:" + (builder.Configuration["CoordinatorPort"] ?? "5000"));
+    var requested = builder.Configuration.GetSection("RequestedGame").Get<RequestedGameSettings>() ?? new RequestedGameSettings();
+    return new ServerRoster(slots, sp.GetRequiredService<IServerLauncher>(), ports, "localhost:" + (builder.Configuration["CoordinatorPort"] ?? "5000"), requested);
 });
 
 builder.Services.AddHostedService<SessionCleanupService>();
