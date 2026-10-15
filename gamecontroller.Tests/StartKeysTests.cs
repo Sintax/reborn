@@ -31,6 +31,23 @@ public class StartKeysTests
     }
 
     [Fact]
+    public void Keys_added_or_removed_in_the_settings_apply_without_a_restart()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["StartKeys:dj"] = "ABCDEFGHJKMNPQRSTVWXYZ23" })
+            .Build();
+        var keys = new StartKeys(config);
+
+        config["StartKeys:mike"] = "ZYXWVTSRQPNMKJHGFEDCBA32";
+        config["StartKeys:dj"] = null;
+        config.Reload();   // what the settings-file watcher does after an edit
+
+        Assert.Equal("mike", keys.LabelFor("ZYXWVTSRQPNMKJHGFEDCBA32"));
+        Assert.Null(keys.LabelFor("ABCDEFGHJKMNPQRSTVWXYZ23"));
+        Assert.Equal(1, keys.Count);
+    }
+
+    [Fact]
     public void No_StartKeys_section_means_no_keys()
     {
         var config = new ConfigurationBuilder().Build();

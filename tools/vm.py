@@ -13,8 +13,8 @@ On the VM, from its clone of this repo (Claude there runs it):
 Start keys (who may start games on the server):
 
     python -m tools.vm key mike                          # laptop: make a key, write dist/keys/reborn-key-mike.txt
-    python -m tools.vm addkey mike <key>                 # VM: put it in matchmaking's appsettings.json
-    python -m tools.vm update                            # VM: restart matchmaking so it reads the key
+    python -m tools.vm addkey mike <key>                 # VM: put it in matchmaking's appsettings.json;
+                                                         #     matchmaking picks it up within a second, no restart
 
 Only the mod (reborn.dll, reborn.pdb, dxgi.dll, about 11 MB) travels, through the private
 repo Sintax/reborn-builds. The VM checks out the same commit from GitHub, so its scripts and
@@ -257,7 +257,11 @@ def add_key(settings_path: Path, label: str, key: str) -> None:
     data = json.loads(settings_path.read_text(encoding="utf-8-sig"))
     keys = data.setdefault("StartKeys", {})
     keys[label] = key
-    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # Matchmaking re-reads this file whenever it changes, so never let it see a half-written file:
+    # write a sibling, then swap it in with one rename.
+    tmp = settings_path.with_name(settings_path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, settings_path)
 
 
 def make_key(label: str) -> Path:
@@ -267,7 +271,7 @@ def make_key(label: str) -> Path:
     out.write_text(key_file_text(key), encoding="utf-8", newline="")
     print(f"KEY {label} {key}")
     print(f"Friend file: {out}  (they rename it to reborn-key.txt in their game's Binaries\\Win64 folder)")
-    print(f"On the VM:   python -m tools.vm addkey {label} {key}   then   python -m tools.vm update")
+    print(f"On the VM:   python -m tools.vm addkey {label} {key}   (takes effect at once, no restart)")
     return out
 
 
@@ -298,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if a.cmd == "addkey":
             add_key(a.settings, a.label, a.key)
-            print(f"ADDKEY OK {a.label} in {a.settings}; matchmaking reads it at its next start (tools.vm update restarts it)")
+            print(f"ADDKEY OK {a.label} in {a.settings}; matchmaking picks it up within a second, no restart needed")
             return 0
         return update(a.version, a.win64, start=not a.no_start, checked_out=a.checked_out)
     except VmError as e:

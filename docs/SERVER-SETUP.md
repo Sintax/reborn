@@ -57,10 +57,12 @@ roster.
 1. On your own PC: `python -m tools.vm key <friend>` prints a key and writes
    `dist\keys\reborn-key-<friend>.txt`.
 2. On this machine: `python -m tools.vm addkey <friend> <key>` puts it into
-   `matchmaking\appsettings.json` under `"StartKeys"`; it is read the next time the service starts
-   (`python -m tools.vm update` restarts it).
+   `matchmaking\appsettings.json` under `"StartKeys"`. The service notices the change within a
+   second; no restart, and games already running carry on.
 3. Send the friend the file. They save it as `reborn-key.txt` in the game's `Binaries\Win64` folder.
-4. To cut someone off, delete their line from `"StartKeys"` and restart the service.
+4. To cut someone off, delete their line from `"StartKeys"` and save the file; that also applies at
+   once. `matchmaking.log` shows `Start keys reloaded: <count> (<names>)` after each change.
+   If the file is saved with a JSON mistake, the log shows 0 keys until the mistake is fixed.
 
 The timeouts are `"RequestedGame": { "NoJoinSeconds": 180, "EmptySeconds": 60 }` in the same file.
 `matchmaking.log` records which key started each game.

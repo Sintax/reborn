@@ -6,6 +6,13 @@ using gamecontroller.Singletons;
 // Settings (appsettings.json) come from the service's own folder, wherever it is started from.
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = AppContext.BaseDirectory });
 
+// appsettings.json is re-read when it changes (start keys apply without a restart). A reload that
+// catches the file half-written or hand-edited into bad JSON must not take the service down: it is
+// ignored after startup, while a broken file at startup still stops the service with the error.
+var started = false;
+foreach (var source in builder.Configuration.Sources.OfType<Microsoft.Extensions.Configuration.Json.JsonConfigurationSource>())
+    source.OnLoadException = ctx => ctx.Ignore = started;
+
 builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(AppContext.BaseDirectory, "matchmaking.log")));
 
 // Add services to the container.
@@ -46,6 +53,7 @@ builder.Services.AddHostedService<WebsocketOutgoingService>();
 builder.Services.AddHostedService<RosterService>();
 
 var app = builder.Build();
+started = true;
 
 // Configure the HTTP request pipeline.
 // Plain HTTP on purpose: the game's httplib client talks HTTP, and a redirect would break it.
