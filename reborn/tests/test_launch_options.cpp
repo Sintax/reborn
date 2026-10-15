@@ -46,6 +46,14 @@ int main() {
     CHECK(LaunchOptions::InstanceArg(L"Battleborn.exe -windowed").empty());
     CHECK(LaunchOptions::InstanceArg(L"Battleborn.exe -rbinstance= -x").empty());
 
+    auto sg = LaunchOptions::Parse(LR"(Battleborn.exe -rbautopilot "-rbstartgame=Incursion - Overgrowth" -rbstartplayers=2 -rbbots=5,3)");
+    CHECK(sg.startGame == "Incursion - Overgrowth");
+    CHECK(sg.startPlayers == 2);
+    CHECK(sg.botsA == 5 && sg.botsB == 3);
+    auto sgDefaults = LaunchOptions::Parse(L"Battleborn.exe -rbautopilot \"-rbstartgame=Story - The Algorithm\"");
+    CHECK(sgDefaults.startPlayers == 1 && sgDefaults.botsA == 5 && sgDefaults.botsB == 5);
+    CHECK(!LaunchOptions::Parse(L"Battleborn.exe -rbbots=9,1").errors.empty());
+
     std::puts(failures ? "FAIL" : "PASS");
     return failures;
 }

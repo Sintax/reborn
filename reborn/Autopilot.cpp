@@ -9,6 +9,8 @@
 #include "LocalHost.hpp"
 #include "Metagame.hpp"
 #include "Overlay.hpp"
+#include "StartGameRequest.hpp"
+#include "StartKey.hpp"
 #include "Utils.hpp"
 #include <Windows.h>
 #include <cmath>
@@ -156,6 +158,41 @@ namespace Autopilot {
                 Exec(Globals::LaunchCommand);
             } else if (!opt.join.empty()) {
                 Overlay::StartLaunchSequence(_wcsdup((L"open " + opt.join).c_str()));
+            } else if (!opt.startGame.empty()) {
+                // Same as the player pressing "Start a new game..." in the server browser.
+                static std::string pendingGuid;
+                if (pendingGuid.empty()) {
+                    const std::pair<std::string, std::string>* option = nullptr;
+                    for (const auto& o : Constants::GameCreationOptions) if (o.first == opt.startGame) option = &o;
+                    if (!option) { std::printf("[AUTOPILOT] -rbstartgame: \"%s\" is not in the map list\n", opt.startGame.c_str()); SetPhase(Phase::Off); return; }
+                    StartGame::Request req;
+                    req.mapMode = option->first;
+                    req.mapCommand = option->second;
+                    req.players = opt.startPlayers;
+                    req.botsTeamA = StartGame::IsVersus(req.mapMode) ? opt.botsA : 0;
+                    req.botsTeamB = StartGame::IsVersus(req.mapMode) ? opt.botsB : 0;
+                    std::string instance(opt.instance.begin(), opt.instance.end());
+                    req.playerName = StartKey::PlayerName().empty() ? instance : StartKey::PlayerName();
+                    req.name = StartKey::DefaultGameName(req.playerName, req.mapMode);
+                    GameCoordinator::StartResult r = GameCoordinator::StartGame(req);
+                    if (!r.ok) { std::printf("[AUTOPILOT] start refused: %s\n", r.error.c_str()); SetPhase(Phase::MenuReady); return; }
+                    pendingGuid = r.guid;
+                    std::printf("[AUTOPILOT] started \"%s\" (%s); waiting for it to be ready\n", req.name.c_str(), r.guid.c_str());
+                }
+                GameCoordinator::RefreshServerBrowser();
+                auto e = GameCoordinator::FindEntry(pendingGuid);
+                if (!e || !e->Ready) {
+                    std::printf("[AUTOPILOT] game %s not ready yet; checking again in 5 s\n", pendingGuid.c_str());
+                    SetPhase(Phase::MenuReady);
+                    return;
+                }
+                std::printf("[AUTOPILOT] joining started game via %s\n", e->ServerConnectString.c_str());
+                Globals::amStandalone = false;
+                Globals::CurrentMatchEntry = *e;
+                Globals::ConnectedToGameCoordinatorMatch = true;
+                std::wstring cmd(e->ServerConnectString.begin(), e->ServerConnectString.end());
+                pendingGuid.clear();
+                Overlay::StartLaunchSequence(_wcsdup(cmd.c_str()));
             } else if (opt.browse) {
                 // Same as the player opening the server browser and pressing Join on the first open game.
                 GameCoordinator::RefreshServerBrowser();
@@ -298,7 +335,7 @@ namespace Autopilot {
         if (!inMenu && Globals::GetGWorld()) g_leftMenu = true;
 
         // While joined: what this client knows about its pawn, every 2 s (prints on change).
-        if (!inMenu && (!opt.join.empty() || opt.browse) && (g_phase == Phase::CharacterSelect || g_phase == Phase::Playing)) {
+        if (!inMenu && (!opt.join.empty() || opt.browse || !opt.startGame.empty()) && (g_phase == Phase::CharacterSelect || g_phase == Phase::Playing)) {
             g_possessionLogTimer -= dt;
             if (g_possessionLogTimer <= 0.f) {
                 g_possessionLogTimer = 2.f;
@@ -338,7 +375,7 @@ namespace Autopilot {
                 break;
             }
             if (!inMenu && pc) {
-                if ((!opt.join.empty() || opt.browse || !opt.host.empty()) && !Globals::CharacterSelectHasLockedIn) SetPhase(Phase::CharacterSelect);
+                if ((!opt.join.empty() || opt.browse || !opt.startGame.empty() || !opt.host.empty()) &&!Globals::CharacterSelectHasLockedIn) SetPhase(Phase::CharacterSelect);
                 else if (pc->Pawn) SetPhase(Phase::Playing);
             }
             break;

@@ -50,6 +50,14 @@ namespace LaunchOptions {
             else if (key == L"-rbcombat") o.combat = true;
             else if (key == L"-rbjoin" && !val.empty()) o.join = val;
             else if (key == L"-rbbrowse") o.browse = true;
+            else if (key == L"-rbstartgame" && !val.empty()) o.startGame = Narrow(val);
+            else if (key == L"-rbstartplayers") { if (ToInt(val, 1, 10, n)) o.startPlayers = n; else o.errors.push_back(a); }
+            else if (key == L"-rbbots") {
+                size_t comma = val.find(L',');
+                int ta = 0, tb = 0;
+                if (comma != std::wstring::npos && ToInt(val.substr(0, comma), 0, 5, ta) && ToInt(val.substr(comma + 1), 0, 5, tb)) { o.botsA = ta; o.botsB = tb; }
+                else o.errors.push_back(a);
+            }
             else if (key == L"-rbhost" && !val.empty()) o.host = val;
             else if (key == L"-rbsolomap" && !val.empty()) o.soloMap = val;
             else if (key == L"-rbservermap" && !val.empty()) o.serverMap = val;
