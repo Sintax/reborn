@@ -202,4 +202,6 @@ namespace GameCoordinator {
     // A copy of the browser entry for a started game, or nullopt until it is listed.
     // A copy, because the browser list is refilled on another thread.
     std::optional<ServerBrowserEntry> FindEntry(const std::string& guid);
+    // A copy of the whole browser list, taken under the lock. Use this instead of reading Globals::ServerBrowserEntries.
+    std::vector<ServerBrowserEntry> BrowserEntriesSnapshot();
 }

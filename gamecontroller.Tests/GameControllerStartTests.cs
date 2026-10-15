@@ -43,7 +43,7 @@ public class GameControllerStartTests
         Assert.Equal(200, Status(result));
         var body = Assert.IsType<OkObjectResult>(result).Value!;
         string guid = (string)body.GetType().GetProperty("guid")!.GetValue(body)!;
-        Assert.Equal(guid, roster.Instances.Single().MyGuid);
+        Assert.Equal(guid, roster.Instances.Single().PublicId);
         Assert.Equal("dj", roster.Instances.Single().KeyLabel);
     }
 
@@ -88,7 +88,7 @@ public class GameControllerStartTests
         var (c, roster) = Make();
         c.HttpContext.Request.Headers["X-Start-Key"] = "GOODKEY";
         c.Start(Req());
-        string guid = roster.Instances.Single().MyGuid;
+        string guid = roster.Instances.Single().PublicId;
 
         Assert.Equal(200, Status(c.Cancel(guid)));
         roster.Reconcile(T0);
@@ -97,5 +97,28 @@ public class GameControllerStartTests
 
         c.HttpContext.Request.Headers["X-Start-Key"] = "WRONGKEY";
         Assert.Equal(401, Status(c.Cancel(guid)));
+    }
+
+    [Fact]
+    public void Only_the_key_that_started_a_game_can_cancel_it()
+    {
+        var launcher = new FakeLauncher();
+        var roster = new ServerRoster(Array.Empty<RosterSlot>(), launcher, new[] { 7777 }, "localhost:5000") { PublicIp = "203.0.113.10" };
+        var keys = new StartKeys(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            { ["StartKeys:a"] = "KEYA", ["StartKeys:b"] = "KEYB" }).Build());
+        var c = new Game(NullLogger<Game>.Instance, new LobbySingleton(), roster, keys, new StinkyWordService())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+        };
+        c.HttpContext.Request.Headers["X-Start-Key"] = "KEYA";
+        c.Start(Req());
+        string id = roster.Instances.Single().PublicId;
+
+        c.HttpContext.Request.Headers["X-Start-Key"] = "KEYB";
+        Assert.Equal(404, Status(c.Cancel(id)));
+        Assert.Single(roster.Instances.Where(i => !i.Finished));
+
+        c.HttpContext.Request.Headers["X-Start-Key"] = "KEYA";
+        Assert.Equal(200, Status(c.Cancel(id)));
     }
 }

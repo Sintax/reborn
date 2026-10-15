@@ -791,8 +791,9 @@ namespace Overlay {
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableHeadersRow();
 
-                for (size_t i = 0; i < Globals::ServerBrowserEntries.size(); ++i) {
-                    const auto& server = Globals::ServerBrowserEntries[i];
+                const auto browserEntries = GameCoordinator::BrowserEntriesSnapshot();
+                for (size_t i = 0; i < browserEntries.size(); ++i) {
+                    const auto& server = browserEntries[i];
                     if (server.MatchStarted && !server.AllowLateJoin) continue;
                     ImGui::TableNextRow();
 

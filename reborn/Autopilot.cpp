@@ -196,12 +196,13 @@ namespace Autopilot {
             } else if (opt.browse) {
                 // Same as the player opening the server browser and pressing Join on the first open game.
                 GameCoordinator::RefreshServerBrowser();
+                const auto browserEntries = GameCoordinator::BrowserEntriesSnapshot();
                 const GameCoordinator::ServerBrowserEntry* pick = nullptr;
-                for (const auto& e : Globals::ServerBrowserEntries)
+                for (const auto& e : browserEntries)
                     if (!e.MatchStarted && e.CurrentNumPlayers < e.MaxNumPlayers) { pick = &e; break; }
                 if (!pick) {
                     std::printf("[AUTOPILOT] server browser at %s lists no joinable game (%zu entries); trying again in 5 s\n",
-                                GameCoordinator::Endpoint().c_str(), Globals::ServerBrowserEntries.size());
+                                GameCoordinator::Endpoint().c_str(), browserEntries.size());
                     SetPhase(Phase::MenuReady);
                     return;
                 }

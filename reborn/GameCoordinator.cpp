@@ -243,4 +243,9 @@ namespace GameCoordinator {
             if (e.MyGuid == guid) return e;
         return std::nullopt;
     }
+
+    std::vector<ServerBrowserEntry> BrowserEntriesSnapshot() {
+        std::lock_guard<std::mutex> lock(g_browserEntriesMutex);
+        return Globals::ServerBrowserEntries;
+    }
 }

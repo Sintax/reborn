@@ -254,7 +254,7 @@ def key_file_text(key: str) -> str:
 
 def add_key(settings_path: Path, label: str, key: str) -> None:
     """Put label: key into appsettings.json "StartKeys", keeping everything else as it is."""
-    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    data = json.loads(settings_path.read_text(encoding="utf-8-sig"))
     keys = data.setdefault("StartKeys", {})
     keys[label] = key
     settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

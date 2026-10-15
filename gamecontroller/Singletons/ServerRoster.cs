@@ -29,7 +29,7 @@ namespace gamecontroller.Singletons
 		private readonly List<GameInstance> _instances = new();
 		private readonly object _lock = new();
 		private readonly RequestedGameSettings _requested;
-		private static readonly System.Text.RegularExpressions.Regex MapCommandShape = new(@"^open [A-Za-z0-9_]+$");
+		private static readonly System.Text.RegularExpressions.Regex MapCommandShape = new(@"^open [A-Za-z0-9_]+\z");
 
 		// Set once the public address is known; nothing launches before then.
 		public string? PublicIp { get; set; }
@@ -121,11 +121,20 @@ namespace gamecontroller.Singletons
 				string name = "rb-req-" + port;
 				instance.PID = _launcher.Launch(name, CommandLine(name, instance));
 				_instances.Add(instance);
-				return StartResult.Started(instance.MyGuid);
+				return StartResult.Started(instance.PublicId);
 			}
 		}
 
-		public bool Cancel(string guid) => MarkFinished(guid);
+		public bool Cancel(string publicId)
+		{
+			lock (_lock)
+			{
+				GameInstance? i = _instances.FirstOrDefault(x => x.PublicId == publicId);
+				if (i == null) return false;
+				i.Finished = true;
+				return true;
+			}
+		}
 
 		private bool Alive(GameInstance i, DateTime now)
 		{
@@ -182,7 +191,7 @@ namespace gamecontroller.Singletons
 					MaxNumPlayers = i.Config.MaxNumPlayers,
 					ServerConnectString = i.ConnectionString,
 					MatchStarted = i.MatchStarted,
-					MyGuid = i.MyGuid,
+					MyGuid = i.PublicId,
 					Ready = i.HasCheckedIn,
 					AllowLateJoin = IsLateJoinMode(i.Config.HumanReadableInstanceMapMode),
 				}).ToList();

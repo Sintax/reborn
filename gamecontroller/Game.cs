@@ -111,7 +111,8 @@ namespace gamecontroller
 
     public class GameInstance
     {
-        public string MyGuid;
+        public string MyGuid;   // private: the server's token (X-Server-Token); never published
+        public string PublicId { get; set; } = Guid.NewGuid().ToString();   // what the server browser shows
         public int PID { get; set; }
         public string ConnectionString { get; set; }
         public int Port { get; set; }

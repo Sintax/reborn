@@ -18,6 +18,8 @@ public class RequestedGameTests
         return (roster, launcher);
     }
 
+    static string Token(ServerRoster roster, StartResult r) => roster.Instances.Single(i => i.PublicId == r.Guid).MyGuid;
+
     static GameRequest Story(string name = "DJ's Algorithm") => new()
     {
         Name = name, MapMode = "Story - The Algorithm", MapCommand = "open Caverns_P", Players = 1,
@@ -38,7 +40,7 @@ public class RequestedGameTests
         var result = roster.StartRequested(Story(), "dj", T0);
 
         Assert.True(result.Ok, result.Error);
-        var inst = roster.Instances.Single(i => i.MyGuid == result.Guid);
+        var inst = roster.Instances.Single(i => i.PublicId == result.Guid);
         Assert.Null(inst.Slot);
         Assert.Equal(7778, inst.Port);
         Assert.Equal("dj", inst.KeyLabel);
@@ -86,6 +88,7 @@ public class RequestedGameTests
     [InlineData("open Caverns_P?Listen")]
     [InlineData("Caverns_P")]
     [InlineData("open ../x")]
+    [InlineData("open Caverns_P\n")]
     [InlineData("")]
     public void StartRequested_rejects_unknown_map_commands(string cmd)
     {
@@ -134,12 +137,12 @@ public class RequestedGameTests
     {
         var (roster, launcher) = Make();
         var r = roster.StartRequested(Story(), "dj", T0);
-        roster.RecordPoll(r.Guid!, 0, false, T0.AddSeconds(20));
-        roster.RecordPoll(r.Guid!, 0, false, T0.AddSeconds(199));
+        roster.RecordPoll(Token(roster, r), 0, false, T0.AddSeconds(20));
+        roster.RecordPoll(Token(roster, r), 0, false, T0.AddSeconds(199));
         roster.Reconcile(T0.AddSeconds(199));
         Assert.Single(roster.Instances);
 
-        roster.RecordPoll(r.Guid!, 0, false, T0.AddSeconds(201));
+        roster.RecordPoll(Token(roster, r), 0, false, T0.AddSeconds(201));
         roster.Reconcile(T0.AddSeconds(201));
 
         Assert.Empty(roster.Instances);
@@ -152,15 +155,15 @@ public class RequestedGameTests
     {
         var (roster, launcher) = Make();
         var r = roster.StartRequested(Story(), "dj", T0);
-        roster.RecordPoll(r.Guid!, 1, true, T0.AddSeconds(30));
-        roster.RecordPoll(r.Guid!, 1, true, T0.AddSeconds(299));    // last time anyone was there
+        roster.RecordPoll(Token(roster, r), 1, true, T0.AddSeconds(30));
+        roster.RecordPoll(Token(roster, r), 1, true, T0.AddSeconds(299));    // last time anyone was there
         for (int t = 300; t <= 359; t += 10)                         // then the server keeps checking in, empty
-            roster.RecordPoll(r.Guid!, 0, true, T0.AddSeconds(t));
-        roster.RecordPoll(r.Guid!, 0, true, T0.AddSeconds(359));
+            roster.RecordPoll(Token(roster, r), 0, true, T0.AddSeconds(t));
+        roster.RecordPoll(Token(roster, r), 0, true, T0.AddSeconds(359));
         roster.Reconcile(T0.AddSeconds(359));
         Assert.Single(roster.Instances);
 
-        roster.RecordPoll(r.Guid!, 0, true, T0.AddSeconds(361));
+        roster.RecordPoll(Token(roster, r), 0, true, T0.AddSeconds(361));
         roster.Reconcile(T0.AddSeconds(361));
 
         Assert.Empty(roster.Instances);
@@ -185,7 +188,7 @@ public class RequestedGameTests
         var (roster, _) = Make(Algorithm);
         var story = roster.StartRequested(Story(), "dj", T0);
         var versus = roster.StartRequested(Versus(), "dj", T0);
-        roster.RecordPoll(story.Guid!, 0, false, T0.AddSeconds(20));
+        roster.RecordPoll(Token(roster, story), 0, false, T0.AddSeconds(20));
 
         var entries = roster.BrowserEntries();
 
@@ -194,6 +197,23 @@ public class RequestedGameTests
         Assert.True(s.Ready); Assert.False(v.Ready);
         Assert.True(s.AllowLateJoin); Assert.False(v.AllowLateJoin);
         Assert.True(entries.Single(e => e.InstanceName == "Algorithm").AllowLateJoin);
+    }
+
+    [Fact]
+    public void Browser_entry_id_is_not_the_servers_private_token_and_cancel_uses_the_public_id()
+    {
+        var (roster, launcher) = Make();
+        var r = roster.StartRequested(Story(), "dj", T0);
+        string token = Token(roster, r);
+
+        var entry = Assert.Single(roster.BrowserEntries());
+        Assert.Equal(r.Guid, entry.MyGuid);
+        Assert.NotEqual(token, entry.MyGuid);
+        Assert.Contains(launcher.Launched, l => l.CommandLine.Contains("-rbcoordinatorkey=" + token));
+        Assert.DoesNotContain(launcher.Launched, l => l.CommandLine.Contains(entry.MyGuid));
+
+        Assert.False(roster.Cancel(token));          // the private token is not a cancel handle
+        Assert.True(roster.Cancel(entry.MyGuid));
     }
 
     [Theory]

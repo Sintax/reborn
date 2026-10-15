@@ -54,7 +54,7 @@ namespace gamecontroller.Controllers
                 int status = result.Error.StartsWith("Server is full") ? 409 : 400;
                 return StatusCode(status, new { message = result.Error });
             }
-            var instance = _roster.Instances.First(i => i.MyGuid == result.Guid);
+            var instance = _roster.Instances.First(i => i.PublicId == result.Guid);
             _logger.LogInformation("{Label} ({Player}) started \"{Name}\" ({MapMode}) on port {Port}: {Command}",
                 label, req.PlayerName, name, req.MapMode, instance.Port, instance.Config.ServerStartupCommand);
             return Ok(new { guid = result.Guid, connectString = instance.ConnectionString });
@@ -65,7 +65,7 @@ namespace gamecontroller.Controllers
         {
             string? label = StartKeyLabel();
             if (label == null) return Unauthorized(new { message = "You need a server key from the host." });
-            if (!_roster.Instances.Any(i => i.MyGuid == guid && i.Slot == null)) return NotFound(new { message = "No such game." });
+            if (!_roster.Instances.Any(i => i.PublicId == guid && i.Slot == null && i.KeyLabel == label)) return NotFound(new { message = "No such game." });
             _roster.Cancel(guid);
             _logger.LogInformation("{Label} cancelled game {Guid}", label, guid);
             return Ok();
