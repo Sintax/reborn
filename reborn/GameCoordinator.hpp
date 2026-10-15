@@ -4,6 +4,7 @@
 
 #include "json.hpp"
 #include "httplib.h"
+#include "StartGameRequest.hpp"
 
 namespace GameCoordinator {
     enum ETeam
@@ -159,6 +160,10 @@ namespace GameCoordinator {
         int MaxNumPlayers = 0;
         std::string ServerConnectString = "";
         bool MatchStarted = false;
+        // Set for games started through the matchmaking service; older servers omit these.
+        std::string MyGuid = "";
+        bool Ready = false;
+        bool AllowLateJoin = false;
 
         ServerBrowserEntry(const nlohmann::json& inJson) {
             InstanceName = inJson["instanceName"];
@@ -167,6 +172,9 @@ namespace GameCoordinator {
             MaxNumPlayers = inJson["maxNumPlayers"];
             ServerConnectString = inJson["serverConnectString"];
             MatchStarted = inJson["matchStarted"];
+            MyGuid = inJson.value("myGuid", std::string());
+            Ready = inJson.value("ready", false);
+            AllowLateJoin = inJson.value("allowLateJoin", false);
         }
 
         ServerBrowserEntry() {
@@ -184,4 +192,12 @@ namespace GameCoordinator {
     void RefreshWaitingForPlayers();
 
     void CreateGame(std::string InstanceName, std::string HumanReadableInstanceMapMode, std::string ServerStartupCommand, int MaxNumPlayers, std::string Password);
+
+    struct StartResult { bool ok = false; std::string guid, connectString, error; };
+    // POST /api/games/start with the player's key file. Blocking: call on a thread.
+    StartResult StartGame(const StartGame::Request& request);
+    // DELETE /api/games/{guid}: shuts down a game this player started.
+    bool CancelGame(const std::string& guid);
+    // The browser entry for a started game, or nullptr until it is listed.
+    const ServerBrowserEntry* FindEntry(const std::string& guid);
 }
