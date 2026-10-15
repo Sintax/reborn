@@ -114,8 +114,9 @@ void MainThread() {
         if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"))
             if (auto wineVersion = reinterpret_cast<const char* (__cdecl*)()>(GetProcAddress(ntdll, "wine_get_version")))
                 std::printf("[LAUNCH] running under Wine %s\n", wineVersion());
-        // A server started by the in-game "Host Game" keeps its console out of the host's way.
-        if (!opt.readyEvent.empty())
+        // A server started by the in-game "Host Game" keeps its console out of the host's way, and so
+        // does a game started with -rbminconsole (ColdClientLoader.ini ExeCommandLine).
+        if (!opt.readyEvent.empty() || opt.minConsole)
             if (HWND console = GetConsoleWindow()) ShowWindow(console, SW_SHOWMINNOACTIVE);
         for (auto& e : opt.errors) std::printf("[LAUNCH] bad value: %ls\n", e.c_str());
         for (auto& u : opt.unknown) std::printf("[LAUNCH] unknown flag: %ls\n", u.c_str());

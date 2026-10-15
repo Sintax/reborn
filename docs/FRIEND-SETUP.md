@@ -60,8 +60,8 @@ When you are done, `Win64` contains (among the game's own files):
 Double-click **`steamclient_loader_x64.exe`** in the `Win64` folder.
 
 - Do not start Battleborn from Steam. It will not go online without the loader.
-- A black text window opens next to the game. Leave it open; that is the mod at work. It closes
-  with the game.
+- The mod also opens a black text window, which starts minimized on the taskbar so only the game
+  shows. Leave it running; that is the mod at work. It closes with the game.
 - If Windows Firewall asks whether to allow Battleborn, click **Allow**.
 
 Tip: right-click the loader, then **Send to**, then **Desktop (create shortcut)**, to start it

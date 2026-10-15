@@ -104,6 +104,28 @@ def friend_readme(name: str, version: str) -> str:
     return f"Battleborn Reborn {version}\r\n\r\n" + doc.replace("\n", "\r\n")
 
 
+MIN_CONSOLE = "-rbminconsole"
+
+
+def with_min_console(ini: str) -> str:
+    """ColdClientLoader.ini text with -rbminconsole added to the game's command line (once), so the
+    mod's console starts minimized and only the game window shows."""
+    nl = "\r\n" if "\r\n" in ini else "\n"
+    lines = ini.split(nl)
+    for i, line in enumerate(lines):
+        if line.startswith("ExeCommandLine="):
+            args = line[len("ExeCommandLine="):].split()
+            if MIN_CONSOLE not in args:
+                args.append(MIN_CONSOLE)
+            lines[i] = "ExeCommandLine=" + " ".join(args)
+            return nl.join(lines)
+    for i, line in enumerate(lines):
+        if line.strip() == "[SteamClient]":
+            lines.insert(i + 1, "ExeCommandLine=" + MIN_CONSOLE)
+            return nl.join(lines)
+    return ini + ("" if ini.endswith(nl) or not ini else nl) + "[SteamClient]" + nl + "ExeCommandLine=" + MIN_CONSOLE + nl
+
+
 def make_friend_zip(out: Path, version: str, name: str, key: str, win64: Path = config.WIN64,
                     mod_dll: Path = config.MOD_DLL, dxgi_dll: Path = DXGI_DLL) -> Path:
     """Everything one friend needs, unzipped into their Binaries\\Win64. The mod already knows the
@@ -120,6 +142,11 @@ def make_friend_zip(out: Path, version: str, name: str, key: str, win64: Path = 
         z.writestr(f"README-{name}.txt", friend_readme(name, version))
     # The general playtest guide is replaced by the friend's own guide.
     _drop(out, "README-PLAYTEST.txt")
+    # Their loader starts the game with the mod's console minimized: just the game window shows.
+    _drop(out, LOADER_INI)
+    ini = (win64 / LOADER_INI).read_text(encoding="utf-8")
+    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(LOADER_INI, with_min_console(ini.replace("\r\n", "\n")).replace("\n", "\r\n"))
     return out
 
 

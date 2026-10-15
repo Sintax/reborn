@@ -54,6 +54,8 @@ int main() {
     CHECK(sgDefaults.startPlayers == 1 && sgDefaults.botsA == 5 && sgDefaults.botsB == 5);
     CHECK(!sgDefaults.randomHero);
     CHECK(LaunchOptions::Parse(L"Serverborn.exe -rbrandomhero -rbinstance=x").randomHero);
+    CHECK(!sgDefaults.minConsole);
+    CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbminconsole").minConsole);
     CHECK(!LaunchOptions::Parse(L"Battleborn.exe -rbbots=9,1").errors.empty());
 
     std::puts(failures ? "FAIL" : "PASS");
