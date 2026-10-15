@@ -26,6 +26,8 @@ builder.Services.AddSingleton<LobbySingleton>();
 
 builder.Services.AddSingleton<StinkyWordService>();
 
+builder.Services.AddSingleton<StartKeys>();
+
 // The servers the service keeps running for the game's server browser: "Roster" in appsettings.json.
 builder.Services.AddSingleton(sp =>
 {
