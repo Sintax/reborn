@@ -162,6 +162,7 @@
     <ClInclude Include="GameState.hpp" />
     <ClInclude Include="Autopilot.hpp" />
     <ClInclude Include="LocalHost.hpp" />
+    <ClInclude Include="StartKey.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BB\GameDefines.cpp" />
@@ -204,6 +205,7 @@
     <ClCompile Include="Autopilot.cpp" />
     <ClCompile Include="Combat.cpp" />
     <ClCompile Include="LocalHost.cpp" />
+    <ClCompile Include="StartKey.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
