@@ -51,6 +51,12 @@ namespace Globals {
 
     bool CreateGameOpen = false;
 
+    bool StartServerGameOpen = false;
+    bool PlayerNameOpen = false;
+    std::string PendingStartGuid = "";
+    std::string StartGameStatus = "";
+    double PendingStartSince = 0.0;
+
     bool didStandaloneCharacterInitialization = false;
 
     float timeTillMutationInit = 0.0f;

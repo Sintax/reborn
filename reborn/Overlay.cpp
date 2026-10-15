@@ -6,10 +6,19 @@
 #include "Constants.hpp"
 #include "Hooks.hpp"
 #include "LocalHost.hpp"
+#include "StartKey.hpp"
+#include "StartGameRequest.hpp"
 
 #include <algorithm>
+#include <atomic>
 
 namespace Overlay {
+    namespace {
+        // Bumped when a server start is requested and again when the player cancels. A start that finishes
+        // after a cancel sees the number has moved on and gives the server game back instead of joining it.
+        std::atomic<int> g_startRequestId{0};
+    }
+
     void OpenServerBrowser() {
         std::thread t(GameCoordinator::RefreshServerBrowser);
         t.detach();
@@ -724,11 +733,26 @@ namespace Overlay {
 
             float availWidth = ImGui::GetContentRegionAvail().x;
             float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = (availWidth - spacing) * 0.25f;
+            float buttonWidth = (availWidth - 4 * spacing) * 0.2f;
 
             if (ImGui::Button("Host Game", ImVec2(buttonWidth, 0))) {
                 Globals::ServerBrowserOpen = false;
                 Globals::CreateGameOpen = true;
+            }
+
+            ImGui::SameLine();
+
+            const bool haveKey = !StartKey::Key().empty();
+            if (!haveKey) ImGui::BeginDisabled();
+            if (ImGui::Button("Start a new game...", ImVec2(buttonWidth, 0))) {
+                Globals::ServerBrowserOpen = false;
+                if (StartKey::PlayerName().empty()) Globals::PlayerNameOpen = true;
+                else Globals::StartServerGameOpen = true;
+            }
+            if (!haveKey) {
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("You need a server key from the host (reborn-key.txt in the game's Win64 folder).");
             }
 
             ImGui::SameLine();
@@ -769,6 +793,7 @@ namespace Overlay {
 
                 for (size_t i = 0; i < Globals::ServerBrowserEntries.size(); ++i) {
                     const auto& server = Globals::ServerBrowserEntries[i];
+                    if (server.MatchStarted && !server.AllowLateJoin) continue;
                     ImGui::TableNextRow();
 
                     ImGui::TableSetColumnIndex(0);
@@ -792,7 +817,7 @@ namespace Overlay {
 
                     ImGui::PushID(static_cast<int>(i));
 
-                    bool canJoin = server.CurrentNumPlayers < server.MaxNumPlayers && !server.MatchStarted;
+                    bool canJoin = server.CurrentNumPlayers < server.MaxNumPlayers && (!server.MatchStarted || server.AllowLateJoin);
                     if (!canJoin) {
                         ImGui::BeginDisabled();
                     }
@@ -821,6 +846,141 @@ namespace Overlay {
             }
 
             ImGui::End();
+        }
+
+        if (Globals::PlayerNameOpen) {
+            static std::string name = StartKey::PlayerName();
+            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::Begin("Your name", &Globals::PlayerNameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
+            ImGui::SetWindowFontScale(2.0f);
+            ImGui::TextUnformatted("Shown to other players and used to name your games.");
+            ImGui::InputTextWithHint("##name", "Shown to other players", &name);
+            std::string trimmed = StartKey::TrimKey(name);
+            const bool okEnabled = !trimmed.empty() && trimmed.size() <= 24;
+            if (!okEnabled) ImGui::BeginDisabled();
+            if (ImGui::Button("OK", ImVec2(-1.0f, 0))) {
+                StartKey::SavePlayerName(trimmed);
+                Globals::PlayerNameOpen = false;
+                Globals::StartServerGameOpen = true;
+            }
+            if (!okEnabled) ImGui::EndDisabled();
+            ImGui::End();
+        }
+
+        if (Globals::StartServerGameOpen) {
+            static std::pair<std::string, std::string> mapMode = Constants::GameCreationOptions[0];
+            static std::string filter, gameName, lastDefault;
+            static int players = 1, botsA = 5, botsB = 5;
+            std::string def = StartKey::DefaultGameName(StartKey::PlayerName(), mapMode.first);
+            if (gameName.empty() || gameName == lastDefault) gameName = def;
+            lastDefault = def;
+
+            ImGui::Begin("Start a Game on the Server", &Globals::StartServerGameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+            ImGui::SetWindowFontScale(2.0f);
+            if (ImGui::BeginCombo("Map/Mode", mapMode.first.c_str(), ImGuiComboFlags_WidthFitPreview | ImGuiComboFlags_HeightLarge)) {
+                ImGui::InputText("Filter", &filter);
+                for (const auto& option : Constants::GameCreationOptions) {
+                    if (filter.empty() || option.first.contains(filter)) {
+                        if (ImGui::Selectable(option.first.c_str(), mapMode == option)) mapMode = option;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            const int maxPlayers = StartGame::MaxPlayersFor(mapMode.first);
+            players = std::clamp(players, 1, maxPlayers);
+            ImGui::SliderInt("Players to wait for", &players, 1, maxPlayers);
+            if (StartGame::IsVersus(mapMode.first)) {
+                ImGui::SliderInt("Team A bots", &botsA, 0, 5);
+                ImGui::SliderInt("Team B bots", &botsB, 0, 5);
+            }
+            ImGui::InputText("Game name", &gameName);
+            ImGui::TextWrapped("The server starts the game now; you join as soon as it is ready. Friends find it in the server browser.");
+
+            // Not while another start is still being set up or waited for.
+            const bool canStart = !StartKey::TrimKey(gameName).empty() && Globals::PendingStartGuid.empty() && Globals::StartGameStatus.empty();
+            if (!canStart) ImGui::BeginDisabled();
+            if (ImGui::Button("Start", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, 0))) {
+                StartGame::Request req;
+                req.name = StartKey::TrimKey(gameName);
+                req.mapMode = mapMode.first;
+                req.mapCommand = mapMode.second;
+                req.players = players;
+                req.botsTeamA = StartGame::IsVersus(mapMode.first) ? botsA : 0;
+                req.botsTeamB = StartGame::IsVersus(mapMode.first) ? botsB : 0;
+                req.playerName = StartKey::PlayerName();
+                Globals::StartServerGameOpen = false;
+                Globals::StartGameStatus = "Starting your game...";
+                Globals::PendingStartSince = ImGui::GetTime();
+                const int requestId = ++g_startRequestId;
+                std::thread([req, requestId]() {
+                    GameCoordinator::StartResult r = GameCoordinator::StartGame(req);
+                    if (requestId != g_startRequestId.load()) {
+                        // The player cancelled while the server was still starting it: give the game back.
+                        if (r.ok) GameCoordinator::CancelGame(r.guid);
+                        return;
+                    }
+                    if (r.ok) {
+                        Globals::CurrentMatchEntry.ServerConnectString = r.connectString;
+                        Globals::PendingStartGuid = r.guid;
+                    }
+                    else {
+                        Globals::StartGameStatus = "PROBLEM: " + r.error;
+                    }
+                }).detach();
+            }
+            if (!canStart) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Close", ImVec2(-1.0f, 0))) Globals::StartServerGameOpen = false;
+            ImGui::End();
+        }
+
+        if (!Globals::StartGameStatus.empty()) {
+            static double lastRefresh = 0.0;
+            static bool seenOnce = false;
+            const bool pending = !Globals::PendingStartGuid.empty();
+            const bool problem = Globals::StartGameStatus.rfind("PROBLEM:", 0) == 0;
+            if (pending) {
+                if (ImGui::GetTime() - lastRefresh > 3.0) {
+                    lastRefresh = ImGui::GetTime();
+                    std::thread(GameCoordinator::RefreshServerBrowser).detach();
+                }
+                auto e = GameCoordinator::FindEntry(Globals::PendingStartGuid);
+                if (e && e->Ready) {
+                    Globals::CurrentMatchEntry = *e;
+                    Globals::amStandalone = false;
+                    Globals::ConnectedToGameCoordinatorMatch = true;
+                    std::wstring cmd(e->ServerConnectString.begin(), e->ServerConnectString.end());
+                    Globals::PendingStartGuid.clear();
+                    Globals::StartGameStatus.clear();
+                    seenOnce = false;
+                    StartLaunchSequence(_wcsdup(cmd.c_str()));
+                } else {
+                    if (e) seenOnce = true;
+                    const bool vanished = seenOnce && !e;
+                    if (vanished || ImGui::GetTime() - Globals::PendingStartSince > 150.0) {
+                        Globals::StartGameStatus = "PROBLEM: the server did not start. Its log is on the host machine (matchmaking.log).";
+                        Globals::PendingStartGuid.clear();
+                        seenOnce = false;
+                    }
+                }
+            }
+            if (!Globals::StartGameStatus.empty()) {
+                ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                ImGui::Begin("Starting your game", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove);
+                ImGui::SetWindowFontScale(2.0f);
+                ImGui::TextWrapped("%s", Globals::StartGameStatus.c_str());
+                if (ImGui::Button(problem ? "Close" : "Cancel", ImVec2(-1.0f, 0))) {
+                    ++g_startRequestId;   // a start still in flight will hand its game back when it finishes
+                    if (!Globals::PendingStartGuid.empty()) {
+                        std::string guid = Globals::PendingStartGuid;
+                        std::thread([guid]() { GameCoordinator::CancelGame(guid); }).detach();
+                    }
+                    Globals::PendingStartGuid.clear();
+                    Globals::StartGameStatus.clear();
+                    seenOnce = false;
+                }
+                ImGui::End();
+            }
         }
 
         if (Globals::DirectConnectOpen) {

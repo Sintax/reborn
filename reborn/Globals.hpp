@@ -105,6 +105,13 @@ namespace Globals {
     
     extern bool CreateGameOpen;
 
+    // "Start a game on the server" (Overlay.cpp): the panel, the one-time name prompt, and the game being started.
+    extern bool StartServerGameOpen;
+    extern bool PlayerNameOpen;
+    extern std::string PendingStartGuid;
+    extern std::string StartGameStatus;
+    extern double PendingStartSince;
+
     extern std::vector<Metagame::SaveFile> saveFiles;
 
     extern unsigned int CurrentSaveFile;
