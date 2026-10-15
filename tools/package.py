@@ -3,15 +3,20 @@
     python -m tools.package                # mod files, instructions, log collector
     python -m tools.package --with-loader  # also the Steam loader files from your game folder
                                                # (for a friend you send it to directly)
+    python -m tools.package --friend Kaz   # everything one friend needs: loader, mod, their own
+                                               # server key, player name and Steam identity, and a
+                                               # guide (dist/friends/Reborn-Kaz-<commit>.zip)
 
 The zip unpacks into the game's Binaries\\Win64 folder. Instructions: docs/PLAYTEST.md.
 """
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 
 from . import build, config, launch
@@ -82,15 +87,75 @@ def make_zip(out: Path, version: str, with_loader: bool, win64: Path = config.WI
     return out
 
 
+def check_friend_name(name: str) -> str:
+    """Names end up in file names and the server's key list: letters, digits, - and _ only."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", name or ""):
+        raise ValueError(f"friend name {name!r}: use 1-24 letters, digits, - or _")
+    return name
+
+
+def friend_steamid(name: str) -> int:
+    """A Steam ID of the friend's own, so two players never share one on the server."""
+    return launch.STEAMID_BASE + zlib.crc32(("friend:" + name).encode()) % 100000
+
+
+def friend_readme(name: str, version: str) -> str:
+    doc = (config.REPO / "docs" / "FRIEND-SETUP.md").read_text(encoding="utf-8").replace("{NAME}", name)
+    return f"Battleborn Reborn {version}\r\n\r\n" + doc.replace("\n", "\r\n")
+
+
+def make_friend_zip(out: Path, version: str, name: str, key: str, win64: Path = config.WIN64,
+                    mod_dll: Path = config.MOD_DLL, dxgi_dll: Path = DXGI_DLL) -> Path:
+    """Everything one friend needs, unzipped into their Binaries\\Win64. The mod already knows the
+    server's address (built in from LocalSettings.hpp), so no address travels as text. Send it to
+    that friend only: it carries the Steam loader and their personal server key."""
+    check_friend_name(name)
+    make_zip(out, version, True, win64, mod_dll, dxgi_dll)
+    user_ini = (f"[user::general]\r\naccount_name={name}\r\naccount_steamid={friend_steamid(name)}\r\n"
+                "language=english\r\n")
+    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("steam_settings/configs.user.ini", user_ini)
+        z.writestr("reborn-key.txt", key + "\r\n")
+        z.writestr("reborn-player.txt", name + "\r\n")
+        z.writestr(f"README-{name}.txt", friend_readme(name, version))
+    # The general playtest guide is replaced by the friend's own guide.
+    _drop(out, "README-PLAYTEST.txt")
+    return out
+
+
+def _drop(zip_path: Path, member: str) -> None:
+    tmp = zip_path.with_name(zip_path.name + ".tmp")
+    with zipfile.ZipFile(zip_path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            if item.filename != member:
+                dst.writestr(item, src.read(item.filename))
+    tmp.replace(zip_path)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m tools.package", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--with-loader", action="store_true", help="include the Steam loader files")
     p.add_argument("--no-build", action="store_true", help="zip the DLLs already built")
+    p.add_argument("--friend", metavar="NAME", help="make one friend's personal zip with a new server key")
     a = p.parse_args(argv)
+    if a.friend:
+        check_friend_name(a.friend)
     if not a.no_build:
         build_all()
     version = commit()
+    if a.friend:
+        from . import vm   # vm imports this module, so import it only here
+        key = vm.new_key()
+        label = a.friend.lower()
+        out = make_friend_zip(DIST / "friends" / f"Reborn-{a.friend}-{version}.zip", version, a.friend, key)
+        vm.KEYS_DIR.mkdir(parents=True, exist_ok=True)
+        (vm.KEYS_DIR / f"reborn-key-{label}.txt").write_text(vm.key_file_text(key), encoding="utf-8", newline="")
+        print(f"FRIEND ZIP OK {out}")
+        print(f"KEY {label} {key}")
+        print(f"On the VM:   python -m tools.vm addkey {label} {key}   (takes effect at once, no restart)")
+        print("Send the zip to that friend only; it holds the Steam loader and their key.")
+        return 0
     suffix = "-with-loader" if a.with_loader else ""
     out = make_zip(DIST / f"Reborn-Playtest-{version}{suffix}.zip", version, a.with_loader)
     print(f"PACKAGE OK {out}")
