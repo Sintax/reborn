@@ -744,7 +744,7 @@ namespace Overlay {
 
             const bool haveKey = !StartKey::Key().empty();
             if (!haveKey) ImGui::BeginDisabled();
-            if (ImGui::Button("Start a new game...", ImVec2(buttonWidth, 0))) {
+            if (ImGui::Button("Start Server Game", ImVec2(buttonWidth, 0))) {
                 Globals::ServerBrowserOpen = false;
                 if (StartKey::PlayerName().empty()) Globals::PlayerNameOpen = true;
                 else Globals::StartServerGameOpen = true;

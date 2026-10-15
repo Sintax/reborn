@@ -48,7 +48,7 @@ The service writes what it is doing to its window; the game servers log as usual
 
 ## Letting friends start games on the server
 
-Players with a key can press **Start a new game...** in the server browser, pick a map, mode,
+Players with a key can press **Start Server Game** in the server browser, pick a map, mode,
 player count and (for Versus) bots per team, and the service starts that game for them. Games
 started this way shut down when the match ends, when nobody joins within 3 minutes, or 1 minute
 after the last player leaves. At most three games run at once (the three ports), counting the

@@ -159,7 +159,7 @@ namespace Autopilot {
             } else if (!opt.join.empty()) {
                 Overlay::StartLaunchSequence(_wcsdup((L"open " + opt.join).c_str()));
             } else if (!opt.startGame.empty()) {
-                // Same as the player pressing "Start a new game..." in the server browser.
+                // Same as the player pressing "Start Server Game" in the server browser.
                 static std::string pendingGuid;
                 if (pendingGuid.empty()) {
                     const std::pair<std::string, std::string>* option = nullptr;
