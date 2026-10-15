@@ -21,6 +21,20 @@ class DeployError(RuntimeError):
     pass
 
 
+# Every install backs up the file it replaces; without a limit rb_backups grew to 3 GB.
+BACKUPS_KEPT = 5
+
+
+def _prune_backups(d: Path, name: str, keep: int = BACKUPS_KEPT) -> None:
+    """Delete all but the newest `keep` backups of one file. Names carry a sortable timestamp."""
+    old = sorted(d.glob(f"{name}.*"), key=lambda b: b.name)[:-keep]
+    for b in old:
+        try:
+            b.unlink()
+        except OSError:
+            pass   # a backup someone has open is left for next time
+
+
 def _backup(p: Path, win64: Path) -> Path:
     """Copy p into win64/rb_backups under a name that is never reused."""
     d = win64 / "rb_backups"
@@ -37,6 +51,7 @@ def _backup(p: Path, win64: Path) -> Path:
         except FileExistsError:
             n += 1
     shutil.copystat(p, b)
+    _prune_backups(d, p.name)
     return b
 
 
