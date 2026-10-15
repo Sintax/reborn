@@ -10,6 +10,12 @@ On the VM, from its clone of this repo (Claude there runs it):
     python -m tools.vm update               # newest release
     python -m tools.vm update --version abc1234 --no-start
 
+Start keys (who may start games on the server):
+
+    python -m tools.vm key mike                          # laptop: make a key, write dist/keys/reborn-key-mike.txt
+    python -m tools.vm addkey mike <key>                 # VM: put it in matchmaking's appsettings.json
+    python -m tools.vm update                            # VM: restart matchmaking so it reads the key
+
 Only the mod (reborn.dll, reborn.pdb, dxgi.dll, about 11 MB) travels, through the private
 repo Sintax/reborn-builds. The VM checks out the same commit from GitHub, so its scripts and
 matchmaking service match the mod; it builds the service itself with its own .NET. The Steam
@@ -20,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -33,6 +40,9 @@ BUILDS_REPO = "Sintax/reborn-builds"
 MOD_FILES = ("reborn.dll", "reborn.pdb", "dxgi.dll")
 DEPLOYED_MARK = "reborn-deployed.txt"
 GAMES_URL = "http://localhost:5000/api/games"
+KEY_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789"   # no 0/O/1/I/L: friends may type it
+KEY_LENGTH = 24
+KEYS_DIR = config.REPO / "dist" / "keys"          # dist/ is gitignored
 
 
 class VmError(RuntimeError):
@@ -232,6 +242,35 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     return 0
 
 
+# --- start keys: who may start games on the server (gamecontroller StartKeys.cs) -------------
+
+def new_key(rng=secrets) -> str:
+    return "".join(rng.choice(KEY_ALPHABET) for _ in range(KEY_LENGTH))
+
+
+def key_file_text(key: str) -> str:
+    return key + "\r\n"
+
+
+def add_key(settings_path: Path, label: str, key: str) -> None:
+    """Put label: key into appsettings.json "StartKeys", keeping everything else as it is."""
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    keys = data.setdefault("StartKeys", {})
+    keys[label] = key
+    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def make_key(label: str) -> Path:
+    key = new_key()
+    KEYS_DIR.mkdir(parents=True, exist_ok=True)
+    out = KEYS_DIR / f"reborn-key-{label}.txt"
+    out.write_text(key_file_text(key), encoding="utf-8", newline="")
+    print(f"KEY {label} {key}")
+    print(f"Friend file: {out}  (they rename it to reborn-key.txt in their game's Binaries\\Win64 folder)")
+    print(f"On the VM:   python -m tools.vm addkey {label} {key}   then   python -m tools.vm update")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m tools.vm", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -243,10 +282,23 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--win64", type=Path, default=config.WIN64)
     u.add_argument("--no-start", action="store_true", help="install only, start nothing")
     u.add_argument("--checked-out", action="store_true", help=argparse.SUPPRESS)
+    k = sub.add_parser("key", help="laptop: make a start key and the file to send a friend")
+    k.add_argument("label", help="who it is for, e.g. mike")
+    ak = sub.add_parser("addkey", help="VM: put a start key into matchmaking's appsettings.json")
+    ak.add_argument("label")
+    ak.add_argument("key")
+    ak.add_argument("--settings", type=Path, default=config.WIN64 / "matchmaking" / "appsettings.json")
     a = p.parse_args(argv)
     try:
         if a.cmd == "release":
             print(f"RELEASE OK {release(build=not a.no_build)}  (VM: python -m tools.vm update)")
+            return 0
+        if a.cmd == "key":
+            make_key(a.label)
+            return 0
+        if a.cmd == "addkey":
+            add_key(a.settings, a.label, a.key)
+            print(f"ADDKEY OK {a.label} in {a.settings}; matchmaking reads it at its next start (tools.vm update restarts it)")
             return 0
         return update(a.version, a.win64, start=not a.no_start, checked_out=a.checked_out)
     except VmError as e:
