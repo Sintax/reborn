@@ -1272,8 +1272,10 @@ namespace Hooks {
             if (sinceMinionCensus >= 5.0f) {
                 sinceMinionCensus = 0.0f;
                 if (Globals::amServer) {
-                    if (Globals::netDriver)
+                    if (Globals::netDriver) {
                         ServerNetworking::LogMinionCensus();
+                        ServerNetworking::LogTeams();
+                    }
                 }
                 else {
                     ClientNetworking::LogMinionCensus();

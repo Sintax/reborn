@@ -51,6 +51,8 @@ namespace ServerNetworking {
 
     void LogMinionCensus();
 
+    void LogTeams();
+
     void TrackMinionLives();
 }
 

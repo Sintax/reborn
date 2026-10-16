@@ -763,6 +763,43 @@ namespace ServerNetworking {
         }
     }
 
+    // [TEAMS] server, when it changes: who is on which team, people and bots apart, so a vs-bots
+    // game can be checked for even sides (a human takes a team's bot slot or adds to it).
+    void LogTeams() {
+        AWorldInfo* wi = nullptr;
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            UNetConnection* c = sp.Connection;
+            if (c && IsLiveConnection(c) && c->Actor && !(c->Actor->ObjectFlags & 0x2000000000000000ull)) {
+                wi = c->Actor->WorldInfo;
+                break;
+            }
+        }
+        if (!wi || !wi->GRI || (wi->GRI->ObjectFlags & 0x2000000000000000ull))
+            return;
+        std::map<int, std::pair<std::string, std::string>> teams;   // team -> (people, bots)
+        int count = wi->GRI->PRIArray.ArrayCount;
+        for (int i = 0; i < count && i < 64; i++) {
+            APlayerReplicationInfo* pri = wi->GRI->PRIArray[i];
+            if (!pri || (pri->ObjectFlags & 0x2000000000000000ull) || pri->bIsSpectator)
+                continue;
+            int team = (pri->Team && !(pri->Team->ObjectFlags & 0x2000000000000000ull)) ? pri->Team->TeamIndex : -1;
+            std::string& list = pri->bBot ? teams[team].second : teams[team].first;
+            list += (list.empty() ? "" : ",") + pri->PlayerName.ToString();
+        }
+        std::string out = "[TEAMS] server:";
+        for (auto& [team, members] : teams) {
+            int people = members.first.empty() ? 0 : (int)std::count(members.first.begin(), members.first.end(), ',') + 1;
+            int bots = members.second.empty() ? 0 : (int)std::count(members.second.begin(), members.second.end(), ',') + 1;
+            out += " team " + std::to_string(team) + ": " + std::to_string(people) + " people (" + members.first + ") + "
+                + std::to_string(bots) + " bots (" + members.second + ");";
+        }
+        static std::string last;
+        if (out != last) {
+            printf("%s\n", out.c_str());
+            last = out;
+        }
+    }
+
     // [MINIONS] server, every half second: each non-player pawn's life, to tell why the Dojo's waves
     // last under 10 s with nobody shooting (live run 20261007-071315: 1 -> 4 -> 0 between two 5 s
     // censuses). Logs when one appears (where, health, physics, nearest player, the level's KillZ),
