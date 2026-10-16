@@ -13,6 +13,7 @@
 #include "StartKey.hpp"
 #include "Utils.hpp"
 #include <Windows.h>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <random>
@@ -39,7 +40,25 @@ namespace Autopilot {
         bool g_leftMenu = false;          // Launching: the world has left the menu at least once
         bool g_startupPending = false;    // startup finished; pick a save and continue on the next tick
         float g_possessionLogTimer = 0.f; // client: seconds until the next possession census
-        int g_selectClicks = 0;           // CharacterSelect: clicks sent on the game's hero grid so far
+        // CharacterSelect: our clicks on the game's own hero grid.
+        int g_selectClicks = 0;           // clicks sent so far
+        int g_lastCell = -1;              // the cell clicked last
+        float g_lastClickTime = 0.f;      // phase time of that click
+        float g_pickReadyTime = -1.f;     // phase time the pick phase was judged open to clicks
+        bool g_cellTried[30] = {};
+        // The game's pick phase, judged once per launch: its first second shows how long it runs.
+        // The server's 5 s edit of PhaseDef_AllPlayers_Select (RandomHero games) is made on the
+        // server's own copy of the definition and is not replicated: the client's copy and the
+        // manager's DurationOfPhase still say 60. TimeRemainingInCurrentPhase is replicated, so
+        // the largest value seen in the phase's first second tells a 5 s phase from a 60 s one.
+        float g_pickPhaseSeenAt = -1.f;   // phase time the pick phase was first seen, -1 not yet
+        float g_pickPhaseMaxLeft = 0.f;
+        bool g_pickPhaseJudged = false;
+        std::atomic<bool> g_pickLocked{ false };
+        const float kTimerPickSeconds = 5.f;   // CharSelect's RandomHero pick length
+        const float kPickRetrySeconds = 6.f;   // a click not taken by then is refused
+        const float kListWaitSeconds = 30.f;   // hero list still empty by then: click cell 0
+        const int kMaxSelectClicks = 5;
         const float kMenuGrace = 2.f;     // menu must hold this long before we call it a real return
         const float kLaunchTimeout = 90.f;
 
@@ -52,7 +71,18 @@ namespace Autopilot {
             g_menuTime = 0.f;
             g_leftMenu = false;
             if (p == Phase::Playing) g_hadPawn = false;
-            if (p == Phase::CharacterSelect) g_selectClicks = 0;
+            if (p == Phase::CharacterSelect) {
+                g_selectClicks = 0;
+                g_lastCell = -1;
+                g_pickReadyTime = -1.f;
+                for (bool& t : g_cellTried) t = false;
+            }
+            if (p == Phase::Launching) {   // a new game: judge its pick phase afresh
+                g_pickPhaseSeenAt = -1.f;
+                g_pickPhaseMaxLeft = 0.f;
+                g_pickPhaseJudged = false;
+                g_pickLocked = false;
+            }
             std::printf("[AUTOPILOT] phase %s\n", PhaseName());
         }
 
@@ -296,9 +326,119 @@ namespace Autopilot {
             }
             if (g_unstickFor > 0.f) g_unstickFor -= dt;
         }
+
+        APoplarCharacterSelectManager* SelectManager(APoplarPlayerController* pc) {
+            APoplarGameReplicationInfo* gri = pc && pc->WorldInfo ? reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI) : nullptr;
+            return gri ? gri->CharacterSelectManager : nullptr;
+        }
+
+        // The hero class name of a grid cell ("DeathBlade"), "" while that cell has not replicated.
+        std::string CellHero(APoplarCharacterSelectManager* m, int cell) {
+            UPoplarPlayerNameIdentifierDefinition* id = m->MasterCharacterList[cell].NameID;
+            return id && id->CharacterClassId ? id->CharacterClassId->ClassName.ToString() : "";
+        }
+
+        // Watches for the game's pick phase and judges, after its first second, whether it is a
+        // timer-only pick (see g_pickPhaseSeenAt).
+        void WatchPickPhase(APoplarCharacterSelectManager* m) {
+            if (!m || g_pickPhaseJudged) return;
+            UPoplarCharacterSelectPhaseDefinition* phase = m->CurrentPhase;
+            if (!phase || phase->PhaseType != ECharacterSelectPhaseType::CharacterSelectPhase_Select) return;
+            if (g_pickPhaseSeenAt < 0.f) g_pickPhaseSeenAt = g_phaseTime;
+            if (m->TimeRemainingInCurrentPhase > g_pickPhaseMaxLeft) g_pickPhaseMaxLeft = m->TimeRemainingInCurrentPhase;
+            if (g_phaseTime - g_pickPhaseSeenAt < 1.f) return;
+            g_pickPhaseJudged = true;
+            g_pickLocked = g_pickPhaseMaxLeft <= kTimerPickSeconds + 0.5f;
+            std::printf("[AUTOPILOT] pick phase %s runs %.0f s: %s\n", phase->GetName().c_str(), g_pickPhaseMaxLeft,
+                        g_pickLocked ? "the timer picks, not clicking" : "picking on the grid");
+        }
+
+        // True once the server has taken our pick: the PRI is locked in, or the manager lists a
+        // hero for us.
+        bool PickTaken(APoplarPlayerController* pc, APoplarCharacterSelectManager* m) {
+            APoplarPlayerReplicationInfo* pri = reinterpret_cast<APoplarPlayerReplicationInfo*>(pc->PlayerReplicationInfo);
+            if (!pri) return false;
+            if ((int)pri->CharacterSelectionState >= (int)ECharacterMenuSelectionState::CharSelect_Locked) return true;
+            for (int t = 0; t < 2; t++)
+                for (int i = 0; i < 5; i++)
+                    if (m->Teams[t].Players[i].PRI == pri && m->Teams[t].Players[i].SelectedCharacter) return true;
+            return false;
+        }
+
+        // Why the hero grid may not take a click. The grid accepts picks only in menu state 1
+        // (character), which the game enters once the local player's entitlements have arrived
+        // (bHasReceivedEntitlements): the meta PRI's replicated StaticEntitlements must all be
+        // present (non-null count == NumStaticEntitlements) and NumLoadoutEntitlements known.
+        std::string GridState(APoplarPlayerController* pc, UPoplarCharacterSelectGFxMovie* mv) {
+            APoplarMetaPlayerReplicationInfo* meta = pc->MyPoplarPRI ? pc->MyPoplarPRI->GetMetaPRI() : nullptr;
+            int present = 0;
+            int num = meta ? meta->NumStaticEntitlements : -1;
+            for (int i = 0; meta && i < num && i < 0x800; i++) if (meta->StaticEntitlements[i]) present++;
+            char b[200];
+            std::snprintf(b, sizeof b, "grid menu %d, entitlements received %u, static entitlements %d of %d, loadouts %d",
+                          (int)mv->PrimaryPlayerMenus.CurrentMenuState, (unsigned)mv->PrimaryPlayerMenus.bHasReceivedEntitlements,
+                          present, num, meta ? meta->NumLoadoutEntitlements : -1);
+            return b;
+        }
+
+        void ClickCell(UPoplarCharacterSelectGFxMovie* mv, APoplarCharacterSelectManager* m, int cell) {
+            g_selectClicks++;
+            g_lastCell = cell;
+            g_lastClickTime = g_phaseTime;
+            g_cellTried[cell] = true;
+            mv->extRequestSelection(0, cell);
+            std::printf("[AUTOPILOT] picked cell %d (%s)\n", cell, CellHero(m, cell).empty() ? "unknown" : CellHero(m, cell).c_str());
+        }
+
+        // Picks -rbcharacter's hero on the game's own hero grid, like a person clicking it, once the
+        // pick phase is open; re-picks a free cell if the server has not taken the pick 6 s later.
+        void SelectTick(APoplarPlayerController* pc) {
+            APoplarCharacterSelectManager* m = SelectManager(pc);
+            WatchPickPhase(m);
+            if (!m || !g_pickPhaseJudged || g_pickLocked) return;
+            UPoplarCharacterSelectGFxMovie* mv = pc->CharacterSelectMovie;
+            if (!mv || !mv->bMovieAndManagerReady) return;
+            if (g_pickReadyTime < 0.f) g_pickReadyTime = g_phaseTime;
+
+            if (g_selectClicks == 0) {
+                // The grid follows the manager's replicated MasterCharacterList, which fills in late.
+                bool listed = false;
+                for (int i = 0; i < 30 && !listed; i++) listed = m->MasterCharacterList[i].NameID != nullptr;
+                const bool gaveUp = g_phaseTime - g_pickReadyTime >= kListWaitSeconds;
+                if (!listed && !gaveUp) return;
+                std::string wanted = Metagame::ReverseCharacterLookup(
+                    Constants::CharacterSelectCharacterTable[CharacterIndex(LaunchOptions::Get().character)]);
+                int cell = -1;
+                for (int i = 0; i < 30 && cell < 0; i++) if (CellHero(m, i) == wanted) cell = i;
+                if (cell < 0) {
+                    std::printf("[AUTOPILOT] %s is not on the hero grid%s; picking cell 0\n", wanted.c_str(),
+                                listed ? "" : " (the hero list never arrived)");
+                    cell = 0;
+                }
+                ClickCell(mv, m, cell);
+                return;
+            }
+
+            if (g_phaseTime - g_lastClickTime < kPickRetrySeconds || PickTaken(pc, m)) return;
+            if (g_selectClicks >= kMaxSelectClicks) return;
+            APoplarPlayerReplicationInfo* pri = reinterpret_cast<APoplarPlayerReplicationInfo*>(pc->PlayerReplicationInfo);
+            int next = -1;
+            for (int k = 1; k <= 30 && next < 0; k++) {
+                int i = (g_lastCell + k) % 30;
+                const FCharacterSelectionData& c = m->MasterCharacterList[i];
+                if (!g_cellTried[i] && c.NameID && !c.SelectedBy && !c.BannedBy) next = i;
+            }
+            if (next < 0) return;
+            std::printf("[AUTOPILOT] cell %d not taken after %.0f s (movie state %d, selection state %d, %s); trying the next free cell\n",
+                        g_lastCell, kPickRetrySeconds, (int)mv->PlayerUIState[0], pri ? (int)pri->CharacterSelectionState : -1,
+                        GridState(pc, mv).c_str());
+            ClickCell(mv, m, next);
+        }
     }
 
     bool Active() { return LaunchOptions::Get().autopilot && !Globals::amServer; }
+
+    bool PickLockedByServer() { return g_pickLocked; }
 
     const char* PhaseName() {
         if (!Active()) return "off";
@@ -375,7 +515,7 @@ namespace Autopilot {
                 break;
             }
             if (!inMenu && pc) {
-                if ((!opt.join.empty() || opt.browse || !opt.startGame.empty() || !opt.host.empty()) &&!Globals::CharacterSelectHasLockedIn) SetPhase(Phase::CharacterSelect);
+                if (!opt.join.empty() || opt.browse || !opt.startGame.empty() || !opt.host.empty()) SetPhase(Phase::CharacterSelect);
                 else if (pc->Pawn) SetPhase(Phase::Playing);
             }
             break;
@@ -385,30 +525,8 @@ namespace Autopilot {
                 SetPhase(Phase::MenuReady);
                 break;
             }
-            {
-                // Click the game's own hero grid like a person would, once the movie is up.
-                UPoplarCharacterSelectGFxMovie* mv = pc ? pc->CharacterSelectMovie : nullptr;
-                if (mv && mv->bMovieAndManagerReady && g_selectClicks < 3 && g_phaseTime > 8.f + g_selectClicks * 4.f) {
-                    // The grid follows the game's own hero list (the replicated MasterCharacterList).
-                    int cell = -1;
-                    std::string wanted = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[CharacterIndex(opt.character)]);
-                    APoplarGameReplicationInfo* gri = pc->WorldInfo ? reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI) : nullptr;
-                    APoplarCharacterSelectManager* m = gri ? gri->CharacterSelectManager : nullptr;
-                    std::string list;
-                    for (int i = 0; m && i < 30; i++) {
-                        UPoplarPlayerNameIdentifierDefinition* id = m->MasterCharacterList[i].NameID;
-                        std::string cls = (id && id->CharacterClassId) ? id->CharacterClassId->ClassName.ToString() : "none";
-                        list += std::to_string(i) + "=" + cls + " ";
-                        if (cls == wanted && cell < 0) cell = i;
-                    }
-                    if (g_selectClicks == 0) std::printf("[CHARSEL] autopilot: master list (want %s): %s\n", wanted.c_str(), list.c_str());
-                    if (cell < 0) cell = 0;
-                    std::printf("[CHARSEL] autopilot: native click %d on cell %d (ui state before %d)\n", g_selectClicks + 1, cell, (int)mv->PlayerUIState[0]);
-                    mv->extRequestSelection(0, cell);
-                    g_selectClicks++;
-                }
-            }
-            if (pc && pc->Pawn && g_phaseTime > 5.f) SetPhase(Phase::Playing);
+            if (pc && pc->Pawn && g_phaseTime > 5.f) { SetPhase(Phase::Playing); break; }
+            if (pc) SelectTick(pc);
             break;
         case Phase::Playing:
             if (g_menuTime >= kMenuGrace) {   // kicked back to the menu: try again

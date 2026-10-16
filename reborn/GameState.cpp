@@ -370,8 +370,9 @@ namespace GameState {
             }
             // Own hero: requested_hero (the -rbcharacter pick), pawn_hero (what loaded) and
             // hero_matches (null with no pick, no pawn, or a hero that maps to no display name).
+            // In a game where the timer picks (RandomHero) there is no pick, so both stay null.
             // pawn_skin_ok false (pawn_skin_wrong says which) when it wears another hero's skin.
-            std::string requested = RequestedHero();
+            std::string requested = Autopilot::PickLockedByServer() ? "" : RequestedHero();
             j["requested_hero"] = requested.empty() ? nlohmann::json(nullptr) : nlohmann::json(requested);
             j["pawn_hero"] = nullptr;
             j["hero_matches"] = nullptr;
