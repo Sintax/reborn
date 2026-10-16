@@ -170,11 +170,15 @@ if (Test-Path $backup) { Say "Files that were replaced are saved in $backup" }
 # --- Player name: the standard zip has none, so ask once (an update keeps the name already set) --
 $userIni = Join-Path $Win64 "steam_settings\configs.user.ini"
 if (-not (Test-Path (Join-Path $Files "steam_settings\configs.user.ini")) -and -not (Test-Path $userIni)) {
-    Step "Your player name"
+    Step "Your player tag (in-game name)"
     $name = $PlayerName.Trim()
+    if (-not $name) {
+        Say "Choose your player tag: the name everyone sees above your hero, in the scoreboard and"
+        Say "in the server browser. Use 1 to 24 letters, digits, - or _ (no spaces)."
+    }
     while ($name -notmatch '^[A-Za-z0-9_-]{1,24}$') {
         if ($name) { Say "Use 1 to 24 letters, digits, - or _ (no spaces)." }
-        $name = (Read-Host "Type the name other players will see").Trim()
+        $name = (Read-Host "Your player tag").Trim()
     }
     # A Steam ID of the player's own, so two players never share one on the server. Friend zips and
     # the server use the first 100000 numbers above the base; pick from the range after them.
@@ -183,7 +187,7 @@ if (-not (Test-Path (Join-Path $Files "steam_settings\configs.user.ini")) -and -
     [IO.File]::WriteAllText($userIni, "[user::general]`r`naccount_name=$name`r`naccount_steamid=$steamid`r`nlanguage=english`r`n", $utf8)
     $playerTxt = Join-Path $Win64 "reborn-player.txt"
     if (-not (Test-Path $playerTxt)) { [IO.File]::WriteAllText($playerTxt, "$name`r`n", $utf8) }
-    Say "You will play as $name."
+    Say "Your player tag is $name."
 }
 
 $HaveLoader = Test-Path (Join-Path $Win64 "steamclient_loader_x64.exe")

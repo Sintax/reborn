@@ -20,7 +20,9 @@ the game already knows where the server is.
    - If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
    - When Windows asks **"Do you want to allow this app to make changes to your device?"**, click
      **Yes**. Setup needs this to talk to Windows Defender and install a Microsoft runtime.
-3. The first time, it asks for your player name: 1 to 24 letters, digits, `-` or `_`.
+3. The first time, it asks for your **player tag**: the name everyone sees for you in the game
+   (above your hero, in the scoreboard and in the server browser). Use 1 to 24 letters, digits,
+   `-` or `_`.
 4. A blue window shows each step and ends with **All done**. Press Enter to close it.
 
 What it does, in order:
