@@ -10,6 +10,13 @@ Please don't share this zip. Your key is yours, and the host can switch it off.
 
 - Battleborn installed through Steam (the last Steam version). It is about 45 GB.
 - Windows 10 or 11, 64-bit.
+- Microsoft's Visual C++ 2012 runtime (64-bit). Battleborn itself needs it. Steam installs it the
+  first time you start a game from Steam, but this setup never starts Battleborn from Steam. Without
+  it, Windows says **"MSVCP110.dll was not found"**. Install it once from Microsoft:
+  https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x64.exe
+  (Microsoft's list of these downloads: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist,
+  under "Visual Studio 2012 (VC++ 11.0) Update 4", the X64 file.) Run it, tick the box to agree,
+  click **Install**. No restart is needed.
 
 ## Step 1: Stop Windows Defender from deleting the loader (do this first)
 
