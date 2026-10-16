@@ -1,14 +1,18 @@
-# Battleborn Reborn installer for a friend's PC. Started by Install.bat; needs only Windows PowerShell.
+# Battleborn Reborn installer for a player's PC. Started by Install.bat; needs only Windows PowerShell.
 #
 # 1. Finds the Battleborn game folder (Steam's library list, or asks).
 # 2. Tells Windows Defender to leave that folder alone (and this folder, so a re-extract survives).
 # 3. Installs Microsoft's Visual C++ 2012 runtime (x64) if it is missing (Battleborn needs MSVCP110.dll).
 # 4. Copies the mod, the Steam loader and the player's settings into the game folder.
+#    A zip made for one friend carries their name and Steam identity; the standard zip asks for a
+#    name the first time and makes a Steam identity of the player's own.
 # 5. Puts a "Battleborn Reborn" shortcut on the desktop.
 #
-# Test switches (no admin needed): -GameDir <Win64 folder> -SkipDefender -SkipRuntime -NoShortcut -NoPause
+# Test switches (no admin needed): -GameDir <Win64 folder> -PlayerName <name> -SkipDefender
+#                                  -SkipRuntime -NoShortcut -NoPause
 param(
     [string]$GameDir = "",
+    [string]$PlayerName = "",
     [switch]$SkipDefender,
     [switch]$SkipRuntime,
     [switch]$NoShortcut,
@@ -38,6 +42,7 @@ function Test-Admin {
 if (-not (Test-Admin) -and -not ($SkipDefender -and $SkipRuntime)) {
     $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$($MyInvocation.MyCommand.Path)`"")
     if ($GameDir) { $argList += @("-GameDir", "`"$GameDir`"") }
+    if ($PlayerName) { $argList += @("-PlayerName", $PlayerName) }
     if ($SkipDefender) { $argList += "-SkipDefender" }
     if ($SkipRuntime) { $argList += "-SkipRuntime" }
     if ($NoShortcut) { $argList += "-NoShortcut" }
@@ -105,8 +110,10 @@ else {
         Say "If another antivirus is installed, add the game folder to its exceptions by hand (see the README)."
     }
 }
+# A zip with the loader carries ColdClientLoader.ini; the standard public zip has no loader at all.
+$ZipHasLoader = Test-Path (Join-Path $Files "ColdClientLoader.ini")
 $missing = @($LoaderFiles | Where-Object { -not (Test-Path (Join-Path $Files $_)) })
-if ($missing.Count -gt 0) {
+if ($ZipHasLoader -and $missing.Count -gt 0) {
     Fail ("Windows Defender removed " + ($missing -join ", ") + " before setup could protect it. " +
           "This setup folder is now excluded: delete it, extract the zip again into the same place, and run Install.bat again.")
 }
@@ -149,15 +156,46 @@ foreach ($src in Get-ChildItem -Path $Files -Recurse -File) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $b) | Out-Null
         Copy-Item -LiteralPath $dst -Destination $b -Force
     }
-    Copy-Item -LiteralPath $src.FullName -Destination $dst -Force
+    try { Copy-Item -LiteralPath $src.FullName -Destination $dst -Force }
+    catch {
+        Fail ("Could not copy $rel ($($_.Exception.Message)). If Windows Defender or another antivirus " +
+              "blocked it, add the game folder to its exclusions (see the README), then run Install.bat again.")
+    }
     Unblock-File -LiteralPath $dst -ErrorAction SilentlyContinue   # no "downloaded from the internet" warning
     $count++
 }
 Say "$count files copied."
 if (Test-Path $backup) { Say "Files that were replaced are saved in $backup" }
 
+# --- Player name: the standard zip has none, so ask once (an update keeps the name already set) --
+$userIni = Join-Path $Win64 "steam_settings\configs.user.ini"
+if (-not (Test-Path (Join-Path $Files "steam_settings\configs.user.ini")) -and -not (Test-Path $userIni)) {
+    Step "Your player name"
+    $name = $PlayerName.Trim()
+    while ($name -notmatch '^[A-Za-z0-9_-]{1,24}$') {
+        if ($name) { Say "Use 1 to 24 letters, digits, - or _ (no spaces)." }
+        $name = (Read-Host "Type the name other players will see").Trim()
+    }
+    # A Steam ID of the player's own, so two players never share one on the server. Friend zips and
+    # the server use the first 100000 numbers above the base; pick from the range after them.
+    $steamid = [int64]76561197960287930 + 100000 + (Get-Random -Minimum 0 -Maximum 900000)
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($userIni, "[user::general]`r`naccount_name=$name`r`naccount_steamid=$steamid`r`nlanguage=english`r`n", $utf8)
+    $playerTxt = Join-Path $Win64 "reborn-player.txt"
+    if (-not (Test-Path $playerTxt)) { [IO.File]::WriteAllText($playerTxt, "$name`r`n", $utf8) }
+    Say "You will play as $name."
+}
+
+$HaveLoader = Test-Path (Join-Path $Win64 "steamclient_loader_x64.exe")
+if (-not $HaveLoader) {
+    Write-Host ""
+    Write-Host "This download has no Steam loader. Ask the host for these files and put them in $Win64 :" -ForegroundColor Yellow
+    Say ("  " + (($LoaderFiles + "ColdClientLoader.ini") -join ", "))
+    Say "Then run Install.bat again to get the desktop shortcut."
+}
+
 # --- 5. Desktop shortcut ----------------------------------------------------------------------
-if (-not $NoShortcut) {
+if (-not $NoShortcut -and $HaveLoader) {
     Step "Desktop shortcut"
     $lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "Battleborn Reborn.lnk"
     $shell = New-Object -ComObject WScript.Shell
@@ -170,5 +208,6 @@ if (-not $NoShortcut) {
 }
 
 Write-Host ""
+if (-not $HaveLoader) { Write-Host "Mod installed. Add the Steam loader files (above) before playing." -ForegroundColor Green; Finish 0 }
 Write-Host "All done. Start the game with the 'Battleborn Reborn' shortcut (or steamclient_loader_x64.exe in the game folder)." -ForegroundColor Green
 Finish 0

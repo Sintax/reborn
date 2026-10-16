@@ -1,13 +1,16 @@
-"""Build the playtester download: dist/Reborn-Playtest-<commit>.zip.
+"""Build the player download: dist/Reborn-Playtest-<commit>.zip.
 
-    python -m tools.package                # mod files, instructions, log collector
+Every zip has a double-click installer (Install.bat) on top and the game-folder files under files/.
+
+    python -m tools.package                # mod files, guide, log collector, installer
     python -m tools.package --with-loader  # also the Steam loader files from your game folder
-                                               # (for a friend you send it to directly)
+                                               # (send it to players directly, never post it)
     python -m tools.package --friend Kaz   # everything one friend needs: loader, mod, their own
                                                # server key, player name and Steam identity, and a
                                                # guide (dist/friends/Reborn-Kaz-<commit>.zip)
 
-The zip unpacks into the game's Binaries\\Win64 folder. Instructions: docs/PLAYTEST.md.
+Install.bat copies files/ into the game's Binaries\\Win64 folder. Player guide: docs/PLAYER-SETUP.md
+(friends: docs/FRIEND-SETUP.md).
 """
 from __future__ import annotations
 
@@ -56,8 +59,8 @@ def commit() -> str:
 
 
 def readme(version: str) -> str:
-    doc = (config.REPO / "docs" / "PLAYTEST.md").read_text(encoding="utf-8")
-    return f"Battleborn Reborn playtest build {version}\r\n\r\n" + doc.replace("\n", "\r\n")
+    doc = (config.REPO / "docs" / "PLAYER-SETUP.md").read_text(encoding="utf-8")
+    return f"Battleborn Reborn {version}\r\n\r\n" + doc.replace("\n", "\r\n")
 
 
 def build_all() -> None:
@@ -69,22 +72,48 @@ def build_all() -> None:
             raise RuntimeError(f"build of {project.name} failed:\n{p.stdout}{p.stderr}")
 
 
-def make_zip(out: Path, version: str, with_loader: bool, win64: Path = config.WIN64,
-             mod_dll: Path = config.MOD_DLL, dxgi_dll: Path = DXGI_DLL) -> Path:
+def game_files(with_loader: bool, win64: Path = config.WIN64, mod_dll: Path = config.MOD_DLL,
+               dxgi_dll: Path = DXGI_DLL) -> dict[str, bytes]:
+    """Everything that goes into the player's Binaries\\Win64 folder, by path inside that folder."""
+    files = {
+        "dxgi.dll": dxgi_dll.read_bytes(),
+        "reborn.dll": mod_dll.read_bytes(),
+        "CollectLogs.bat": COLLECT_LOGS_BAT.replace("\n", "\r\n").encode(),
+        # Lets the player reach servers on the internet (see launch.CONFIGS_MAIN_INI); no Steam files.
+        "steam_settings/configs.main.ini": launch.CONFIGS_MAIN_INI.encode(),
+    }
+    if with_loader:
+        for f in (*launch.LOADER_FILES, LOADER_INI):
+            if not (win64 / f).exists():
+                raise RuntimeError(f"{f} not found in {win64}")
+        for f in launch.LOADER_FILES:
+            files[f] = (win64 / f).read_bytes()
+        # The loader starts the game with the mod's console minimized: just the game window shows.
+        ini = (win64 / LOADER_INI).read_text(encoding="utf-8").replace("\r\n", "\n")
+        files[LOADER_INI] = with_min_console(ini).replace("\n", "\r\n").encode()
+    return files
+
+
+def _installer_zip(out: Path, files: dict[str, bytes], guide_name: str, guide: str) -> Path:
+    """Layout for the double-click installer: Install.bat/.ps1 and the guide on top, and everything
+    that belongs in the game's Win64 folder under files/ (Install.ps1 copies it there)."""
     out.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(dxgi_dll, "dxgi.dll")
-        z.write(mod_dll, "reborn.dll")
-        z.writestr("README-PLAYTEST.txt", readme(version))
-        z.writestr("CollectLogs.bat", COLLECT_LOGS_BAT.replace("\n", "\r\n"))
-        # Lets the player reach servers on the internet (see launch.CONFIGS_MAIN_INI); no Steam files.
-        z.writestr("steam_settings/configs.main.ini", launch.CONFIGS_MAIN_INI)
-        if with_loader:
-            for f in (*launch.LOADER_FILES, LOADER_INI):
-                if not (win64 / f).exists():
-                    raise RuntimeError(f"{f} not found in {win64}")
-                z.write(win64 / f, f)
+        for script in ("Install.bat", "Install.ps1"):
+            text = (FRIEND_FILES / script).read_text(encoding="ascii").replace("\r\n", "\n")
+            z.writestr(script, text.replace("\n", "\r\n"))
+        z.writestr(guide_name, guide)
+        for name, data in files.items():
+            z.writestr("files/" + name, data)
     return out
+
+
+def make_zip(out: Path, version: str, with_loader: bool, win64: Path = config.WIN64,
+             mod_dll: Path = config.MOD_DLL, dxgi_dll: Path = DXGI_DLL) -> Path:
+    """The standard player download. Install.bat asks for the player's name and makes their own
+    Steam identity on their PC. Without the loader it is fine to hand out widely; with it, send it
+    to players directly."""
+    return _installer_zip(out, game_files(with_loader, win64, mod_dll, dxgi_dll), "README.txt", readme(version))
 
 
 def check_friend_name(name: str) -> str:
@@ -132,50 +161,16 @@ def make_friend_zip(out: Path, version: str, name: str, key: str, win64: Path = 
     server's address (built in from LocalSettings.hpp), so no address travels as text. Send it to
     that friend only: it carries the Steam loader and their personal server key."""
     check_friend_name(name)
-    make_zip(out, version, True, win64, mod_dll, dxgi_dll)
-    user_ini = (f"[user::general]\r\naccount_name={name}\r\naccount_steamid={friend_steamid(name)}\r\n"
-                "language=english\r\n")
-    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("steam_settings/configs.user.ini", user_ini)
-        z.writestr("reborn-key.txt", key + "\r\n")
-        z.writestr("reborn-player.txt", name + "\r\n")
-        z.writestr(f"README-{name}.txt", friend_readme(name, version))
-    # The general playtest guide is replaced by the friend's own guide.
-    _drop(out, "README-PLAYTEST.txt")
-    # Their loader starts the game with the mod's console minimized: just the game window shows.
-    _drop(out, LOADER_INI)
-    ini = (win64 / LOADER_INI).read_text(encoding="utf-8")
-    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
-        z.writestr(LOADER_INI, with_min_console(ini.replace("\r\n", "\n")).replace("\n", "\r\n"))
-    # Layout for the double-click installer: Install.bat/.ps1 and the guide on top, and everything
-    # that belongs in the game's Win64 folder under files/ (Install.ps1 copies it there).
-    _nest_under(out, "files/", keep={f"README-{name}.txt"})
-    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
-        for script in ("Install.bat", "Install.ps1"):
-            text = (FRIEND_FILES / script).read_text(encoding="ascii").replace("\r\n", "\n")
-            z.writestr(script, text.replace("\n", "\r\n"))
-    return out
+    files = game_files(True, win64, mod_dll, dxgi_dll)
+    files["steam_settings/configs.user.ini"] = (
+        f"[user::general]\r\naccount_name={name}\r\naccount_steamid={friend_steamid(name)}\r\n"
+        "language=english\r\n").encode()
+    files["reborn-key.txt"] = (key + "\r\n").encode()
+    files["reborn-player.txt"] = (name + "\r\n").encode()
+    return _installer_zip(out, files, f"README-{name}.txt", friend_readme(name, version))
 
 
 FRIEND_FILES = config.PKG / "friend_files"
-
-
-def _nest_under(zip_path: Path, prefix: str, keep: set[str]) -> None:
-    tmp = zip_path.with_name(zip_path.name + ".tmp")
-    with zipfile.ZipFile(zip_path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
-        for item in src.infolist():
-            name = item.filename if item.filename in keep else prefix + item.filename
-            dst.writestr(name, src.read(item.filename))
-    tmp.replace(zip_path)
-
-
-def _drop(zip_path: Path, member: str) -> None:
-    tmp = zip_path.with_name(zip_path.name + ".tmp")
-    with zipfile.ZipFile(zip_path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
-        for item in src.infolist():
-            if item.filename != member:
-                dst.writestr(item, src.read(item.filename))
-    tmp.replace(zip_path)
 
 
 def main(argv: list[str] | None = None) -> int:

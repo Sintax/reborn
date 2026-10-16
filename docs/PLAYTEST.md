@@ -19,12 +19,11 @@ When they do, the logs tell us why, so please send them.
 
 ### Install (once, and again for every new build)
 
-1. In Steam, right-click Battleborn, then Manage, then Browse local files.
-2. Open `Binaries`, then `Win64`. You should see `Battleborn.exe` there.
-3. Unzip everything from the playtest zip into that `Win64` folder. Say yes to replacing
-   files.
-4. If Windows Defender or your antivirus removes `steamclient_loader_x64.exe`, allow it.
-   Loaders like this are often flagged even though they are harmless.
+Extract the zip, then double-click `Install.bat` in the extracted folder. It finds the game,
+tells Windows Defender to leave the game folder alone, installs the Visual C++ 2012 runtime if
+missing, copies the mod in, asks for your player name the first time, and puts a
+**Battleborn Reborn** shortcut on the desktop. The zip's `README.txt` (docs/PLAYER-SETUP.md) has
+the full steps and a manual way.
 
 ### Play
 
@@ -135,9 +134,11 @@ The server listens on UDP port 7777. Pick one:
 python -m tools.package
 ```
 
-This builds the mod and writes `dist/Reborn-Playtest-<commit>.zip`. Add `--with-loader`
-to also include the Steam loader files from your game folder; send that version to the
-friend directly rather than posting it publicly.
+This builds the mod and writes `dist/Reborn-Playtest-<commit>.zip`: `Install.bat` and the guide
+on top, the game-folder files under `files/`. Add `--with-loader` to also include the Steam loader
+files from your game folder (started with the mod's console minimized); send that version to
+players directly rather than posting it publicly. A mod built with a `LocalSettings.hpp` server
+address carries that address inside `reborn.dll`, so share such zips privately too.
 
 ### Read a friend's logs
 
