@@ -8,8 +8,7 @@ public class RosterRandomTests
 {
     static readonly DateTime T0 = new(2026, 10, 15, 12, 0, 0, DateTimeKind.Utc);
 
-    [Fact]
-    public void Random_hero_is_asked_for_on_that_game_servers_command_line_only()
+    static (ServerRoster, FakeLauncher) MakeTwo()
     {
         var launcher = new FakeLauncher();
         var roster = new ServerRoster(new[]
@@ -19,8 +18,28 @@ public class RosterRandomTests
             },
             launcher, new[] { 7777, 7778 }, "localhost:5000") { PublicIp = "203.0.113.10" };
         roster.Reconcile(T0);
-        Assert.EndsWith(" -rbrandomhero", launcher.Launched[0].CommandLine);
-        Assert.DoesNotContain("rbrandomhero", launcher.Launched[1].CommandLine);
+        return (roster, launcher);
+    }
+
+    static string TokenOf(ServerRoster roster, string name) => roster.Instances.Single(i => i.Config.InstanceName == name).MyGuid;
+
+    [Fact]
+    public void Random_hero_is_set_for_that_roster_game_only()
+    {
+        var (roster, _) = MakeTwo();
+        Assert.True(roster.ConfigFor(TokenOf(roster, "Incursion vs Bots"))!.RandomHero);
+        Assert.False(roster.ConfigFor(TokenOf(roster, "Plain"))!.RandomHero);
+    }
+
+    [Fact]
+    public void RandomHero_reaches_the_server_through_server_config_not_the_command_line()
+    {
+        var (roster, launcher) = MakeTwo();
+        string token = TokenOf(roster, "Incursion vs Bots");
+        Assert.True(roster.ConfigFor(token)!.RandomHero);
+        var launched = launcher.Launched.Single(l => l.CommandLine.Contains("-rbcoordinatorkey=" + token));
+        Assert.DoesNotContain("-rbrandomhero", launched.CommandLine);
+        Assert.All(launcher.Launched, l => Assert.DoesNotContain("rbrandomhero", l.CommandLine));
     }
 
     [Fact]

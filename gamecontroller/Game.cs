@@ -159,6 +159,12 @@ namespace gamecontroller
         // UDP port the server should listen on (Init.cpp reads "port").
         public int Port { get; set; } = 7777;
 
+        // Every player gets a hero picked by the timer, whatever they choose (Init.cpp reads "randomHero").
+        public bool RandomHero { get; set; }
+
+        // The game's draft-style value, e.g. "BanPick_5v5"; empty means Quick Select (Init.cpp reads "draftStyle").
+        public string DraftStyle { get; set; } = "";
+
         public List<PlayerConfig> PlayerConfigs { get; set; }
 
         // A roster server: no lobby, so no per-player picks.

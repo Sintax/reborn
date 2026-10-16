@@ -10,6 +10,7 @@ namespace gamecontroller.Models
 		public int BotsTeamA { get; set; }
 		public int BotsTeamB { get; set; }
 		public string PlayerName { get; set; } = "";    // the requester's display name, for the log
+		public string DraftStyle { get; set; } = DraftStyles.QuickSelect;   // one of DraftStyles.Names; Versus only
 	}
 
 	// appsettings.json "RequestedGame": when an on-request server is shut down.
