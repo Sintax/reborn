@@ -54,7 +54,11 @@ if (-not (Test-Path (Join-Path $Files "reborn.dll"))) {
 # --- 1. Find the game folder ------------------------------------------------------------------
 Step "Finding Battleborn"
 function Find-Win64 {
+    # The Steam loader rewrites Steam's registry location to its own folder (the game's Win64) while
+    # it runs, so after the first game start the registry may point there: also try Steam's default
+    # folders, and accept a registry path that is itself the game folder.
     $libs = New-Object System.Collections.Generic.List[string]
+    foreach ($d in @("${env:ProgramFiles(x86)}\Steam", "$env:ProgramFiles\Steam")) { if ($d) { $libs.Add($d) } }
     foreach ($key in @("HKCU:\Software\Valve\Steam", "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam", "HKLM:\SOFTWARE\Valve\Steam")) {
         foreach ($name in @("SteamPath", "InstallPath")) {
             try { $p = (Get-ItemProperty -Path $key -Name $name -ErrorAction Stop).$name; if ($p) { $libs.Add(($p -replace "/", "\")) } } catch {}
@@ -67,6 +71,7 @@ function Find-Win64 {
         }
     }
     foreach ($lib in ($libs | Select-Object -Unique)) {
+        if (Test-Path (Join-Path $lib "Battleborn.exe")) { return $lib }
         $w = Join-Path $lib "steamapps\common\Battleborn\Binaries\Win64"
         if (Test-Path (Join-Path $w "Battleborn.exe")) { return $w }
     }
