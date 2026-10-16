@@ -386,6 +386,32 @@ namespace Autopilot {
                 SetPhase(Phase::MenuReady);
                 break;
             }
+            if (opt.nativeSelect) {
+                // Spike: click the game's own grid like a person would, once the movie is up.
+                static int clicks = 0;
+                UPoplarCharacterSelectGFxMovie* mv = pc ? pc->CharacterSelectMovie : nullptr;
+                if (mv && mv->bMovieAndManagerReady && clicks < 3 && g_phaseTime > 8.f + clicks * 4.f) {
+                    // The grid follows the game's own hero list (the replicated MasterCharacterList).
+                    int cell = -1;
+                    std::string wanted = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[CharacterIndex(opt.character)]);
+                    APoplarGameReplicationInfo* gri = pc->WorldInfo ? reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI) : nullptr;
+                    APoplarCharacterSelectManager* m = gri ? gri->CharacterSelectManager : nullptr;
+                    std::string list;
+                    for (int i = 0; m && i < 30; i++) {
+                        UPoplarPlayerNameIdentifierDefinition* id = m->MasterCharacterList[i].NameID;
+                        std::string cls = (id && id->CharacterClassId) ? id->CharacterClassId->ClassName.ToString() : "none";
+                        list += std::to_string(i) + "=" + cls + " ";
+                        if (cls == wanted && cell < 0) cell = i;
+                    }
+                    if (clicks == 0) std::printf("[CHARSEL] autopilot: master list (want %s): %s\n", wanted.c_str(), list.c_str());
+                    if (cell < 0) cell = 0;
+                    std::printf("[CHARSEL] autopilot: native click %d on cell %d (ui state before %d)\n", clicks + 1, cell, (int)mv->PlayerUIState[0]);
+                    mv->extRequestSelection(0, cell);
+                    clicks++;
+                }
+                if (pc && pc->Pawn && g_phaseTime > 5.f) SetPhase(Phase::Playing);
+                break;
+            }
             if (pc && g_phaseTime > 5.f && !Globals::CharacterSelectHasLockedIn) {
                 Overlay::LockInCharacter(CharacterIndex(opt.character));
                 g_lockInTime = g_phaseTime;

@@ -15,7 +15,7 @@ from . import config
 GAME_BASE_ARGS = ["-windowed", "-ResX=960", "-ResY=540", "-nosound", "-nomoviestartup", "-NOSPLASH"]
 # Spike S3: three instances at 960x540 push this laptop's free RAM under 2 GB, so in multiplayer
 # the server renders nothing and clients run small.
-CLIENT_RES = ["-ResX=640", "-ResY=360"]
+CLIENT_RES = ["-ResX=1280", "-ResY=720"]
 
 
 def base_args(role: str) -> list[str]:
