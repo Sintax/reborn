@@ -5,7 +5,8 @@ namespace gamecontroller.Singletons
 	// One game server the coordinator keeps running, as written in appsettings.json.
 	// "RandomHero": true makes that game server give every player a random hero, whatever they pick
 	// (sent to the server in its server-config, not on its command line).
-	public record RosterSlot(string Name, string MapMode, string ServerStartupCommand, int MaxNumPlayers, bool RandomHero = false);
+	public record RosterSlot(string Name, string MapMode, string ServerStartupCommand, int MaxNumPlayers, bool RandomHero = false,
+		string DraftStyle = DraftStyles.QuickSelect);
 
 	// Starts and watches Serverborn.exe processes; swapped for a fake in tests.
 	public interface IServerLauncher
@@ -72,15 +73,18 @@ namespace gamecontroller.Singletons
 					int port = _ports.FirstOrDefault(p => !_instances.Any(i => i.Port == p));
 					if (port == 0) break;
 
+					// A draft-style name in appsettings that is not a real one is ignored (Quick Select).
+					string draftValue = DraftValueFor(slot.MapMode, slot.DraftStyle, RosterTeamSize(slot)) ?? "";
 					var instance = new GameInstance
 					{
 						Slot = slot,
 						Port = port,
 						CreationTime = now,
 						LastServerCheckIn = now,
-						Config = new GameCreationConfig(slot.Name, slot.MapMode, slot.ServerStartupCommand, slot.MaxNumPlayers)
+						Config = new GameCreationConfig(slot.Name, slot.MapMode, WithDraftStyle(slot.ServerStartupCommand, draftValue), slot.MaxNumPlayers)
 						{
 							RandomHero = slot.RandomHero,
+							DraftStyle = draftValue,
 						},
 						ConnectionString = "open " + PublicIp + ":" + port,
 					};
@@ -94,6 +98,27 @@ namespace gamecontroller.Singletons
 			"-windowed -nosound -nomoviestartup -NOSPLASH -nullrhi -rbinstance=" + instanceName
 			+ " -rbcoordinator=" + _coordinatorBase + " -rbcoordinatorkey=" + instance.MyGuid;
 
+		// The game's draft-style value for a server: "" for Quick Select (the game's own default) and for
+		// Story/Operations games, which have no draft; null when the name is not a draft style.
+		private static string? DraftValueFor(string mapMode, string? style, int teamSize)
+		{
+			if (IsLateJoinMode(mapMode)) return "";
+			string name = string.IsNullOrEmpty(style) ? DraftStyles.QuickSelect : style;
+			if (name == DraftStyles.QuickSelect) return "";
+			return DraftStyles.GameValue(name, teamSize);
+		}
+
+		private static string WithDraftStyle(string command, string draftValue) =>
+			draftValue == "" ? command : command + "?DraftStyle=" + draftValue;
+
+		// A roster game's bots are written into its map command in appsettings, so count them from there.
+		private static readonly System.Text.RegularExpressions.Regex BotsOption = new(@"\?SpawnBotsTeam[AB]=(\d+)");
+		private static int RosterTeamSize(RosterSlot slot)
+		{
+			int bots = BotsOption.Matches(slot.ServerStartupCommand).Sum(m => int.Parse(m.Groups[1].Value));
+			return DraftStyles.TeamSize(slot.MaxNumPlayers, bots, 0);
+		}
+
 		// A game a player asked for from the server browser. It is never relaunched; Alive() retires it.
 		public StartResult StartRequested(GameRequest req, string keyLabel, DateTime now)
 		{
@@ -102,11 +127,15 @@ namespace gamecontroller.Singletons
 			int maxPlayers = lateJoin ? 5 : 10;
 			if (req.Players < 1 || req.Players > maxPlayers) return StartResult.Refused($"Players must be 1 to {maxPlayers}.");
 			if (req.BotsTeamA < 0 || req.BotsTeamA > 5 || req.BotsTeamB < 0 || req.BotsTeamB > 5) return StartResult.Refused("Bots per team must be 0 to 5.");
+			string? draftValue = DraftValueFor(req.MapMode ?? "", req.DraftStyle,
+				DraftStyles.TeamSize(req.Players, req.BotsTeamA, req.BotsTeamB));
+			if (draftValue == null) return StartResult.Refused("That draft style is not allowed.");
 			if (PublicIp == null) return StartResult.Refused("The server is still finding its public address. Try again in a moment.");
 
 			string command = req.MapCommand!;
 			if (!lateJoin && req.BotsTeamA + req.BotsTeamB > 0)
 				command += "?SpawnBotsTeamA=" + req.BotsTeamA + "?SpawnBotsTeamB=" + req.BotsTeamB;
+			command = WithDraftStyle(command, draftValue);
 
 			lock (_lock)
 			{
@@ -120,7 +149,7 @@ namespace gamecontroller.Singletons
 					Port = port,
 					CreationTime = now,
 					LastServerCheckIn = now,
-					Config = new GameCreationConfig(req.Name, req.MapMode!, command, req.Players),
+					Config = new GameCreationConfig(req.Name, req.MapMode!, command, req.Players) { DraftStyle = draftValue },
 					ConnectionString = "open " + PublicIp + ":" + port,
 				};
 				string name = "rb-req-" + port;
