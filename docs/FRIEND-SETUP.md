@@ -10,71 +10,81 @@ Please don't share this zip. Your key is yours, and the host can switch it off.
 
 - Battleborn installed through Steam (the last Steam version). It is about 45 GB.
 - Windows 10 or 11, 64-bit.
-- Microsoft's Visual C++ 2012 runtime (64-bit). Battleborn itself needs it. Steam installs it the
-  first time you start a game from Steam, but this setup never starts Battleborn from Steam. Without
-  it, Windows says **"MSVCP110.dll was not found"**. Install it once from Microsoft:
-  https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x64.exe
-  (Microsoft's list of these downloads: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist,
-  under "Visual Studio 2012 (VC++ 11.0) Update 4", the X64 file.) Run it, tick the box to agree,
-  click **Install**. No restart is needed.
 
-## Step 1: Stop Windows Defender from deleting the loader (do this first)
+## Easy setup: let Install.bat do it
 
-The game starts through a small program called `steamclient_loader_x64.exe`, because
-Battleborn's own online service is gone. Programs like it are often flagged as a threat even
-though they are harmless, and Windows Defender may delete it the moment you unzip it. Telling
-Defender to leave the game's folder alone prevents that.
+1. Right-click this zip and choose **Extract All**, then **Extract**. (Do not run anything from
+   inside the zip without extracting it.)
+2. In the extracted folder, double-click **`Install.bat`**.
+   - If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
+   - When Windows asks **"Do you want to allow this app to make changes to your device?"**, click
+     **Yes**. Setup needs this to talk to Windows Defender and install a Microsoft runtime.
+3. A blue window shows each step and ends with **All done**. Press Enter to close it.
 
-1. Find the folder (see Step 2, points 1 to 3) and keep that window open.
-2. Open the Start menu, type **Windows Security**, and open it.
-3. Click **Virus & threat protection**.
-4. Under **Virus & threat protection settings**, click **Manage settings**.
-5. Scroll down to **Exclusions** and click **Add or remove exclusions**. Click **Yes** if
-   Windows asks for permission.
-6. Click **Add an exclusion**, choose **Folder**, and pick the game's `Win64` folder from Step 2.
+What it does, in order:
 
-Defender will now ignore that one folder only. Everything else stays protected.
+1. Finds Battleborn's game folder through Steam. If it cannot, it asks you to pick the folder that
+   contains `Battleborn.exe` (Steam > Battleborn > Manage > Browse local files > Binaries > Win64).
+2. Tells Windows Defender to skip that one folder (and the setup folder), so it stops deleting the
+   loader. Everything else on your PC stays protected.
+3. Installs Microsoft's Visual C++ 2012 runtime (64-bit) if it is missing. Battleborn needs it
+   (without it Windows says **"MSVCP110.dll was not found"**). It downloads straight from Microsoft
+   and only runs the file if Microsoft's signature checks out.
+4. Copies the mod, the loader and your settings into the game folder. Any file it replaces is
+   saved first in `Binaries\Win64\rb_backups`.
+5. Puts a **Battleborn Reborn** shortcut on your desktop.
 
-**If Defender already removed the loader:**
+If it says Defender removed a file before setup could protect it, delete the extracted folder,
+extract the zip again into the same place, and run `Install.bat` again.
 
-1. In Windows Security, click **Virus & threat protection**, then **Protection history**.
-2. Click the entry that mentions `steamclient_loader_x64.exe` (or `steamclient64.dll`).
-3. Click **Actions**, then **Restore** (or **Allow on device**).
-4. If it does not come back, add the exclusion above and unzip this zip into the folder again.
+## Manual setup (only if Install.bat cannot run)
 
-**If Windows says "Windows protected your PC"** the first time you start the loader, click
-**More info**, then **Run anyway**. That only happens once.
+**A. Visual C++ 2012 runtime.** Download and run Microsoft's installer, tick the box to agree,
+click **Install**:
+https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x64.exe
+(Microsoft's list: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist, under
+"Visual Studio 2012 (VC++ 11.0) Update 4", the X64 file.)
 
-## Step 2: Where to copy the files
+**B. Find the game folder.** In Steam, right-click **Battleborn**, then **Manage**, then **Browse
+local files**. Open `Binaries`, then `Win64`. You are in the right place when you see
+`Battleborn.exe`.
 
-1. Open Steam and go to your Library.
-2. Right-click **Battleborn**, then **Manage**, then **Browse local files**.
-3. Open the `Binaries` folder, then the `Win64` folder. You are in the right place when you can
-   see `Battleborn.exe`.
-4. Copy everything from this zip into that `Win64` folder, including the `steam_settings`
-   folder. If Windows asks about replacing files, choose **Replace the files in the destination**.
+**C. Stop Windows Defender from deleting the loader.** Do this before copying.
 
-When you are done, `Win64` contains (among the game's own files):
+1. Open the Start menu, type **Windows Security**, and open it.
+2. Click **Virus & threat protection**.
+3. Under **Virus & threat protection settings**, click **Manage settings**.
+4. Scroll down to **Exclusions** and click **Add or remove exclusions**. Click **Yes** if Windows
+   asks for permission.
+5. Click **Add an exclusion**, choose **Folder**, and pick the `Win64` folder from B.
+
+If Defender already removed the loader: in Windows Security, open **Virus & threat protection**,
+then **Protection history**, click the entry that mentions `steamclient_loader_x64.exe` (or
+`steamclient64.dll`), then **Actions** and **Restore** (or **Allow on device**).
+
+**D. Copy the files.** Copy everything inside this zip's `files` folder (not the folder itself)
+into `Win64`, including the `steam_settings` folder. If Windows asks about replacing files, choose
+**Replace the files in the destination**. Afterwards `Win64` contains, among the game's own files:
 
 - `steamclient_loader_x64.exe`, `steamclient.dll`, `steamclient64.dll`, `ColdClientLoader.ini`
 - `dxgi.dll` and `reborn.dll` (the mod)
 - `reborn-key.txt` (your server key) and `reborn-player.txt` (your player name)
 - `steam_settings` (a folder with two small settings files)
-- `CollectLogs.bat` and this guide
+- `CollectLogs.bat`
 
-## Step 3: Start the game
+## Start the game
 
-Double-click **`steamclient_loader_x64.exe`** in the `Win64` folder.
+Double-click the **Battleborn Reborn** shortcut on your desktop (or `steamclient_loader_x64.exe`
+in the `Win64` folder).
 
 - Do not start Battleborn from Steam. It will not go online without the loader.
 - The mod also opens a black text window, which starts minimized on the taskbar so only the game
   shows. Leave it running; that is the mod at work. It closes with the game.
 - If Windows Firewall asks whether to allow Battleborn, click **Allow**.
+- If Windows says **"Windows protected your PC"** the first time, click **More info**, then
+  **Run anyway**. That only happens once.
 
-Tip: right-click the loader, then **Send to**, then **Desktop (create shortcut)**, to start it
-from your desktop next time.
-
-## Step 4: Play
+## Play
 
 1. At the main menu, choose **Story**, **Operations** or **Versus**. The server browser opens and
    lists the games running on the server.
@@ -95,5 +105,4 @@ If the list stays empty after **Refresh Server Browser**, the server may be down
 
 ## Updates
 
-When the host sends a new zip, copy its files into the same `Win64` folder again and replace
-the old ones.
+When the host sends a new zip, extract it and run its `Install.bat` again.

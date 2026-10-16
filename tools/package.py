@@ -147,7 +147,26 @@ def make_friend_zip(out: Path, version: str, name: str, key: str, win64: Path = 
     ini = (win64 / LOADER_INI).read_text(encoding="utf-8")
     with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
         z.writestr(LOADER_INI, with_min_console(ini.replace("\r\n", "\n")).replace("\n", "\r\n"))
+    # Layout for the double-click installer: Install.bat/.ps1 and the guide on top, and everything
+    # that belongs in the game's Win64 folder under files/ (Install.ps1 copies it there).
+    _nest_under(out, "files/", keep={f"README-{name}.txt"})
+    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
+        for script in ("Install.bat", "Install.ps1"):
+            text = (FRIEND_FILES / script).read_text(encoding="ascii").replace("\r\n", "\n")
+            z.writestr(script, text.replace("\n", "\r\n"))
     return out
+
+
+FRIEND_FILES = config.PKG / "friend_files"
+
+
+def _nest_under(zip_path: Path, prefix: str, keep: set[str]) -> None:
+    tmp = zip_path.with_name(zip_path.name + ".tmp")
+    with zipfile.ZipFile(zip_path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            name = item.filename if item.filename in keep else prefix + item.filename
+            dst.writestr(name, src.read(item.filename))
+    tmp.replace(zip_path)
 
 
 def _drop(zip_path: Path, member: str) -> None:
