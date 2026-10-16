@@ -14,6 +14,7 @@
 #include "Autopilot.hpp"
 #include "GameState.hpp"
 #include "LaunchOptions.hpp"
+#include "CharSelect.hpp"
 
 namespace Hooks {
     SafetyHookInline ProcessRemoteFunction;
@@ -1258,50 +1259,23 @@ namespace Hooks {
             }
         }
 
-        // [CHARSEL] spike: the game's own character-select phase, once a second when it changes.
+        // [CHARSEL]: the game's own character-select phase (see CharSelect.cpp), checked once a second.
         {
             static float sinceCharSel = 0.0f;
             sinceCharSel += DeltaTime;
             if (sinceCharSel >= 1.0f) {
                 sinceCharSel = 0.0f;
-                APoplarGameReplicationInfo* gri = nullptr;
-                for (APoplarGameReplicationInfo* g : SDKUtils::GetAllOfClass<APoplarGameReplicationInfo>())
-                    if (g && !(g->ObjectFlags & 0x2000000000000000ull) && g->Outer && g->Outer->IsA(ULevel::StaticClass())) gri = g;
-                char line[700] = "";
-                if (gri) {
-                    APoplarCharacterSelectManager* m = gri->CharacterSelectManager;
-                    int n = snprintf(line, sizeof line, "[CHARSEL] %s: match %d tournament %u manager %s",
-                        Globals::amServer ? "server" : "client", gri->CurrentMatchState.State, gri->CurrentMatchState.bTournamentMode,
-                        m ? "yes" : "none");
-                    if (m && !(m->ObjectFlags & 0x2000000000000000ull)) {
-                        n += snprintf(line + n, sizeof line - n, " state %d style %s phase#%d %s time %.0f teamA %d/%d+%dbots teamB %d/%d+%dbots",
-                            (int)m->CharacterSelectState, m->SelectionStyleDefinition ? m->SelectionStyleDefinition->GetName().c_str() : "none",
-                            m->CurrentPhaseIndex, m->CurrentPhase ? m->CurrentPhase->GetName().c_str() : "none", m->TimeRemainingInCurrentPhase,
-                            m->Teams[0].NumPlayers, m->Teams[0].NumExpectedPlayers, m->Teams[0].NumBots,
-                            m->Teams[1].NumPlayers, m->Teams[1].NumExpectedPlayers, m->Teams[1].NumBots);
-                    }
-                    if (!Globals::amServer) {
-                        APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
-                        if (pc && !(pc->ObjectFlags & 0x2000000000000000ull)) {
-                            UPoplarCharacterSelectGFxMovie* mv = pc->CharacterSelectMovie;
-                            APoplarPlayerReplicationInfo* pri = reinterpret_cast<APoplarPlayerReplicationInfo*>(pc->PlayerReplicationInfo);
-                            n += snprintf(line + n, sizeof line - n, " | movie state %d movie %s ready %u ui %d pri-sel %d pawn %s",
-                                (int)pc->CurrentCharacterSelectMovieState, mv ? "yes" : "no", mv ? mv->bMovieAndManagerReady : 0,
-                                mv ? (int)mv->PlayerUIState[0] : -1, pri ? (int)pri->CharacterSelectionState : -1, pc->Pawn ? "yes" : "no");
-                        }
-                    }
-                }
-                static std::string last;
-                if (*line && last != line) { printf("%s\n", line); last = line; }
-                // Spike: once the game's own select phase is complete, hand each player to the mod's
+                CharSelect::LogState();
+                // Once the game's own select phase is complete, hand each player to the mod's
                 // spawn helper (it makes the client load the hero's package, then spawns).
                 static int lastSelState = -1;
-                if (Globals::amServer && LaunchOptions::Get().nativeSelect && gri && gri->CharacterSelectManager) {
+                APoplarGameReplicationInfo* gri = Globals::amServer ? CharSelect::LevelGRI() : nullptr;
+                if (gri && gri->CharacterSelectManager) {
                     int s = (int)gri->CharacterSelectManager->CharacterSelectState;
                     if (s == 2 && lastSelState != 2) {
                         for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
                             if (!sp.Connection) continue;
-                            printf("[CHARSEL] spike: select phase complete; spawning %s (picked %s)\n", sp.Name.c_str(),
+                            printf("[CHARSEL] select phase complete; spawning %s (picked %s)\n", sp.Name.c_str(),
                                 sp.Character ? sp.Character->GetName().c_str() : "none");
                             UNetConnection* c = sp.Connection;
                             Engine::RunOnGameThreadAfter(0.5f, [c] { SpawnPawnForServerPlayer(c, 1); });
@@ -1568,13 +1542,8 @@ namespace Hooks {
 
                             serverPlayer.shouldReplicateTo = true;
 
-                            // Nothing else spawns this player's pawn (see SpawnPawnForServerPlayer). Give the
-                            // controller one tick to settle after PostLogin, then spawn it ourselves.
-                            UNetConnection* spawnConnection = serverPlayer.Connection;
-                            if (LaunchOptions::Get().nativeSelect)
-                                printf("[CHARSEL] spike: not spawning LAN Player ourselves; leaving it to the game's character select\n");
-                            else
-                                Engine::RunOnGameThreadAfter(1.0f, [spawnConnection] { SpawnPawnForServerPlayer(spawnConnection, 1); });
+                            // The pawn is spawned once the game's select phase completes (the [CHARSEL]
+                            // block in this tick).
                         }
                     }
                 }
@@ -2509,6 +2478,8 @@ namespace Hooks {
             a1->TeamMinSizeForStart = ServerSettings::TeamMinSizeForStart;
 
             a1->EffectiveNumPlayers = ServerSettings::NumPlayersToStart;
+
+            CharSelect::ApplyServerRules(LaunchOptions::Get().randomHero);
 
             ServerNetworking::InitListen();
             GameState::SetListening(true);

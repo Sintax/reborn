@@ -1,6 +1,7 @@
 #include "Init.hpp"
 #include "LaunchOptions.hpp"
 #include "Diagnostics.hpp"
+#include "CharSelectRules.hpp"
 
 namespace Init {
     void Globals() {
@@ -201,9 +202,13 @@ namespace Init {
         {
             if (!ServerSettings::amRunningWithGameCoordinator && !opt.serverMap.empty()) {
                 ServerSettings::MapString = _wcsdup((L"open " + opt.serverMap).c_str());
-                std::printf("[OPTIONS] server map %ls\n", ServerSettings::MapString);
             }
             if (opt.players > 0) ServerSettings::NumPlayersToStart = opt.players;
         }
+
+        // Every networked game runs the game's own character-select phase, whichever way the map
+        // was chosen (default, -rbservermap or the matchmaking service).
+        ServerSettings::MapString = _wcsdup(CharSelect::WithTournamentMode(ServerSettings::MapString).c_str());
+        std::printf("[OPTIONS] server map %ls\n", ServerSettings::MapString);
     }
 }

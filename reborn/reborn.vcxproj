@@ -164,6 +164,8 @@
     <ClInclude Include="LocalHost.hpp" />
     <ClInclude Include="StartGameRequest.hpp" />
     <ClInclude Include="StartKey.hpp" />
+    <ClInclude Include="CharSelect.hpp" />
+    <ClInclude Include="CharSelectRules.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BB\GameDefines.cpp" />
@@ -207,6 +209,7 @@
     <ClCompile Include="Combat.cpp" />
     <ClCompile Include="LocalHost.cpp" />
     <ClCompile Include="StartKey.cpp" />
+    <ClCompile Include="CharSelect.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

@@ -39,8 +39,7 @@ namespace Autopilot {
         bool g_leftMenu = false;          // Launching: the world has left the menu at least once
         bool g_startupPending = false;    // startup finished; pick a save and continue on the next tick
         float g_possessionLogTimer = 0.f; // client: seconds until the next possession census
-        float g_lockInTime = 0.f;         // CharacterSelect: phase time of the last lock-in
-        int g_lockInTries = 0;            // CharacterSelect: lock-ins sent so far (0 = none yet)
+        int g_selectClicks = 0;           // CharacterSelect: clicks sent on the game's hero grid so far
         const float kMenuGrace = 2.f;     // menu must hold this long before we call it a real return
         const float kLaunchTimeout = 90.f;
 
@@ -53,7 +52,7 @@ namespace Autopilot {
             g_menuTime = 0.f;
             g_leftMenu = false;
             if (p == Phase::Playing) g_hadPawn = false;
-            if (p == Phase::CharacterSelect) { g_lockInTime = 0.f; g_lockInTries = 0; }
+            if (p == Phase::CharacterSelect) g_selectClicks = 0;
             std::printf("[AUTOPILOT] phase %s\n", PhaseName());
         }
 
@@ -386,11 +385,10 @@ namespace Autopilot {
                 SetPhase(Phase::MenuReady);
                 break;
             }
-            if (opt.nativeSelect) {
-                // Spike: click the game's own grid like a person would, once the movie is up.
-                static int clicks = 0;
+            {
+                // Click the game's own hero grid like a person would, once the movie is up.
                 UPoplarCharacterSelectGFxMovie* mv = pc ? pc->CharacterSelectMovie : nullptr;
-                if (mv && mv->bMovieAndManagerReady && clicks < 3 && g_phaseTime > 8.f + clicks * 4.f) {
+                if (mv && mv->bMovieAndManagerReady && g_selectClicks < 3 && g_phaseTime > 8.f + g_selectClicks * 4.f) {
                     // The grid follows the game's own hero list (the replicated MasterCharacterList).
                     int cell = -1;
                     std::string wanted = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[CharacterIndex(opt.character)]);
@@ -403,27 +401,12 @@ namespace Autopilot {
                         list += std::to_string(i) + "=" + cls + " ";
                         if (cls == wanted && cell < 0) cell = i;
                     }
-                    if (clicks == 0) std::printf("[CHARSEL] autopilot: master list (want %s): %s\n", wanted.c_str(), list.c_str());
+                    if (g_selectClicks == 0) std::printf("[CHARSEL] autopilot: master list (want %s): %s\n", wanted.c_str(), list.c_str());
                     if (cell < 0) cell = 0;
-                    std::printf("[CHARSEL] autopilot: native click %d on cell %d (ui state before %d)\n", clicks + 1, cell, (int)mv->PlayerUIState[0]);
+                    std::printf("[CHARSEL] autopilot: native click %d on cell %d (ui state before %d)\n", g_selectClicks + 1, cell, (int)mv->PlayerUIState[0]);
                     mv->extRequestSelection(0, cell);
-                    clicks++;
+                    g_selectClicks++;
                 }
-                if (pc && pc->Pawn && g_phaseTime > 5.f) SetPhase(Phase::Playing);
-                break;
-            }
-            if (pc && g_phaseTime > 5.f && !Globals::CharacterSelectHasLockedIn) {
-                Overlay::LockInCharacter(CharacterIndex(opt.character));
-                g_lockInTime = g_phaseTime;
-                g_lockInTries = 1;
-            }
-            // The first lock-in can land on the client's placeholder controller before the server's
-            // arrives; its RPCs go nowhere. Lock in again a few times while there is still no pawn.
-            if (pc && !pc->Pawn && g_lockInTries > 0 && g_lockInTries < 4 && g_phaseTime - g_lockInTime > 12.f) {
-                std::printf("[AUTOPILOT] no pawn %.0fs after lock-in, locking in again\n", g_phaseTime - g_lockInTime);
-                Overlay::LockInCharacter(CharacterIndex(opt.character));
-                g_lockInTime = g_phaseTime;
-                g_lockInTries++;
             }
             if (pc && pc->Pawn && g_phaseTime > 5.f) SetPhase(Phase::Playing);
             break;

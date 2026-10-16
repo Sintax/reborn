@@ -52,7 +52,6 @@ namespace LaunchOptions {
             else if (key == L"-rbbrowse") o.browse = true;
             else if (key == L"-rbrandomhero") o.randomHero = true;
             else if (key == L"-rbminconsole") o.minConsole = true;
-            else if (key == L"-rbnativeselect") o.nativeSelect = true;
             else if (key == L"-rbstartgame" && !val.empty()) o.startGame = Narrow(val);
             else if (key == L"-rbstartplayers") { if (ToInt(val, 1, 10, n)) o.startPlayers = n; else o.errors.push_back(a); }
             else if (key == L"-rbbots") {

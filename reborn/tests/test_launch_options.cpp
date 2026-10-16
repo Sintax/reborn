@@ -1,4 +1,5 @@
 #include "../LaunchOptions.hpp"
+#include "../CharSelectRules.hpp"
 #include <cstdio>
 
 static int failures = 0;
@@ -57,6 +58,11 @@ int main() {
     CHECK(!sgDefaults.minConsole);
     CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbminconsole").minConsole);
     CHECK(!LaunchOptions::Parse(L"Battleborn.exe -rbbots=9,1").errors.empty());
+
+    // Every networked game runs the game's own character select: the server's map string asks for it once.
+    CHECK(CharSelect::WithTournamentMode(L"open Caverns_P") == L"open Caverns_P?bTournamentMode=1");
+    CHECK(CharSelect::WithTournamentMode(L"open Viaduct_P?SpawnBotsTeamA=4?SpawnBotsTeamB=5") == L"open Viaduct_P?SpawnBotsTeamA=4?SpawnBotsTeamB=5?bTournamentMode=1");
+    CHECK(CharSelect::WithTournamentMode(L"open Caverns_P?bTournamentMode=1") == L"open Caverns_P?bTournamentMode=1");
 
     std::puts(failures ? "FAIL" : "PASS");
     return failures;
