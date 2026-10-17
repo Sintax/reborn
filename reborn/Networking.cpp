@@ -28,6 +28,8 @@ namespace ServerNetworking {
         }
 
         jsonBody["ConnectedPlayers"] = numConnectedPlayers;
+        // True once the game's pick phase is over (CharSelect::OnServerTick); the server browser
+        // shows it as MatchStarted.
         jsonBody["HumansHaveStarted"] = Globals::haveHumansStarted;
 
         Globals::GameCoordinatorHttpClient.get()->Post("/api/games/server-poll", jsonBody.dump(), "application/json");

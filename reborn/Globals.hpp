@@ -22,15 +22,18 @@ namespace Globals {
         UPoplarPerkFunction* GearSlotTwo = nullptr;
         UPoplarPerkFunction* GearSlotThree = nullptr;
         bool shouldReplicateTo = false;
-        // LAN players: Character is only a placeholder until the client's lock-in names its hero.
-        bool AwaitingHeroPick = false;
         // The client finished the handshake (NMT_Join): it can be logged in.
         bool Joined = false;
+        // CharSelect::OnServerTick handed this player to the spawn helper (once per player).
+        bool SpawnScheduled = false;
         int UniqueId = 0;
 
+        // An empty CharacterObjectName leaves Character null: the game's hero screen picks it
+        // (CharSelect::OnServerTick reads the pick when the phase completes).
         ServerPlayer(std::string PlayerName, std::string CharacterObjectName, std::string SkinObjectName, std::string TauntObjectName, std::string GearSlotOneObjectName, std::string GearSlotTwoObjectName, std::string GearSlotThreeObjectName){
             this->Name = PlayerName;
-            this->Character = UObject::FindObject<UPoplarPlayerNameIdentifierDefinition>(CharacterObjectName);
+            if (CharacterObjectName.size() > 0)
+                this->Character = UObject::FindObject<UPoplarPlayerNameIdentifierDefinition>(CharacterObjectName);
 
             if (SkinObjectName.size() > 0)
                 this->OptionalSkin = UObject::FindObject<UPoplarMetaSkinDefinition>(SkinObjectName);
@@ -71,6 +74,8 @@ namespace Globals {
 
     extern float timeTillHumanStart;
 
+    // The game's pick phase is over (set by CharSelect::OnServerTick); reported to the
+    // coordinator as HumansHaveStarted (the server browser's MatchStarted).
     extern bool haveHumansStarted;
 
     extern std::vector<int> AugStatus;

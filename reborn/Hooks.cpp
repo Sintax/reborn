@@ -1,6 +1,5 @@
 #include "Hooks.hpp"
 #include <map>
-#include <random>
 
 #include "Init.hpp"
 #include "Globals.hpp"
@@ -65,31 +64,6 @@ namespace Hooks {
                 return &serverPlayer;
         }
 
-        return nullptr;
-    }
-
-    // The hero behind a character-select index (Constants::CharacterSelectCharacterTable, the index
-    // the client's lock-in sends with ServerCharacterSelectInput), or nullptr.
-    UPoplarPlayerNameIdentifierDefinition* HeroForSelectIndex(int index) {
-        if (index < 0 || index >= (int)Constants::CharacterSelectCharacterTable.size()) return nullptr;
-        std::string className = Metagame::ReverseCharacterLookup(Constants::CharacterSelectCharacterTable[index]);
-        if (className.empty()) return nullptr;
-        for (UPoplarPlayerNameIdentifierDefinition* id : SDKUtils::GetAllOfClass<UPoplarPlayerNameIdentifierDefinition>()) {
-            if (id->CharacterClassId && !id->GetFullName().contains("Default") && id->CharacterClassId->ClassName.ToString() == className)
-                return id;
-        }
-        return nullptr;
-    }
-
-    // -rbrandomhero (the matchmaking roster's "RandomHero"): a random hero from the character-select
-    // list, whatever the player picked. Indices that name no loaded hero are skipped.
-    UPoplarPlayerNameIdentifierDefinition* RandomHero() {
-        static std::mt19937 rng{ std::random_device{}() };
-        int n = (int)Constants::CharacterSelectCharacterTable.size();
-        if (n <= 0) return nullptr;
-        std::uniform_int_distribution<int> pick(0, n - 1);
-        for (int tries = 0; tries < n * 3; tries++)
-            if (UPoplarPlayerNameIdentifierDefinition* hero = HeroForSelectIndex(pick(rng))) return hero;
         return nullptr;
     }
 
@@ -258,7 +232,7 @@ namespace Hooks {
 
     // --- Skin of the wrong hero (s3 runs 20261006-023201, -025246: invisible ModernSoldier) ----
     //
-    // Every LAN player is assigned NameId_RocketHawk at login. When the server refuses that hero
+    // Every LAN player used to be assigned NameId_RocketHawk at login. When the server refused that hero
     // (ServerPlayerSelectClass(Class_RocketHawk) leaves Class_ModernSoldier pending), the spawn
     // retry used to re-lock with RocketHawk, which set the controller's pending skin to
     // GD_RocketHawk_DefaultSkin.Skin_Default while the class stayed ModernSoldier. The pawn then got
@@ -833,7 +807,6 @@ namespace Hooks {
     }
 
     const int kSpawnAttemptMax = 40;   // every 3 s: covers PlayerSetup -> WarmUp -> InProgress (about 60 s after login)
-    const int kHeroPickWaitAttempts = 11;   // about 30 s; the client re-sends its lock-in every 12 s
     const int kHeroMismatchAttempts = 20;   // about 60 s of switching back to the picked hero
 
     // Game thread only. Looks the controller up through the connection each time, since the pointer
@@ -875,28 +848,6 @@ namespace Hooks {
             return;
         }
 
-        // 0. A LAN player's hero comes with the client's lock-in, which reaches the server some
-        //    seconds after login. Wait for it; after kHeroPickWaitAttempts, select the placeholder.
-        if (sp->AwaitingHeroPick) {
-            if (attempt < kHeroPickWaitAttempts) {
-                if (attempt == 1)
-                    printf("[SPAWN] attempt %i: waiting for %s's hero pick\n", attempt, sp->Name.c_str());
-                again();
-                return;
-            }
-            sp->AwaitingHeroPick = false;
-            if (LaunchOptions::Get().randomHero) {
-                if (UPoplarPlayerNameIdentifierDefinition* hero = RandomHero()) {
-                    sp->Character = hero;
-                    sp->OptionalSkin = nullptr;   // belonged to the placeholder hero
-                    sp->OptionalTaunt = nullptr;
-                }
-            }
-            pc->eventServerSelectCharacter(sp->Character, sp->OptionalSkin, sp->OptionalTaunt, true);
-            printf("[SPAWN] attempt %i: %s never picked a hero; selected %s -> pending class %s\n", attempt, sp->Name.c_str(),
-                NameOrNone(sp->Character).c_str(), NameOrNone(pc->PendingPlayerClass).c_str());
-        }
-
         APoplarPlayerStateInfo* psi = pc->PoplarPSI;   // holds the applied class (AWillowPlayerStateInfo::PlayerClass)
 
         LogSpawnNativeAddresses();
@@ -905,7 +856,8 @@ namespace Hooks {
         //    remote player does not own (its meta PRI owns no characters) with Class_ModernSoldier,
         //    so it is kept out of this (see 4b and the empty-path drop in the ProcessEvent hook);
         //    SwitchPoplarPlayerClass sets the pending class once the hero's data has loaded.
-        //    A LAN player's hero is the one its client picked (see the ServerCharacterSelectInput hook).
+        //    The player's hero is the one the game's hero screen recorded (CharSelect::PickedHero,
+        //    read when the pick phase completes); null if it recorded none.
         //    The game also hands a random hero to a player with no selection shortly after PostLogin,
         //    and that hero's load can finish after ours and replace the pending class. Until
         //    kHeroMismatchAttempts, switch back to the picked hero and wait for its load rather than
@@ -1190,10 +1142,10 @@ namespace Hooks {
                 // No lobby told us who is coming (LAN, Direct Connect, or a server-browser roster server): welcome whoever arrives.
                 printf("[NETWORKING] Welcoming a new player!\n");
 
-                Globals::ServerPlayer serverPlayer = Globals::ServerPlayer("LAN Player", "PoplarPlayerNameIdentifierDefinition GD_RocketHawk.NameId_RocketHawk", "", "", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_MaxShield_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_ShieldPen_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_HealthRegen_Legendary_LLC2");
+                // No hero yet: the game's hero screen picks it (CharSelect::OnServerTick reads it).
+                Globals::ServerPlayer serverPlayer = Globals::ServerPlayer("LAN Player", "", "", "", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_MaxShield_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_ShieldPen_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_HealthRegen_Legendary_LLC2");
 
                 serverPlayer.Connection = connection;
-                serverPlayer.AwaitingHeroPick = true;   // RocketHawk is a placeholder; the client's lock-in names the hero
 
                 Globals::ServerPlayers.push_back(serverPlayer);
 
@@ -1219,16 +1171,12 @@ namespace Hooks {
                         joined++;
                 }
 
-                if (Globals::haveHumansStarted) {
-                    // The match is running: log this player in after the usual settle time. The
-                    // players already in the match are left alone (see the login loop in the tick).
-                    printf("[NETWORKING] %s joined a match in progress (%i joined players connected); logging it in shortly\n", player->Name.c_str(), joined);
-                    if (Globals::timeTillHumanStart <= 0.0f)
-                        Globals::timeTillHumanStart = 5.0f;
-                }
-                else if (joined >= (int)ServerSettings::NumPlayersToStart) {
-                    Globals::timeTillHumanStart = 5.0f;
-                }
+                // Every player is logged in as it arrives, after the usual settle time, so the
+                // game's waiting room and hero screen see it. The login loop in the tick logs in
+                // only players with no controller yet, so the others are left alone.
+                printf("[NETWORKING] %s joined (%i joined players connected; pick phase %s); logging it in shortly\n", player->Name.c_str(), joined,
+                    Globals::haveHumansStarted ? "over" : "not over");
+                Globals::timeTillHumanStart = 5.0f;
             }
         }
         else if (message == 0xf) {
@@ -1259,30 +1207,17 @@ namespace Hooks {
             }
         }
 
-        // [CHARSEL]: the game's own character-select phase (see CharSelect.cpp), checked once a second.
-        {
+        // [CHARSEL]: the game's own character-select phase (see CharSelect.cpp). The server's
+        // OnServerTick logs it and spawns the players when the pick phase completes.
+        if (Globals::amServer) {
+            CharSelect::OnServerTick(DeltaTime);
+        }
+        else {
             static float sinceCharSel = 0.0f;
             sinceCharSel += DeltaTime;
             if (sinceCharSel >= 1.0f) {
                 sinceCharSel = 0.0f;
-                CharSelect::LogState();
-                // Once the game's own select phase is complete, hand each player to the mod's
-                // spawn helper (it makes the client load the hero's package, then spawns).
-                static int lastSelState = -1;
-                APoplarGameReplicationInfo* gri = Globals::amServer ? CharSelect::LevelGRI() : nullptr;
-                if (gri && gri->CharacterSelectManager) {
-                    int s = (int)gri->CharacterSelectManager->CharacterSelectState;
-                    if (s == 2 && lastSelState != 2) {
-                        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
-                            if (!sp.Connection) continue;
-                            printf("[CHARSEL] select phase complete; spawning %s (picked %s)\n", sp.Name.c_str(),
-                                sp.Character ? sp.Character->GetName().c_str() : "none");
-                            UNetConnection* c = sp.Connection;
-                            Engine::RunOnGameThreadAfter(0.5f, [c] { SpawnPawnForServerPlayer(c, 1); });
-                        }
-                    }
-                    lastSelState = s;
-                }
+                CharSelect::LogState(CharSelect::LevelGRI());
             }
         }
 
@@ -1421,11 +1356,12 @@ namespace Hooks {
                 Globals::timeTillHumanStart -= DeltaTime;
 
                 if (Globals::timeTillHumanStart <= 0.0f) {
-                    // StartHumans once per match. The timer also fires for a player who joins a
-                    // running match; that player is logged in below, the others are not logged in a
-                    // second time (a second Login would give them a second controller).
-                    if (!Globals::haveHumansStarted) {
-                        Globals::haveHumansStarted = true;
+                    // StartHumans once per match, on the first login. The timer runs again for
+                    // every player who joins; that player is logged in below, the others are not
+                    // logged in a second time (a second Login would give them a second controller).
+                    static bool humansStarted = false;
+                    if (!humansStarted) {
+                        humansStarted = true;
 
                         SDKUtils::GetLastOfClass<APoplarGameInfo>()->StartHumans();
                     }
@@ -1474,21 +1410,7 @@ namespace Hooks {
                             // runs here, which is what the server's setup phase waits for.
                             pc->ServerSetHasReceivedEntitlements();
 
-                            // The first selection decides the hero: the server does not switch class on a
-                            // later one. A LAN player's hero is not known yet, so leave the selection to
-                            // the client's lock-in (see the ServerCharacterSelectInput hook).
-                            if (serverPlayer.AwaitingHeroPick) {
-                                printf("[SPAWN] %s: no hero selected at login; waiting for the client's pick\n", serverPlayer.Name.c_str());
-                            }
-                            else {
-                                pc->eventServerSelectCharacter(serverPlayer.Character, serverPlayer.OptionalSkin, serverPlayer.OptionalTaunt, true);
-
-                                if (serverPlayer.OptionalSkin)
-                                    pc->eventServerSelectCharacterSkin(serverPlayer.OptionalSkin);
-
-                                if(serverPlayer.OptionalTaunt)
-                                    pc->eventServerSelectCharacterTaunt(serverPlayer.OptionalTaunt);
-                            }
+                            // No hero is selected here: the player picks on the game's hero screen.
 
 
                             if (!pc->MyPoplarPRI) {
@@ -1544,8 +1466,8 @@ namespace Hooks {
 
                             serverPlayer.shouldReplicateTo = true;
 
-                            // The pawn is spawned once the game's select phase completes (the [CHARSEL]
-                            // block in this tick).
+                            // The pawn is spawned once the game's pick phase completes
+                            // (CharSelect::OnServerTick).
                         }
                     }
                 }
@@ -1803,9 +1725,8 @@ namespace Hooks {
             }
         }
 
-        // Every LAN player is assigned NameId_RocketHawk at login. The client's lock-in names the hero
-        // it picked only by its character-select index (ServerCharacterSelectInput, sent before the
-        // hero-less ServerSelectCharacter below), so take the hero from there while there is no pawn.
+        // A click on the hero screen (the grid's cell index). Logged only: the game records the
+        // pick itself, and CharSelect::OnServerTick reads that record when the pick phase completes.
         static UFunction* serverCharacterSelectInputUFunction = nullptr;
 
         if (!serverCharacterSelectInputUFunction)
@@ -1815,36 +1736,7 @@ namespace Hooks {
             APoplarPlayerController* inputPc = reinterpret_cast<APoplarPlayerController*>(object);
             int index = reinterpret_cast<APoplarPlayerController_execServerCharacterSelectInput_Params*>(params)->Index;
             Globals::ServerPlayer* serverPlayer = ConnectionToServerPlayer((UNetConnection*)inputPc->Player);
-            UPoplarPlayerNameIdentifierDefinition* picked = HeroForSelectIndex(index);
-            if (picked && serverPlayer && serverPlayer->AwaitingHeroPick && LaunchOptions::Get().randomHero) {
-                if (UPoplarPlayerNameIdentifierDefinition* hero = RandomHero()) {
-                    printf("[SPAWN] random hero for %s: %s (they picked %s)\n", serverPlayer->Name.c_str(), hero->GetName().c_str(), picked->GetName().c_str());
-                    picked = hero;
-                }
-            }
-            if (!picked) {
-                printf("[SPAWN] character-select index %i names no known hero; keeping %s\n", index,
-                    serverPlayer ? NameOrNone(serverPlayer->Character).c_str() : "none");
-            }
-            else if (serverPlayer && serverPlayer->AwaitingHeroPick) {
-                // Only the first pick counts (the client re-sends its lock-in while it has no pawn).
-                printf("[SPAWN] %s picked %s (index %i) in place of %s\n", serverPlayer->Name.c_str(), picked->GetName().c_str(), index,
-                    NameOrNone(serverPlayer->Character).c_str());
-                serverPlayer->Character = picked;
-                serverPlayer->OptionalSkin = nullptr;   // belonged to the placeholder hero
-                serverPlayer->OptionalTaunt = nullptr;
-                serverPlayer->AwaitingHeroPick = false;
-                // A player with no selection a few seconds after PostLogin gets a random hero from the
-                // game (ClientPrepareForClassSwitch with e.g. NameId_MageBlade_Poplar), and the lock-in
-                // that follows this RPC does not switch class while another one is pending. Clear it.
-                if (inputPc->PendingPlayerClass && inputPc->PendingPlayerClassNameId != picked && !(inputPc->Pawn && IsLiveObject(inputPc->Pawn))) {
-                    printf("[SPAWN] clearing %s's pending class %s (%s) so the lock-in can select %s\n", serverPlayer->Name.c_str(),
-                        NameOrNone(inputPc->PendingPlayerClass).c_str(), NameOrNone(inputPc->PendingPlayerClassNameId).c_str(), picked->GetName().c_str());
-                    inputPc->PendingPlayerClass = nullptr;
-                    inputPc->PendingPlayerClassNameId = nullptr;
-                    inputPc->PendingPlayerSkin = nullptr;
-                }
-            }
+            printf("[CHARSEL] %s clicked cell %i\n", serverPlayer ? serverPlayer->Name.c_str() : inputPc->GetName().c_str(), index);
         }
 
         // The lock-in also sends ServerPlayerSelectClass with an empty class path, which the server

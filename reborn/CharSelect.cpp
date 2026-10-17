@@ -1,5 +1,7 @@
 #include "CharSelect.hpp"
+#include "Engine.hpp"
 #include "Globals.hpp"
+#include "Hooks.hpp"
 #include "Networking.hpp"
 #include "Utils.hpp"
 #include <cstdio>
@@ -144,8 +146,7 @@ namespace CharSelect {
         return gri;
     }
 
-    void LogState() {
-        APoplarGameReplicationInfo* gri = LevelGRI();
+    void LogState(APoplarGameReplicationInfo* gri) {
         // The line carries the phase's time left; it is printed when anything else changes
         // (`key` leaves the countdown out, so it does not print every second).
         char line[700] = "";
@@ -189,6 +190,114 @@ namespace CharSelect {
         if (Globals::amServer && gri && g_rulesApplied && !dumped) {
             dumped = true;
             DumpRules();
+        }
+    }
+
+    namespace {
+        bool g_phaseComplete = false;   // this match's pick phase has completed (latched)
+        float g_sinceServerTick = 0.f;
+
+        bool IsLive(UObject* o) { return o && !(o->ObjectFlags & kPendingKill); }
+
+        APoplarCharacterSelectManager* LiveManager(APoplarGameReplicationInfo* gri) {
+            APoplarCharacterSelectManager* m = gri ? gri->CharacterSelectManager : nullptr;
+            return IsLive(m) ? m : nullptr;
+        }
+
+        UPoplarPlayerNameIdentifierDefinition* PickedHeroFrom(APoplarCharacterSelectManager* m, APoplarPlayerController* pc, const char** source) {
+            const char* from = nullptr;
+            UPoplarPlayerNameIdentifierDefinition* hero = nullptr;
+            if (pc && pc->PendingPlayerClassNameId) {
+                hero = pc->PendingPlayerClassNameId;
+                from = "pending class";
+            }
+            APoplarPlayerReplicationInfo* pri = pc ? reinterpret_cast<APoplarPlayerReplicationInfo*>(pc->PlayerReplicationInfo) : nullptr;
+            if (!hero && m && pri) {
+                for (int t = 0; t < 2 && !hero; t++)
+                    for (int i = 0; i < 5 && !hero; i++)
+                        if (m->Teams[t].Players[i].PRI == pri && m->Teams[t].Players[i].SelectedCharacter) {
+                            hero = m->Teams[t].Players[i].SelectedCharacter;
+                            from = "team record";
+                        }
+                for (int i = 0; i < 0x1E && !hero; i++)
+                    if (m->MasterCharacterList[i].SelectedBy == pri && m->MasterCharacterList[i].NameID) {
+                        hero = m->MasterCharacterList[i].NameID;
+                        from = "hero list SelectedBy";
+                    }
+            }
+            if (source) *source = from;
+            return hero;
+        }
+
+        // The player's live controller, or null while it is not logged in (or has left).
+        APoplarPlayerController* LiveController(Globals::ServerPlayer& sp) {
+            if (!sp.Connection || !ServerNetworking::IsLiveConnection(sp.Connection)) return nullptr;
+            APlayerController* a = sp.Connection->Actor;
+            if (!IsLive(a) || !a->IsA(APoplarPlayerController::StaticClass())) return nullptr;
+            return reinterpret_cast<APoplarPlayerController*>(a);
+        }
+
+        void HandToSpawn(Globals::ServerPlayer& sp) {
+            sp.SpawnScheduled = true;
+            UNetConnection* c = sp.Connection;
+            Engine::RunOnGameThreadAfter(0.5f, [c] { Hooks::SpawnPawnForServerPlayer(c, 1); });
+        }
+    }
+
+    UPoplarPlayerNameIdentifierDefinition* PickedHero(APoplarPlayerController* pc, const char** source) {
+        APoplarGameReplicationInfo* gri = pc && pc->WorldInfo ? reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI) : nullptr;
+        return PickedHeroFrom(LiveManager(gri), pc, source);
+    }
+
+    bool PhaseComplete() { return g_phaseComplete; }
+
+    void OnServerTick(float dt) {
+        g_sinceServerTick += dt;
+        if (g_sinceServerTick < 1.f) return;
+        g_sinceServerTick = 0.f;
+
+        APoplarGameReplicationInfo* gri = LevelGRI();
+        LogState(gri);
+        APoplarCharacterSelectManager* m = LiveManager(gri);
+        if (!m) return;
+
+        if (!g_phaseComplete) {
+            if (m->CharacterSelectState != ECharacterSelectManagerState::CSMS_Complete) return;
+            g_phaseComplete = true;
+            Globals::haveHumansStarted = true;
+            printf("[CHARSEL] pick phase complete; spawning the logged-in players\n");
+            // Every player logged in now is dealt with here, once; anyone logged in later is a
+            // late join (below).
+            for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+                APoplarPlayerController* pc = LiveController(sp);
+                if (!pc) continue;
+                sp.SpawnScheduled = true;
+                if (IsLive(pc->Pawn)) continue;
+                const char* source = nullptr;
+                if (UPoplarPlayerNameIdentifierDefinition* hero = PickedHeroFrom(m, pc, &source)) {
+                    sp.Character = hero;
+                    printf("[CHARSEL] %s locked in %s (from the %s)\n", sp.Name.c_str(), hero->GetName().c_str(), source);
+                }
+                else {
+                    printf("[CHARSEL] %s has no recorded pick; the game's random rule should have assigned one\n", sp.Name.c_str());
+                }
+                HandToSpawn(sp);
+            }
+            return;
+        }
+
+        // Late join: a player logged in after the phase completed gets the hero screen; once
+        // their lock-in is recorded, spawn them.
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            if (sp.SpawnScheduled) continue;
+            APoplarPlayerController* pc = LiveController(sp);
+            if (!pc || IsLive(pc->Pawn)) continue;
+            const char* source = nullptr;
+            UPoplarPlayerNameIdentifierDefinition* hero = PickedHeroFrom(m, pc, &source);
+            if (!hero) continue;
+            sp.Character = hero;
+            printf("[CHARSEL] late join: %s picked %s (from the %s)\n", sp.Name.c_str(), hero->GetName().c_str(), source);
+            HandToSpawn(sp);
         }
     }
 }

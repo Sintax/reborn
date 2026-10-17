@@ -19,6 +19,11 @@ namespace Hooks {
     // True when the skin is known to be another hero's than the class (both have a hero token).
     bool SkinIsOtherHeros(UObject* skin, UObject* classDef);
 
+    // Server, game thread: gives a remote player's controller its pawn (the hero in the player's
+    // ServerPlayer::Character, or whatever class is pending when that is null), retrying every 3 s.
+    // Started by CharSelect::OnServerTick once the pick phase completes; attempt starts at 1.
+    void SpawnPawnForServerPlayer(UNetConnection* connection, int attempt);
+
     extern SafetyHookInline ProcessRemoteFunction;
 
     bool ProcessRemoteFunctionHook(AActor* actor, UFunction* function, void* params, void* stack);
