@@ -1,4 +1,3 @@
-using gamecontroller.Middleware;
 using gamecontroller.Models;
 using gamecontroller.Services;
 using gamecontroller.Singletons;
@@ -19,17 +18,9 @@ builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(AppContext.BaseD
 
 builder.Services.AddControllers();
 
-builder.Services.AddScoped<AuthService>();
-
-builder.Services.AddScoped<PlayerAuthActionFilter>();
-
 builder.Services.AddSingleton<IServerLauncher, LoaderServerLauncher>();
 
-builder.Services.AddSingleton<GameSessions>();
-
 builder.Services.AddSingleton<DatabaseSessions>();
-
-builder.Services.AddSingleton<LobbySingleton>();
 
 builder.Services.AddSingleton<StinkyWordService>();
 
@@ -44,12 +35,6 @@ builder.Services.AddSingleton(sp =>
     return new ServerRoster(slots, sp.GetRequiredService<IServerLauncher>(), ports, "localhost:" + (builder.Configuration["CoordinatorPort"] ?? "5000"), requested);
 });
 
-builder.Services.AddHostedService<SessionCleanupService>();
-
-builder.Services.AddHostedService<MatchLaunchService>();
-
-builder.Services.AddHostedService<WebsocketOutgoingService>();
-
 builder.Services.AddHostedService<RosterService>();
 
 var app = builder.Build();
@@ -59,8 +44,6 @@ started = true;
 // Plain HTTP on purpose: the game's httplib client talks HTTP, and a redirect would break it.
 
 app.UseAuthorization();
-
-app.UseWebSockets();
 
 app.MapControllers();
 

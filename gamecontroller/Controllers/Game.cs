@@ -1,6 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using gamecontroller.Middleware;
-using System.Diagnostics;
 using gamecontroller.Singletons;
 using gamecontroller.Models;
 using gamecontroller.Services;
@@ -8,7 +6,7 @@ using gamecontroller.Services;
 namespace gamecontroller.Controllers
 {
     // The game's server browser reads the list here; game servers report in with their X-Server-Token.
-    // Servers come from the roster (ServerRoster.cs) or, for the lobby flow, from a lobby's GameInstance.
+    // Every server comes from the roster (ServerRoster.cs): the standing ones and the ones players start.
 
     [ApiController]
     [Route("api/games")]
@@ -16,18 +14,15 @@ namespace gamecontroller.Controllers
     {
         private readonly ILogger<Game> _logger;
 
-        private readonly LobbySingleton _lobbySingleton;
-
         private readonly ServerRoster _roster;
 
         private readonly StartKeys _keys;
 
         private readonly StinkyWordService _words;
 
-        public Game(ILogger<Game> logger, LobbySingleton lobbySingleton, ServerRoster roster, StartKeys keys, StinkyWordService words)
+        public Game(ILogger<Game> logger, ServerRoster roster, StartKeys keys, StinkyWordService words)
         {
             _logger = logger;
-            _lobbySingleton = lobbySingleton;
             _roster = roster;
             _keys = keys;
             _words = words;
@@ -82,22 +77,16 @@ namespace gamecontroller.Controllers
             return HttpContext.Request.Headers.TryGetValue("X-Server-Token", out var authHeader) ? authHeader.ToString() : null;
         }
 
-        private Lobby? LobbyForToken(string token)
-        {
-            return _lobbySingleton.Lobbies.FirstOrDefault(l => l.GameInstance != null && l.GameInstance.MyGuid.Equals(token));
-        }
-
         [HttpGet("server-config")]
         public GameCreationConfig? GetServerConfig()
         {
             string? token = ServerToken();
             if (token != null)
             {
-                GameCreationConfig? config = _roster.ConfigFor(token) ?? LobbyForToken(token)?.GameInstance?.Config;
+                GameCreationConfig? config = _roster.ConfigFor(token);
                 if (config != null)
                 {
-                    config.Port = _roster.Instances.FirstOrDefault(i => i.MyGuid == token)?.Port
-                        ?? LobbyForToken(token)?.GameInstance?.Port ?? 7777;
+                    config.Port = _roster.Instances.FirstOrDefault(i => i.MyGuid == token)?.Port ?? 7777;
                     return config;
                 }
             }
@@ -106,44 +95,14 @@ namespace gamecontroller.Controllers
             return null;
         }
 
-        [HttpPost("server-allow-player-join")]
-        public void PostServerPoll([FromBody] AllowPlayerJoin playerJoin)
-        {
-            string? token = ServerToken();
-            Lobby? lobby = token != null ? LobbyForToken(token) : null;
-            if (lobby != null)
-            {
-                lobby.PlayerIndexToAllowJoin = playerJoin.PlayerIndex;
-                lobby.AllowJoin = true;
-
-                HttpContext.Response.StatusCode = 200;
-                return;
-            }
-
-            HttpContext.Response.StatusCode = 401;
-            return;
-        }
-
         [HttpPost("server-match-natural-shutdown")]
         public void ServerMatchNaturalShutdown()
         {
             string? token = ServerToken();
-            if (token != null)
+            if (token != null && _roster.MarkFinished(token))
             {
-                if (_roster.MarkFinished(token))
-                {
-                    HttpContext.Response.StatusCode = 200;
-                    return;
-                }
-
-                Lobby? lobby = LobbyForToken(token);
-                if (lobby != null)
-                {
-                    lobby.MatchShutdown();
-
-                    HttpContext.Response.StatusCode = 200;
-                    return;
-                }
+                HttpContext.Response.StatusCode = 200;
+                return;
             }
 
             HttpContext.Response.StatusCode = 401;
@@ -156,13 +115,7 @@ namespace gamecontroller.Controllers
             string? token = ServerToken();
             if (token != null)
             {
-                if (_roster.RecordPoll(token, body.ConnectedPlayers, body.HumansHaveStarted, DateTime.UtcNow)) return;
-
-                Lobby? lobby = LobbyForToken(token);
-                if (lobby != null && lobby.GameInstance != null)
-                {
-                    lobby.GameInstance.LastServerCheckIn = DateTime.UtcNow;
-                }
+                _roster.RecordPoll(token, body.ConnectedPlayers, body.HumansHaveStarted, DateTime.UtcNow);
             }
         }
     }

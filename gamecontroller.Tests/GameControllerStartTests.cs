@@ -18,7 +18,7 @@ public class GameControllerStartTests
         var launcher = new FakeLauncher();
         var roster = new ServerRoster(Array.Empty<RosterSlot>(), launcher, new[] { 7777 }, "localhost:5000") { PublicIp = "203.0.113.10" };
         var keys = new StartKeys(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["StartKeys:dj"] = "GOODKEY" }).Build());
-        var controller = new Game(NullLogger<Game>.Instance, new LobbySingleton(), roster, keys, new StinkyWordService())
+        var controller = new Game(NullLogger<Game>.Instance, roster, keys, new StinkyWordService())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
@@ -106,7 +106,7 @@ public class GameControllerStartTests
         var roster = new ServerRoster(Array.Empty<RosterSlot>(), launcher, new[] { 7777 }, "localhost:5000") { PublicIp = "203.0.113.10" };
         var keys = new StartKeys(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             { ["StartKeys:a"] = "KEYA", ["StartKeys:b"] = "KEYB" }).Build());
-        var c = new Game(NullLogger<Game>.Instance, new LobbySingleton(), roster, keys, new StinkyWordService())
+        var c = new Game(NullLogger<Game>.Instance, roster, keys, new StinkyWordService())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
