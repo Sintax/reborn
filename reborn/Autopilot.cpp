@@ -1,4 +1,5 @@
 #include "Autopilot.hpp"
+#include "CharSelect.hpp"
 #include "Combat.hpp"
 #include "Constants.hpp"
 #include "Engine.hpp"
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <string>
 
@@ -46,6 +48,7 @@ namespace Autopilot {
         float g_lastClickTime = 0.f;      // phase time of that click
         float g_pickReadyTime = -1.f;     // phase time the pick phase was judged open to clicks
         bool g_cellTried[30] = {};
+        bool g_confirmDue = false;        // the last click's "Confirm Character" dialog is still to be answered
         // The game's pick phase, judged once per launch: its first second shows how long it runs.
         // The server's 5 s edit of PhaseDef_AllPlayers_Select (RandomHero games) is made on the
         // server's own copy of the definition and is not replicated: the client's copy and the
@@ -58,6 +61,7 @@ namespace Autopilot {
         const float kTimerPickSeconds = 5.f;   // CharSelect's RandomHero pick length
         const float kPickRetrySeconds = 6.f;   // a click not taken by then is refused
         const float kListWaitSeconds = 30.f;   // hero list still empty by then: click cell 0
+        const float kConfirmDelaySeconds = 1.f; // the confirm dialog is answered this long after the click
         const int kMaxSelectClicks = 5;
         const float kMenuGrace = 2.f;     // menu must hold this long before we call it a real return
         const float kLaunchTimeout = 90.f;
@@ -75,6 +79,7 @@ namespace Autopilot {
                 g_selectClicks = 0;
                 g_lastCell = -1;
                 g_pickReadyTime = -1.f;
+                g_confirmDue = false;
                 for (bool& t : g_cellTried) t = false;
             }
             if (p == Phase::Launching) {   // a new game: judge its pick phase afresh
@@ -369,25 +374,76 @@ namespace Autopilot {
         // (character), which the game enters once the local player's entitlements have arrived
         // (bHasReceivedEntitlements): the meta PRI's replicated StaticEntitlements must all be
         // present (non-null count == NumStaticEntitlements) and NumLoadoutEntitlements known.
+        //   The full gate (battleborn+0x112f580, network branch) also wants the level GRI's
+        //   ExpectedCharacterUsabilityEntries to equal its non-empty ReplicatedCharacterUsability
+        //   MetaIDs (+0x112fe70), and a PRI in the GRI's PRIArray whose UniqueId equals the meta
+        //   PRI's, with CharacterSelectionState != 0 (+0x11302c0).
         std::string GridState(APoplarPlayerController* pc, UPoplarCharacterSelectGFxMovie* mv) {
             APoplarMetaPlayerReplicationInfo* meta = pc->MyPoplarPRI ? pc->MyPoplarPRI->GetMetaPRI() : nullptr;
             int present = 0;
             int num = meta ? meta->NumStaticEntitlements : -1;
-            for (int i = 0; meta && i < num && i < 0x800; i++) if (meta->StaticEntitlements[i]) present++;
-            char b[200];
-            std::snprintf(b, sizeof b, "grid menu %d, entitlements received %u, static entitlements %d of %d, loadouts %d",
-                          (int)mv->PrimaryPlayerMenus.CurrentMenuState, (unsigned)mv->PrimaryPlayerMenus.bHasReceivedEntitlements,
-                          present, num, meta ? meta->NumLoadoutEntitlements : -1);
+            for (int i = 0; meta && i < 0x800; i++) if (meta->StaticEntitlements[i]) present++;
+            int usable = 0, expected = -1;
+            if (APoplarGameReplicationInfo* gri = CharSelect::LevelGRI()) {
+                expected = gri->ExpectedCharacterUsabilityEntries;
+                for (int i = 0; i < 0x64; i++) {
+                    int n = gri->ReplicatedCharacterUsability[i].MetaID.ArrayCount;
+                    if (n != 0 && n != 1) usable++;
+                }
+            }
+            bool idMatch = meta && pc->MyPoplarPRI && std::memcmp(&meta->UniqueId, &pc->MyPoplarPRI->UniqueId, 0x10) == 0
+                && meta->UniqueId.bHasValue == pc->MyPoplarPRI->UniqueId.bHasValue;
+            bool gate = meta && reinterpret_cast<bool (*)(void*, void*)>(Globals::baseAddress + 0x112f580)(meta, pc);
+            const FLocalPlayerMenuManager& menus = mv->PrimaryPlayerMenus;
+            int grid = menus.CurrentGridIndex;
+            int shown = grid >= 0 && grid < 3 ? menus.Grids[grid].NumShownCells : -1;
+            char b[400];
+            std::snprintf(b, sizeof b, "grid menu %d, entitlements received %u, static entitlements %d of %d, loadouts %d, "
+                          "character usability %d of %d, meta id matches PRI %s, gate %s, grid %d shows %d cells, primary action %u, "
+                          "input blocked %u, confirm dialog %s",
+                          (int)menus.CurrentMenuState, (unsigned)menus.bHasReceivedEntitlements,
+                          present, num, meta ? meta->NumLoadoutEntitlements : -1, usable, expected, idMatch ? "yes" : "no",
+                          gate ? "open" : "shut", grid, shown, (unsigned)menus.bCanDoPrimaryAction,
+                          (unsigned)mv->bBlockingPrimarySelectionInput, menus.ConfirmationDialog ? "yes" : "no");
             return b;
         }
 
+        // The screen splits the heroes over three grids of up to 14 cells; a click names the cell as
+        // grid * 14 + position and is taken only while that grid has the focus (CurrentGridIndex,
+        // set by hovering, battleborn+0x1156b60; checked in +0x1156e80). Each cell names its hero
+        // by index into the manager's MasterCharacterList (CharacterDataIndex). Returns the
+        // screen's cell number for a hero, with its grid in *grid, or -1.
+        int ScreenCell(UPoplarCharacterSelectGFxMovie* mv, int hero, int* grid) {
+            const FLocalPlayerMenuManager& menus = mv->PrimaryPlayerMenus;
+            for (int g = 0; g < 3; g++) {
+                const FCharacterGrid& gr = menus.Grids[g];
+                for (int i = 0; i < gr.CharacterCells.ArrayCount && i < gr.NumShownCells && i < 14; i++) {
+                    if (gr.CharacterCells[i].CharacterDataIndex == hero) { *grid = g; return g * 14 + i; }
+                }
+            }
+            return -1;
+        }
+
+        // Clicks the hero at MasterCharacterList index `cell` the way a person does: hover it (which
+        // focuses its grid), then click it.
         void ClickCell(UPoplarCharacterSelectGFxMovie* mv, APoplarCharacterSelectManager* m, int cell) {
             g_selectClicks++;
             g_lastCell = cell;
             g_lastClickTime = g_phaseTime;
             g_cellTried[cell] = true;
-            mv->extRequestSelection(0, cell);
-            std::printf("[AUTOPILOT] picked cell %d (%s)\n", cell, CellHero(m, cell).empty() ? "unknown" : CellHero(m, cell).c_str());
+            g_confirmDue = true;
+            int grid = 0;
+            int screen = ScreenCell(mv, cell, &grid);
+            if (screen < 0) {
+                std::printf("[AUTOPILOT] hero %d (%s) is in none of the screen's grids; clicking cell %d as is\n", cell,
+                            CellHero(m, cell).c_str(), cell);
+                screen = cell;
+                grid = 0;
+            }
+            mv->extOnMousedOverCell(0, screen, grid);
+            mv->extRequestSelection(0, screen);
+            std::printf("[AUTOPILOT] picked cell %d (%s) at grid %d cell %d\n", cell, CellHero(m, cell).empty() ? "unknown" : CellHero(m, cell).c_str(),
+                        grid, screen - grid * 14);
         }
 
         // Picks -rbcharacter's hero on the game's own hero grid, like a person clicking it, once the
@@ -417,6 +473,21 @@ namespace Autopilot {
                 }
                 ClickCell(mv, m, cell);
                 return;
+            }
+
+            // A click on a free hero in the pick phase opens the game's "Confirm Character" yes/no
+            // dialog (battleborn+0x1156e80 -> +0x11570b0); its Yes button runs the PRI's
+            // OnConfirmCharacterSelection, which sends the pick. Press Yes like a person would.
+            if (g_confirmDue && g_phaseTime - g_lastClickTime >= kConfirmDelaySeconds) {
+                g_confirmDue = false;
+                UWillowGFxDialogBox* dlg = mv->PrimaryPlayerMenus.ConfirmationDialog;
+                if (dlg && !PickTaken(pc, m)) {
+                    dlg->HandleHintInput(pc->GetMyUserId(), FName("Yes"));
+                    std::printf("[AUTOPILOT] pressed Yes on the confirm dialog for cell %d\n", g_lastCell);
+                }
+                else if (!dlg) {
+                    std::printf("[AUTOPILOT] cell %d opened no confirm dialog (%s)\n", g_lastCell, GridState(pc, mv).c_str());
+                }
             }
 
             if (g_phaseTime - g_lastClickTime < kPickRetrySeconds || PickTaken(pc, m)) return;

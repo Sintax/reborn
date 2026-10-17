@@ -1,8 +1,10 @@
 #include "CharSelect.hpp"
 #include "Globals.hpp"
+#include "Networking.hpp"
 #include "Utils.hpp"
 #include <cstdio>
 #include <string>
+#include <unordered_set>
 
 namespace CharSelect {
     namespace {
@@ -73,6 +75,62 @@ namespace CharSelect {
         printf("[CHARSEL] rules: waiting-for-players %.0f s, pick %.0f s\n", kWaitingForPlayersSeconds,
             pick ? pick->DurationOfPhase : -1.f);
         g_rulesApplied = true;
+    }
+
+    // How the game decides ownership (Ghidra, see the plan's research-findings.md, Q1):
+    //  - Server: "does this player own hero X" is battleborn+0x1184e40 -> +0x112ff00, a scan of
+    //    all 0x800 slots of the player's meta PRI StaticEntitlements for a non-null
+    //    UPoplarMetaItemCharacterDefinition whose Character is X; a skin (and, by the same
+    //    pattern, a taunt) is owned when its definition pointer is in the list (+0x1184d80).
+    //    The apply-the-picked-hero step (+0x11963c0) falls back to the default hero
+    //    (ModernSoldier) when that check fails. ReplicatedCharacterUsability is not read.
+    //  - Client: the hero grid leaves its waiting state when +0x112f580 passes: the count of
+    //    non-null StaticEntitlements (all slots) equals NumStaticEntitlements, the valid
+    //    ReplicatedLoadouts equal NumLoadoutEntitlements, the GRI's usability entries are all
+    //    there, and the player's PRI has CharacterSelectionState != 0. So every entry added here
+    //    must be an object the client can resolve (a null on arrival keeps the grid shut), and
+    //    NumStaticEntitlements must stay equal to the entries actually set.
+    // The game (offline, no Hydra) already fills the list at login; this adds what it left out.
+    void GrantEverything(APoplarPlayerController* pc) {
+        APoplarPlayerReplicationInfo* pri = pc ? pc->MyPoplarPRI : nullptr;
+        std::string name = pri ? pri->PlayerName.ToString() : std::string("?");
+        APoplarMetaPlayerReplicationInfo* meta = pri ? pri->GetMetaPRI() : nullptr;
+        if (!meta) {
+            printf("[CHARSEL] %s has no meta PRI at login; granted 0 items\n", name.c_str());
+            return;
+        }
+
+        std::unordered_set<UObject*> owned;
+        int before = 0;
+        for (int i = 0; i < 0x800; i++)
+            if (meta->StaticEntitlements[i]) { owned.insert(meta->StaticEntitlements[i]); before++; }
+
+        // Only objects the client's package map covers: anything else replicates as null. (The
+        // server may have loaded a hero's skin package for an earlier player; a later player's
+        // client has not.)
+        UNetConnection* conn = reinterpret_cast<UNetConnection*>(pc->Player);
+        int added[3] = { 0, 0, 0 };
+        int notOnClient = 0;
+        int slot = 0;
+        auto add = [&](UPoplarMetaItemDefinition* item, int kind) {
+            if (!item || IsTemplate(item) || (item->ObjectFlags & kPendingKill) || owned.count(item)) return;
+            if (!conn || !ServerNetworking::PackageMapSupportsObject(conn, item)) { notOnClient++; return; }
+            while (slot < 0x800 && meta->StaticEntitlements[slot]) slot++;
+            if (slot >= 0x800) return;
+            meta->StaticEntitlements[slot] = item;
+            owned.insert(item);
+            added[kind]++;
+        };
+        for (UPoplarMetaItemCharacterDefinition* d : SDKUtils::GetAllOfClass<UPoplarMetaItemCharacterDefinition>()) add(d, 0);
+        for (UPoplarMetaSkinDefinition* d : SDKUtils::GetAllOfClass<UPoplarMetaSkinDefinition>()) add(d, 1);
+        for (UPoplarMetaTauntDefinition* d : SDKUtils::GetAllOfClass<UPoplarMetaTauntDefinition>()) add(d, 2);
+
+        int total = static_cast<int>(owned.size());
+        meta->NumStaticEntitlements = total;
+        meta->ReceivedStaticEntitlements = total;
+        if (meta->NumLoadoutEntitlements < 0) meta->NumLoadoutEntitlements = 0;   // "none", so the client's loadout gate passes
+        printf("[CHARSEL] %s granted %d items (heroes %d, skins %d, taunts %d); owns %d (had %d), %d left out (not in the client's package map), loadouts %d\n",
+            name.c_str(), added[0] + added[1] + added[2], added[0], added[1], added[2], total, before, notOnClient, meta->NumLoadoutEntitlements);
     }
 
     APoplarGameReplicationInfo* LevelGRI() {

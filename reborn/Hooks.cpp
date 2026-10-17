@@ -1540,6 +1540,8 @@ namespace Hooks {
 
                             SDKUtils::GetLastOfClass<AGameInfo>()->eventPostLogin(pc);
 
+                            CharSelect::GrantEverything(pc);
+
                             serverPlayer.shouldReplicateTo = true;
 
                             // The pawn is spawned once the game's select phase completes (the [CHARSEL]
@@ -1848,6 +1850,9 @@ namespace Hooks {
         // The lock-in also sends ServerPlayerSelectClass with an empty class path, which the server
         // resolves to the default hero (Class_ModernSoldier) and so replaces the hero picked above.
         // Drop it while the player has no pawn; the spawn retry sends the real class path itself.
+        // Still needed with every hero owned: the empty-path fallback in the native
+        // (battleborn+0x1184b90) is not an ownership check. The grey picker's lock-in
+        // (Overlay::LockInCharacter) sends it; runs 20261017-030022 and -033105 logged this drop.
         static UFunction* serverPlayerSelectClassUFunction = nullptr;
 
         if (!serverPlayerSelectClassUFunction)
@@ -1870,6 +1875,9 @@ namespace Hooks {
         // The client's lock-in (Overlay::LockInCharacter) sends ServerSelectCharacter with no character,
         // which the server resolves to the default class (Class_ModernSoldier) and so keeps undoing the
         // character we assigned at login. Substitute the server-assigned character.
+        // Still needed while the grey picker exists: its lock-in sends ServerSelectCharacter(none)
+        // and re-sends it (runs 20261017-030022 and -033105 logged the substitution). A pick made
+        // on the game's own grid sends neither, so neither part of this hook runs for it.
         static UFunction* serverSelectCharacterUFunction = nullptr;
 
         if (!serverSelectCharacterUFunction)
@@ -1906,8 +1914,14 @@ namespace Hooks {
         if (!characterSelectUFunction)
             characterSelectUFunction = UFunction::FindFunction("Function PoplarGame.PoplarCharacterSelectGFxMovie.extRequestPopulatePerks");
 
+        // Do not set the movie's bMovieAndManagerReady here (this used to). The movie's own tick
+        // (battleborn+0x135e570) runs its one-time setup only while that flag is still clear and
+        // the select manager has its style and phase: it sets the flag, builds the phase timeline
+        // and both players' menus, and calls CheckForEntitlementsReceived (vtable slot 0x5a0,
+        // +0x135d1e0), whose poll is the only thing that moves the hero grid out of its waiting
+        // state (+0x11560d0). Setting the flag early skipped all of it, so the grid ignored
+        // every click.
         if (!Globals::amServer && !Globals::amStandalone && function == characterSelectUFunction) {
-            reinterpret_cast<UPoplarCharacterSelectGFxMovie*>(object)->bMovieAndManagerReady = true;
             Globals::CharacterSelectMenuOpen = true;
         }
 
