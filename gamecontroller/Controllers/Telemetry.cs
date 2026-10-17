@@ -14,12 +14,9 @@ namespace gamecontroller.Controllers
 
 		private readonly ILogger<Telemetry> _logger;
 
-		private readonly GameSessions _gameSessions;
-
 		private readonly DatabaseSessions _databaseSessions;
-		public Telemetry(ILogger<Telemetry> logger, GameSessions sessions, DatabaseSessions databaseSessions) {
+		public Telemetry(ILogger<Telemetry> logger, DatabaseSessions databaseSessions) {
 			_logger = logger;
-			_gameSessions = sessions;
 			_databaseSessions = databaseSessions;
 		}
 

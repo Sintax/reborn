@@ -86,29 +86,6 @@ namespace gamecontroller
         public int MemoryUsageMB { get; set; }
     }
 
-    public class PlayerConfig
-    {
-        public string Name { get; set; }
-        public int TeamId { get; set; }
-        public string CharacterObjectName { get; set; }
-        public string? TauntObjectName { get; set; }
-        public string? SkinObjectName { get; set; }
-        public string? GearSlotOneObjectName { get; set; }
-        public string? GearSlotTwoObjectName { get; set; }
-        public string? GearSlotThreeObjectName { get; set; }
-
-        public PlayerConfig(LobbyPlayer lobbyPlayer)
-        {
-            Name = lobbyPlayer.Name;
-            CharacterObjectName = lobbyPlayer.CharacterObjectName; // This is validated as not null by launch reqs
-            TauntObjectName = lobbyPlayer.TauntObjectName;
-            SkinObjectName = lobbyPlayer.SkinObjectName;
-            GearSlotOneObjectName = lobbyPlayer.GearSlotOneObjectName;
-            GearSlotTwoObjectName = lobbyPlayer.GearSlotTwoObjectName;
-            GearSlotThreeObjectName = lobbyPlayer.GearSlotThreeObjectName;
-        }
-    }
-
     public class GameInstance
     {
         public string MyGuid;   // private: the server's token (X-Server-Token); never published
@@ -120,7 +97,7 @@ namespace gamecontroller
         public DateTime LastServerCheckIn { get; set; }
         public DateTime CreationTime { get; set; }
 
-        // Server-browser roster (ServerRoster.cs); null for lobby-launched games.
+        // The standing roster slot this server fills (ServerRoster.cs); null for a game a player started.
         public RosterSlot? Slot { get; set; }
         public int CurrentNumPlayers { get; set; }
         public bool MatchStarted { get; set; }
@@ -139,11 +116,6 @@ namespace gamecontroller
             CreationTime = DateTime.UtcNow;
             LastServerCheckIn = DateTime.UtcNow;
         }
-    }
-
-    public class AllowPlayerJoin
-    {
-        public int PlayerIndex { get; set; }
     }
 
     public class GameCreationConfig
@@ -165,36 +137,12 @@ namespace gamecontroller
         // The game's draft-style value, e.g. "BanPick_5v5"; empty means Quick Select (Init.cpp reads "draftStyle").
         public string DraftStyle { get; set; } = "";
 
-        public List<PlayerConfig> PlayerConfigs { get; set; }
-
-        // A roster server: no lobby, so no per-player picks.
         public GameCreationConfig(string instanceName, string mapMode, string serverStartupCommand, int maxNumPlayers)
         {
             InstanceName = instanceName;
             HumanReadableInstanceMapMode = mapMode;
             ServerStartupCommand = serverStartupCommand;
             MaxNumPlayers = maxNumPlayers;
-            PlayerConfigs = new List<PlayerConfig>();
         }
-
-		public GameCreationConfig(Lobby lobby) //string InstanceName, string HumanReadableInstanceMapMode, string ServerStartupCommand, List<LobbyPlayer> lobbyPlayers
-		{
-            this.InstanceName = lobby.Name;
-            this.HumanReadableInstanceMapMode = lobby.HumanReadableMapModeName; // validated by launch reqs
-            this.ServerStartupCommand = lobby.ServerStartString; // validated by launch reqs
-
-            //PlayerConfigs = lobby.LobbyPlayers.Select(e => new PlayerConfig(e)).ToList();
-
-            // Why not the above? I'm not sure if the above preserves list order, and this is VITAL for ensuring players actually get what they picked
-
-            PlayerConfigs = new List<PlayerConfig>();
-
-            for(int i = 0; i < lobby.LobbyPlayers.Count; i++)
-            {
-                PlayerConfigs.Add(new PlayerConfig(lobby.LobbyPlayers[i]));
-            }
-
-			this.MaxNumPlayers = PlayerConfigs.Count;
-		}
     }
 }
