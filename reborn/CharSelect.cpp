@@ -111,12 +111,13 @@ namespace CharSelect {
         UNetConnection* conn = reinterpret_cast<UNetConnection*>(pc->Player);
         int added[3] = { 0, 0, 0 };
         int notOnClient = 0;
+        int noRoom = 0;
         int slot = 0;
         auto add = [&](UPoplarMetaItemDefinition* item, int kind) {
             if (!item || IsTemplate(item) || (item->ObjectFlags & kPendingKill) || owned.count(item)) return;
             if (!conn || !ServerNetworking::PackageMapSupportsObject(conn, item)) { notOnClient++; return; }
             while (slot < 0x800 && meta->StaticEntitlements[slot]) slot++;
-            if (slot >= 0x800) return;
+            if (slot >= 0x800) { noRoom++; return; }
             meta->StaticEntitlements[slot] = item;
             owned.insert(item);
             added[kind]++;
@@ -125,12 +126,15 @@ namespace CharSelect {
         for (UPoplarMetaSkinDefinition* d : SDKUtils::GetAllOfClass<UPoplarMetaSkinDefinition>()) add(d, 1);
         for (UPoplarMetaTauntDefinition* d : SDKUtils::GetAllOfClass<UPoplarMetaTauntDefinition>()) add(d, 2);
 
-        int total = static_cast<int>(owned.size());
-        meta->NumStaticEntitlements = total;
-        meta->ReceivedStaticEntitlements = total;
+        // The client's gate counts non-null slots, so the count is the slots in use (a repeated
+        // item in the game's own list counts twice), never the number of distinct items.
+        int granted = added[0] + added[1] + added[2];
+        int total = before + granted;
+        if (meta->NumStaticEntitlements != total) meta->NumStaticEntitlements = total;
+        if (meta->ReceivedStaticEntitlements != total) meta->ReceivedStaticEntitlements = total;
         if (meta->NumLoadoutEntitlements < 0) meta->NumLoadoutEntitlements = 0;   // "none", so the client's loadout gate passes
-        printf("[CHARSEL] %s granted %d items (heroes %d, skins %d, taunts %d); owns %d (had %d), %d left out (not in the client's package map), loadouts %d\n",
-            name.c_str(), added[0] + added[1] + added[2], added[0], added[1], added[2], total, before, notOnClient, meta->NumLoadoutEntitlements);
+        printf("[CHARSEL] %s granted %d items (heroes %d, skins %d, taunts %d); owns %d (had %d), %d left out (not in the client's package map), %d left out (no room), loadouts %d\n",
+            name.c_str(), granted, added[0], added[1], added[2], total, before, notOnClient, noRoom, meta->NumLoadoutEntitlements);
     }
 
     APoplarGameReplicationInfo* LevelGRI() {
