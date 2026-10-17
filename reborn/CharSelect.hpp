@@ -13,6 +13,11 @@ namespace CharSelect {
     // room; with randomHero the pick phase lasts 5 s instead of the game's 60 s.
     void ApplyServerRules(bool randomHero);
 
+    // Server, at startup: the select manager's waiting room expects as many players as the match
+    // is for (ServerSettings::NumPlayersToStart), so it waits (120 s) until that many have logged
+    // in instead of ending as soon as the first one has. Logs "[CHARSEL] expecting <n> players".
+    void InstallServerHooks();
+
     // Server, right after a player's PostLogin: the player owns every hero, skin and taunt (adds
     // the missing ones to the player's meta PRI StaticEntitlements, which the server's ownership
     // check and the client's hero grid both read; only objects the client's package map covers).
@@ -39,10 +44,12 @@ namespace CharSelect {
     bool PhaseComplete();
 
     // Server, every tick (does its work about once a second; one object-list walk per run):
-    // logs the [CHARSEL] state; when the manager becomes Complete, sets
+    // logs the [CHARSEL] state and "[CHARSEL] waiting room: N/M connected" on change (after the
+    // waiting room, a no-show is no longer expected); when the manager becomes Complete, sets
     // Globals::haveHumansStarted, logs "[CHARSEL] <name> locked in <hero>" for every logged-in
     // player without a pawn and hands each one to Hooks::SpawnPawnForServerPlayer. After that, a
     // player logged in later is handed over once the game has a pick for them
-    // ("[CHARSEL] late join: <name> picked <hero>").
+    // ("[CHARSEL] late join: <name> picked <hero>"), or after 60 s without one
+    // ("[CHARSEL] late join: <name> made no pick in 60 s; spawning with the game's class").
     void OnServerTick(float dt);
 }

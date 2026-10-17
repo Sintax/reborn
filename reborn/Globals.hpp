@@ -26,6 +26,8 @@ namespace Globals {
         bool Joined = false;
         // CharSelect::OnServerTick handed this player to the spawn helper (once per player).
         bool SpawnScheduled = false;
+        // Late join: seconds this player has been logged in after the pick phase with no pick.
+        float NoPickSeconds = 0.f;
         int UniqueId = 0;
 
         // An empty CharacterObjectName leaves Character null: the game's hero screen picks it
@@ -75,7 +77,8 @@ namespace Globals {
     extern float timeTillHumanStart;
 
     // The game's pick phase is over (set by CharSelect::OnServerTick); reported to the
-    // coordinator as HumansHaveStarted (the server browser's MatchStarted).
+    // coordinator as HumansHaveStarted (the server browser's MatchStarted). Never reset: one
+    // server process hosts one match.
     extern bool haveHumansStarted;
 
     extern std::vector<int> AugStatus;

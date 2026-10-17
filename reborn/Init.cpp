@@ -2,6 +2,7 @@
 #include "LaunchOptions.hpp"
 #include "Diagnostics.hpp"
 #include "CharSelectRules.hpp"
+#include "CharSelect.hpp"
 
 namespace Init {
     void Globals() {
@@ -45,6 +46,7 @@ namespace Init {
             Hooks::ServerCinematicCrash3Hook = safetyhook::create_inline((void*)(Globals::baseAddress + 0x2c74f0), &Hooks::ServerCinematicCrash3);
             Hooks::StaticConstructObject = safetyhook::create_inline((void*)(Globals::baseAddress + 0x8C050), &Hooks::StaticConstructObjectHook);
             Hooks::BeginDestroy = safetyhook::create_inline((void*)(Globals::baseAddress + 0x74E80), &Hooks::BeginDestroyHook);
+            CharSelect::InstallServerHooks();
         }
         else {
             Hooks::MainMenu = safetyhook::create_inline((void*)(Globals::baseAddress + 0x127D860), &Hooks::MainMenuHook);

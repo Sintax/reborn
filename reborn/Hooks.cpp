@@ -1359,6 +1359,7 @@ namespace Hooks {
                     // StartHumans once per match, on the first login. The timer runs again for
                     // every player who joins; that player is logged in below, the others are not
                     // logged in a second time (a second Login would give them a second controller).
+                    // Never reset: one server process hosts one match (ShutdownTimer ends it).
                     static bool humansStarted = false;
                     if (!humansStarted) {
                         humansStarted = true;
@@ -1740,7 +1741,7 @@ namespace Hooks {
         }
 
         // The lock-in also sends ServerPlayerSelectClass with an empty class path, which the server
-        // resolves to the default hero (Class_ModernSoldier) and so replaces the hero picked above.
+        // resolves to the default hero (Class_ModernSoldier) and so replaces the player's pick.
         // Drop it while the player has no pawn; the spawn retry sends the real class path itself.
         // Still needed with every hero owned: the empty-path fallback in the native
         // (battleborn+0x1184b90) is not an ownership check. The grey picker's lock-in

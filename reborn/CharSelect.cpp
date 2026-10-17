@@ -3,6 +3,7 @@
 #include "Globals.hpp"
 #include "Hooks.hpp"
 #include "Networking.hpp"
+#include "ServerSettings.hpp"
 #include "Utils.hpp"
 #include <cstdio>
 #include <string>
@@ -194,8 +195,10 @@ namespace CharSelect {
     }
 
     namespace {
-        bool g_phaseComplete = false;   // this match's pick phase has completed (latched)
+        // Latched, never reset: one server process hosts one match (ShutdownTimer ends it).
+        bool g_phaseComplete = false;   // this match's pick phase has completed
         float g_sinceServerTick = 0.f;
+        const float kLateJoinPickSeconds = 60.f;
 
         bool IsLive(UObject* o) { return o && !(o->ObjectFlags & kPendingKill); }
 
@@ -244,6 +247,94 @@ namespace CharSelect {
         }
     }
 
+    // The waiting room (Ghidra). A Setup phase with bMoveToNextPhaseWhenAllConnected ends, in its
+    // done-test battleborn+0x11ee710, when
+    //     manager.NumberOfExpectatedPlayerConnections (+0xC24)
+    //         <= the team slots whose PRI has CurrentPlayerState >= Connected (3),
+    // and otherwise when its time runs out (abandoning the match if bAbandonMatchIfTimeRunsOut).
+    // WaitingForEntitlements (bMoveToNextPhaseWhenAllPlayersHaveEntitlements) ends when the slots
+    // with bHasReceivedEntitlements == +0xC24, else on time. +0xC24 is set by +0x11e8610, the first
+    // step of the manager's start-up (+0x16bdc40, also +0x1470ff0): it zeroes it and adds one per
+    // player of the game's online player service (PoplarGameInfo.PlayerService); with no service
+    // (this server) it stays 0, so "0 <= connected" ends the waiting room at once, and
+    // Teams[t].NumExpectedPlayers is just the PRIs logged in at that moment. After it runs, the
+    // manager expects the match's player count (ServerSettings::NumPlayersToStart).
+    namespace {
+        SafetyHookInline g_countExpectedPlayers;
+
+        void CountExpectedPlayersHook(APoplarCharacterSelectManager* m) {
+            g_countExpectedPlayers.call<void>(m);
+            if (!Globals::amServer || !IsLive(m)) return;
+            int want = (int)ServerSettings::NumPlayersToStart;
+            int beforeConnections = m->NumberOfExpectatedPlayerConnections;
+            int before[2] = { m->Teams[0].NumExpectedPlayers, m->Teams[1].NumExpectedPlayers };
+            if (m->NumberOfExpectatedPlayerConnections < want) m->NumberOfExpectatedPlayerConnections = want;
+            APoplarGameReplicationInfo* gri = m->WorldInfo ? reinterpret_cast<APoplarGameReplicationInfo*>(m->WorldInfo->GRI) : nullptr;
+            bool pve = !gri || !gri->GameInfoDefinition || gri->GameInfoDefinition->bPvE;
+            // Per team, for the screen and the bot count (+0x11e8e70 runs after this). PvE: all on
+            // team A. PvP: fill whichever team expects fewer.
+            while (m->Teams[0].NumExpectedPlayers + m->Teams[1].NumExpectedPlayers < want) {
+                int t = pve ? 0 : (m->Teams[1].NumExpectedPlayers < m->Teams[0].NumExpectedPlayers ? 1 : 0);
+                if (!pve && m->Teams[t].NumExpectedPlayers >= 5) t = 1 - t;
+                if (m->Teams[t].NumExpectedPlayers >= 5) break;
+                m->Teams[t].NumExpectedPlayers++;
+            }
+            printf("[CHARSEL] expecting %d players (%s): connections %d -> %d, team A %d -> %d, team B %d -> %d\n", want, pve ? "PvE" : "PvP",
+                beforeConnections, m->NumberOfExpectatedPlayerConnections, before[0], m->Teams[0].NumExpectedPlayers,
+                before[1], m->Teams[1].NumExpectedPlayers);
+        }
+
+        // The game's own "connected" count for the waiting room (see above).
+        int ConnectedPlayers(APoplarCharacterSelectManager* m) {
+            int n = 0;
+            for (int t = 0; t < 2; t++)
+                for (int i = 0; i < 5; i++) {
+                    APoplarPlayerReplicationInfo* pri = m->Teams[t].Players[i].PRI;
+                    if (pri && (uint8_t)pri->CurrentPlayerState >= (uint8_t)EPlayerState::PlayerState_Connected) n++;
+                }
+            return n;
+        }
+
+        bool IsWaitingRoom(UPoplarCharacterSelectPhaseDefinition* p) {
+            return p && p->IsA(UPoplarCharacterSelectPhaseDefinition_Setup::StaticClass())
+                && reinterpret_cast<UPoplarCharacterSelectPhaseDefinition_Setup*>(p)->bMoveToNextPhaseWhenAllConnected;
+        }
+
+        // Waiting room: logs "[CHARSEL] waiting room: N/M connected" on change. After it: the
+        // players still missing will not come, so expect only those connected; otherwise
+        // WaitingForEntitlements (which wants every expected player entitled) would add its full
+        // 30 s for a no-show.
+        void WatchWaitingRoom(APoplarCharacterSelectManager* m) {
+            static int lastConnected = -1, lastExpected = -1;
+            static bool waitingRoomOver = false;
+            if (m->CharacterSelectState == ECharacterSelectManagerState::CSMS_Complete || !m->CurrentPhase || waitingRoomOver) return;
+            int connected = ConnectedPlayers(m);
+            int expected = m->NumberOfExpectatedPlayerConnections;
+            if (IsWaitingRoom(m->CurrentPhase)) {
+                if (connected != lastConnected || expected != lastExpected) {
+                    lastConnected = connected;
+                    lastExpected = expected;
+                    printf("[CHARSEL] waiting room: %d/%d connected (%.0f s left)\n", connected, expected, m->TimeRemainingInCurrentPhase);
+                }
+                return;
+            }
+            // Past the waiting room (it is the style's first phase; this tick may not have seen it
+            // at all when everyone was already there): everyone came, or the time ran out.
+            waitingRoomOver = true;
+            printf("[CHARSEL] waiting room: %d/%d connected (over; now %s)\n", connected, expected, m->CurrentPhase->GetName().c_str());
+            if (expected > connected) {
+                printf("[CHARSEL] waiting room over with %d of %d players; expecting only them from now on\n", connected, expected);
+                m->NumberOfExpectatedPlayerConnections = connected;
+            }
+        }
+    }
+
+    void InstallServerHooks() {
+        g_countExpectedPlayers = safetyhook::create_inline((void*)(Globals::baseAddress + 0x11e8610), &CountExpectedPlayersHook);
+        if (!g_countExpectedPlayers)
+            printf("[STARTUP] hook FAILED: character-select expected players (battleborn+0x11e8610)\n");
+    }
+
     UPoplarPlayerNameIdentifierDefinition* PickedHero(APoplarPlayerController* pc, const char** source) {
         APoplarGameReplicationInfo* gri = pc && pc->WorldInfo ? reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI) : nullptr;
         return PickedHeroFrom(LiveManager(gri), pc, source);
@@ -254,12 +345,14 @@ namespace CharSelect {
     void OnServerTick(float dt) {
         g_sinceServerTick += dt;
         if (g_sinceServerTick < 1.f) return;
+        float elapsed = g_sinceServerTick;
         g_sinceServerTick = 0.f;
 
         APoplarGameReplicationInfo* gri = LevelGRI();
         LogState(gri);
         APoplarCharacterSelectManager* m = LiveManager(gri);
         if (!m) return;
+        WatchWaitingRoom(m);
 
         if (!g_phaseComplete) {
             if (m->CharacterSelectState != ECharacterSelectManagerState::CSMS_Complete) return;
@@ -287,17 +380,25 @@ namespace CharSelect {
         }
 
         // Late join: a player logged in after the phase completed gets the hero screen; once
-        // their lock-in is recorded, spawn them.
+        // their lock-in is recorded, spawn them. With no pick after kLateJoinPickSeconds, spawn
+        // them anyway with whatever class the game has pending (the helper copes with no hero).
         for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
             if (sp.SpawnScheduled) continue;
             APoplarPlayerController* pc = LiveController(sp);
             if (!pc || IsLive(pc->Pawn)) continue;
             const char* source = nullptr;
             UPoplarPlayerNameIdentifierDefinition* hero = PickedHeroFrom(m, pc, &source);
-            if (!hero) continue;
-            sp.Character = hero;
-            printf("[CHARSEL] late join: %s picked %s (from the %s)\n", sp.Name.c_str(), hero->GetName().c_str(), source);
-            HandToSpawn(sp);
+            if (hero) {
+                sp.Character = hero;
+                printf("[CHARSEL] late join: %s picked %s (from the %s, after %.0f s)\n", sp.Name.c_str(), hero->GetName().c_str(), source, sp.NoPickSeconds);
+                HandToSpawn(sp);
+                continue;
+            }
+            sp.NoPickSeconds += elapsed;
+            if (sp.NoPickSeconds >= kLateJoinPickSeconds) {
+                printf("[CHARSEL] late join: %s made no pick in %.0f s; spawning with the game's class\n", sp.Name.c_str(), kLateJoinPickSeconds);
+                HandToSpawn(sp);
+            }
         }
     }
 }
