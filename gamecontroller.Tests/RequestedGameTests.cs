@@ -224,8 +224,8 @@ public class RequestedGameTests
         var r = roster.StartRequested(req, "dj", T0);
         Assert.True(r.Ok, r.Error);
         var config = roster.Instances.Single().Config;
-        Assert.Equal("open Inc_Stronghold2_P?SpawnBotsTeamA=5?SpawnBotsTeamB=3?DraftStyle=BanPick_5v5", config.ServerStartupCommand);
-        Assert.Equal("BanPick_5v5", config.DraftStyle);
+        Assert.Equal("open Inc_Stronghold2_P?SpawnBotsTeamA=5?SpawnBotsTeamB=3?DraftStyle=BanPick5v5", config.ServerStartupCommand);
+        Assert.Equal("BanPick5v5", config.DraftStyle);
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public class RequestedGameTests
         var (roster, _) = Make();
         var req = Versus(); req.DraftStyle = "BanPick"; req.BotsTeamA = 2; req.BotsTeamB = 2;   // 2 + 4 = 3 a side
         Assert.True(roster.StartRequested(req, "dj", T0).Ok);
-        Assert.EndsWith("?DraftStyle=BanPick_3v3", roster.Instances.Single().Config.ServerStartupCommand);
+        Assert.EndsWith("?DraftStyle=BanPick3v3", roster.Instances.Single().Config.ServerStartupCommand);
     }
 
     [Fact]
@@ -280,11 +280,11 @@ public class RequestedGameTests
     [Theory]
     [InlineData("QuickSelect", 5, "QuickSelect")]
     [InlineData("QuickSelect", 3, "QuickSelect")]
-    [InlineData("BanPick", 5, "BanPick_5v5")]
-    [InlineData("BanPick", 4, "BanPick_5v5")]
-    [InlineData("BanPick", 3, "BanPick_3v3")]
-    [InlineData("CaptainsDraft", 5, "Captains_5v5")]
-    [InlineData("CaptainsDraft", 1, "Captains_3v3")]
+    [InlineData("BanPick", 5, "BanPick5v5")]
+    [InlineData("BanPick", 4, "BanPick5v5")]
+    [InlineData("BanPick", 3, "BanPick3v3")]
+    [InlineData("CaptainsDraft", 5, "Captains5v5")]
+    [InlineData("CaptainsDraft", 1, "Captains3v3")]
     [InlineData("ChaosRumble", 5, "ChaosRumble")]
     [InlineData("ChaosRumble", 2, "ChaosRumble")]
     [InlineData("Classic", 5, "Classic")]
@@ -304,8 +304,8 @@ public class RequestedGameTests
             new RosterSlot("Story", "Story - The Algorithm", "open Caverns_P", 2, DraftStyle: "BanPick"));
         var versus = roster.Instances.Single(i => i.Config.InstanceName == "Ban Pick vs Bots").Config;
         var story = roster.Instances.Single(i => i.Config.InstanceName == "Story").Config;
-        Assert.Equal("open Viaduct_P?SpawnBotsTeamA=4?SpawnBotsTeamB=5?DraftStyle=BanPick_5v5", versus.ServerStartupCommand);
-        Assert.Equal("BanPick_5v5", versus.DraftStyle);
+        Assert.Equal("open Viaduct_P?SpawnBotsTeamA=4?SpawnBotsTeamB=5?DraftStyle=BanPick5v5", versus.ServerStartupCommand);
+        Assert.Equal("BanPick5v5", versus.DraftStyle);
         Assert.Equal("open Caverns_P", story.ServerStartupCommand);
         Assert.Equal("", story.DraftStyle);
     }
@@ -313,11 +313,11 @@ public class RequestedGameTests
     [Fact]
     public void Server_config_json_carries_randomHero_and_draftStyle()
     {
-        var config = new gamecontroller.GameCreationConfig("x", "Incursion - Echelon", "open Viaduct_P", 2) { RandomHero = true, DraftStyle = "BanPick_5v5" };
+        var config = new gamecontroller.GameCreationConfig("x", "Incursion - Echelon", "open Viaduct_P", 2) { RandomHero = true, DraftStyle = "BanPick5v5" };
         // The web defaults ASP.NET Core uses for controller responses (camelCase names).
         string json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         Assert.Contains("\"randomHero\":true", json);
-        Assert.Contains("\"draftStyle\":\"BanPick_5v5\"", json);
+        Assert.Contains("\"draftStyle\":\"BanPick5v5\"", json);
     }
 
     [Theory]

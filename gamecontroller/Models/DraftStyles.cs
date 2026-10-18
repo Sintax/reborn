@@ -9,15 +9,17 @@ namespace gamecontroller.Models
 		public static readonly string[] Names = { "QuickSelect", "BanPick", "CaptainsDraft", "ChaosRumble", "Classic" };
 
 		// teamSize is players per side; 3 or fewer uses the game's 3v3 variant where one exists.
-		// Returns null for a name that is not in Names.
+		// Returns null for a name that is not in Names. The values are the game's style CodeNames
+		// (no underscore: CharacterSelectStyle_PvP_BanPick_3v3 has CodeName "BanPick3v3"); any
+		// other value is silently played as Quick Select.
 		public static string? GameValue(string name, int teamSize)
 		{
 			string size = teamSize <= 3 ? "3v3" : "5v5";
 			return name switch
 			{
 				"QuickSelect" => "QuickSelect",
-				"BanPick" => "BanPick_" + size,
-				"CaptainsDraft" => "Captains_" + size,
+				"BanPick" => "BanPick" + size,
+				"CaptainsDraft" => "Captains" + size,
 				"ChaosRumble" => "ChaosRumble",
 				"Classic" => "Classic",
 				_ => null,
