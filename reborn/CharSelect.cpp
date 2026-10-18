@@ -352,6 +352,7 @@ namespace CharSelect {
 
         APoplarGameReplicationInfo* gri = LevelGRI();
         LogState(gri);
+        ServerNetworking::CatchUpPackageMapsForQueuedBots();
         APoplarCharacterSelectManager* m = LiveManager(gri);
         if (!m) return;
         WatchWaitingRoom(m);

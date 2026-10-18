@@ -449,6 +449,44 @@ namespace ServerNetworking {
         }
     }
 
+    // Bots. The game queues them in PoplarGameInfo.SpawnBotArgsList and its 0.1 s UpdateSpawnBots
+    // timer (battleborn+0x1471b00) spawns them all at once only when every queued bot's archetype,
+    // class, skin and taunt are loaded on the server AND every player controller's
+    // HasClientLoadedOnDemandPackageFor passes for each (+0x1471a70, vtable slot 0x3c18). That
+    // check needs the object in the connection's package map, which only grows when this mod
+    // appends to it. In a native-select game the bots are queued at the start of the post-pick
+    // phase and their hero packages load one by one, mostly after the player's own spawn refreshed
+    // the maps, so nothing caught the maps up and the bots waited forever (run
+    // 20261018-154759-cs-versus-bots-control). Once every queued bot is loaded on the server,
+    // catch the in-match players' maps up (append-only, like a player's spawn).
+    void CatchUpPackageMapsForQueuedBots() {
+        static float lastRefresh = -100.f;
+        APoplarGameInfo* gi = SDKUtils::GetLastOfClass<APoplarGameInfo>();
+        if (!gi || (gi->ObjectFlags & 0x2000000000000000ull) || gi->SpawnBotArgsList.ArrayCount <= 0)
+            return;
+        std::vector<UObject*> needed;
+        for (int i = 0; i < gi->SpawnBotArgsList.ArrayCount; i++) {
+            FSpawnBotArgs& a = gi->SpawnBotArgsList[i];
+            if (!a.CharacterNameId) continue;   // the game drops these itself
+            if (!a.PlayerClass || !a.BotArchetype || (a.SkinId && !a.Skin) || (a.TauntId && !a.Taunt))
+                return;                         // still loading on the server; the game waits too
+            for (UObject* o : { (UObject*)a.BotArchetype, (UObject*)a.PlayerClass, (UObject*)a.Skin, (UObject*)a.Taunt })
+                if (o) needed.push_back(o);
+        }
+        std::vector<UNetConnection*> joined = JoinedConnections();
+        int missing = 0;
+        for (UNetConnection* c : joined)
+            for (UObject* o : needed)
+                if (!PackageMapSupportsObject(c, o)) missing++;
+        float now = gi->WorldInfo ? gi->WorldInfo->TimeSeconds : 0.f;
+        if (!missing || now - lastRefresh < 5.f)
+            return;
+        lastRefresh = now;
+        printf("[NETWORKING] %d queued bots are loaded but %d of their objects are missing from in-match players' package maps; catching the maps up\n",
+            gi->SpawnBotArgsList.ArrayCount, missing);
+        RefreshServerPackageMaps(nullptr);
+    }
+
     // Server, once per new player pawn: its skin (SkinData.SkinDef, what gives the pawn its body on
     // the clients) must be in every joined player's package map, or that client receives None and
     // the pawn has no body there. The skin's package can load after the spawn's package refresh (a

@@ -23,6 +23,8 @@ namespace ServerNetworking {
 
     void SyncNewPawnSkin(APawn* pawn, const char* who);
 
+    void CatchUpPackageMapsForQueuedBots();
+
     std::string ClientPackageMapSummary();
 
     bool ConnectionHasOnDemandPackage(UNetConnection* connection, UObject* package);
