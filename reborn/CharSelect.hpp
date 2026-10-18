@@ -43,6 +43,11 @@ namespace CharSelect {
     // Server: true once the match's pick phase has completed (the manager reached Complete).
     bool PhaseComplete();
 
+    // Server: true while a random-hero game (ServerSettings::RandomHero) is before the end of its
+    // pick phase. The hooks drop human picks then, so the game's timer picks every hero
+    // ("[CHARSEL] pick refused: timer picks in this game").
+    bool TimerPicksOnly();
+
     // Server, every tick (does its work about once a second; one object-list walk per run):
     // logs the [CHARSEL] state and "[CHARSEL] waiting room: N/M connected" on change (after the
     // waiting room, a no-show is no longer expected); when the manager becomes Complete, sets

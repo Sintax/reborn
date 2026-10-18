@@ -18,4 +18,8 @@ namespace ServerSettings {
     extern std::string GameCoordinatorBase;
 
     extern std::string GameCoordinatorKey;
+
+    // Every player gets the hero the game's pick timer chooses (the coordinator's "randomHero",
+    // or the -rbrandomhero test switch).
+    extern bool RandomHero;
 }

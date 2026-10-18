@@ -1726,8 +1726,9 @@ namespace Hooks {
             }
         }
 
-        // A click on the hero screen (the grid's cell index). Logged only: the game records the
-        // pick itself, and CharSelect::OnServerTick reads that record when the pick phase completes.
+        // A click on the hero screen (the grid's cell index). Logged: the game records the pick
+        // itself, and CharSelect::OnServerTick reads that record when the pick phase completes.
+        // Dropped in a random-hero game until the pick phase is over.
         static UFunction* serverCharacterSelectInputUFunction = nullptr;
 
         if (!serverCharacterSelectInputUFunction)
@@ -1738,6 +1739,12 @@ namespace Hooks {
             int index = reinterpret_cast<APoplarPlayerController_execServerCharacterSelectInput_Params*>(params)->Index;
             Globals::ServerPlayer* serverPlayer = ConnectionToServerPlayer((UNetConnection*)inputPc->Player);
             printf("[CHARSEL] %s clicked cell %i\n", serverPlayer ? serverPlayer->Name.c_str() : inputPc->GetName().c_str(), index);
+            // Random-hero game: the click never reaches the select manager (+0x11e9c80, which itself
+            // ignores clicks out of turn), so the game's timer picks.
+            if (CharSelect::TimerPicksOnly()) {
+                printf("[CHARSEL] pick refused: timer picks in this game\n");
+                return;
+            }
         }
 
         // The lock-in also sends ServerPlayerSelectClass with an empty class path, which the server
@@ -1778,6 +1785,12 @@ namespace Hooks {
 
         if (Globals::amServer && Globals::netDriver && function == serverSelectCharacterUFunction && params) {
             auto* selectParams = reinterpret_cast<APoplarPlayerController_eventServerSelectCharacter_Params*>(params);
+            // Random-hero game, pick phase not over: the timer picks. (The server's own re-lock in
+            // SpawnPawnForServerPlayer comes after the phase, so it still goes through.)
+            if (CharSelect::TimerPicksOnly()) {
+                printf("[CHARSEL] pick refused: timer picks in this game\n");
+                return;
+            }
             // The client re-sends its lock-in every 12 s while it sees no pawn. Once the server has
             // spawned the pawn, letting that lock-in through restarts the character-selection flow
             // (ClientPrepareForClassSwitch, ServerPlayerSelectClass, another class switch) on a
@@ -2386,7 +2399,7 @@ namespace Hooks {
 
             a1->EffectiveNumPlayers = ServerSettings::NumPlayersToStart;
 
-            CharSelect::ApplyServerRules(LaunchOptions::Get().randomHero);
+            CharSelect::ApplyServerRules(ServerSettings::RandomHero);
 
             ServerNetworking::InitListen();
             GameState::SetListening(true);

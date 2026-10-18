@@ -55,10 +55,12 @@ namespace Autopilot {
         // The game's pick phase, judged once per launch: its first second shows how long it runs.
         // The server's 5 s edit of PhaseDef_AllPlayers_Select (RandomHero games) is made on the
         // server's own copy of the definition and is not replicated: the client's copy and the
-        // manager's DurationOfPhase still say 60. TimeRemainingInCurrentPhase is replicated, so
-        // the largest value seen in the phase's first second tells a 5 s phase from a 60 s one.
+        // manager's DurationOfPhase still say 60. TimeRemainingInCurrentPhase is replicated, but
+        // the client also starts it from its own 60 when the phase begins (run
+        // 20261018-152929 saw 60 there, then the server's 5), so the smallest value seen in the
+        // phase's first second tells a 5 s phase from a 60 s one.
         float g_pickPhaseSeenAt = -1.f;   // phase time the pick phase was first seen, -1 not yet
-        float g_pickPhaseMaxLeft = 0.f;
+        float g_pickPhaseMinLeft = -1.f;  // -1 = no value above 0 seen yet
         bool g_pickPhaseJudged = false;
         std::atomic<bool> g_pickLocked{ false };
         const float kTimerPickSeconds = 5.f;   // CharSelect's RandomHero pick length
@@ -89,7 +91,7 @@ namespace Autopilot {
             }
             if (p == Phase::Launching) {   // a new game: judge its pick phase afresh
                 g_pickPhaseSeenAt = -1.f;
-                g_pickPhaseMaxLeft = 0.f;
+                g_pickPhaseMinLeft = -1.f;
                 g_pickPhaseJudged = false;
                 g_pickLocked = false;
             }
@@ -364,11 +366,12 @@ namespace Autopilot {
             }
             if (!phase || phase->PhaseType != ECharacterSelectPhaseType::CharacterSelectPhase_Select) return;
             if (g_pickPhaseSeenAt < 0.f) g_pickPhaseSeenAt = g_phaseTime;
-            if (m->TimeRemainingInCurrentPhase > g_pickPhaseMaxLeft) g_pickPhaseMaxLeft = m->TimeRemainingInCurrentPhase;
+            float left = m->TimeRemainingInCurrentPhase;
+            if (left > 0.f && (g_pickPhaseMinLeft < 0.f || left < g_pickPhaseMinLeft)) g_pickPhaseMinLeft = left;
             if (g_phaseTime - g_pickPhaseSeenAt < 1.f) return;
             g_pickPhaseJudged = true;
-            g_pickLocked = g_pickPhaseMaxLeft <= kTimerPickSeconds + 0.5f;
-            std::printf("[AUTOPILOT] pick phase %s runs %.0f s: %s\n", phase->GetName().c_str(), g_pickPhaseMaxLeft,
+            g_pickLocked = g_pickPhaseMinLeft > 0.f && g_pickPhaseMinLeft <= kTimerPickSeconds + 0.5f;
+            std::printf("[AUTOPILOT] pick phase %s has %.0f s left after its first second: %s\n", phase->GetName().c_str(), g_pickPhaseMinLeft,
                         g_pickLocked ? "the timer picks, not clicking" : "picking on the grid");
         }
 

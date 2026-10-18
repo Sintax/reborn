@@ -16,4 +16,6 @@ namespace ServerSettings {
     std::string GameCoordinatorBase = "";
 
     std::string GameCoordinatorKey = "";
+
+    bool RandomHero = false;
 }

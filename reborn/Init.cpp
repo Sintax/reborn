@@ -176,6 +176,7 @@ namespace Init {
 
         ServerSettings::NumPlayersToStart = serverConfigJSON["maxNumPlayers"].get<int>();
         ServerSettings::gamePort = serverConfigJSON["port"].get<int>();
+        ServerSettings::RandomHero = serverConfigJSON.value("randomHero", false);
     }
 
     void ServerConfig() {
@@ -206,7 +207,9 @@ namespace Init {
                 ServerSettings::MapString = _wcsdup((L"open " + opt.serverMap).c_str());
             }
             if (opt.players > 0) ServerSettings::NumPlayersToStart = opt.players;
+            if (opt.randomHero) ServerSettings::RandomHero = true;   // test switch
         }
+        std::printf("[OPTIONS] random hero %s\n", ServerSettings::RandomHero ? "on (the timer picks)" : "off");
 
         // Every networked game runs the game's own character-select phase, whichever way the map
         // was chosen (default, -rbservermap or the matchmaking service).

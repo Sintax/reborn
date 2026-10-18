@@ -18,7 +18,7 @@ namespace LaunchOptions {
         std::wstring soloMap;         // solo: map to open
         std::wstring serverMap;       // server: travel URL, e.g. "Dojo_P" or "IceScort_P?SpawnBotsTeamA=4"
         int players = 0;              // server: players to wait for (0 = keep default)
-        bool randomHero = false;      // server: every player gets a random hero, whatever they pick
+        bool randomHero = false;      // server, local tests only: sets ServerSettings::RandomHero (real games get it from the coordinator)
         bool minConsole = false;      // start the mod's console window minimized (logs are still written)
         std::wstring readyEvent;      // server: named event to set once it is listening (LocalHost.cpp)
         std::string coordinator;      // "host:port" of the matchmaking service (empty = Constants::GameCoordinatorEndpoint)

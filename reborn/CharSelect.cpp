@@ -342,6 +342,8 @@ namespace CharSelect {
 
     bool PhaseComplete() { return g_phaseComplete; }
 
+    bool TimerPicksOnly() { return ServerSettings::RandomHero && !g_phaseComplete; }
+
     void OnServerTick(float dt) {
         g_sinceServerTick += dt;
         if (g_sinceServerTick < 1.f) return;
