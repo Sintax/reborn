@@ -373,15 +373,20 @@ namespace GameState {
             // In a game where the timer picks (RandomHero) there is no pick, so both stay null.
             // pawn_skin_ok false (pawn_skin_wrong says which) when it wears another hero's skin.
             // When -rbcharacter's hero was held by another player (a Ban Pick game keeps every hero
-            // unique across both teams) the autopilot picks another, and that is the pick to check.
+            // unique across both teams) the autopilot picks another: fallback_hero names it and
+            // hero_matches_fallback checks it. hero_matches always checks -rbcharacter's hero, so a
+            // run that did not expect a fallback still fails as the wrong hero.
             std::string requested = Autopilot::PickLockedByServer() ? "" : RequestedHero();
+            std::string fallback;
             if (std::string fb = Autopilot::FallbackHero(); !requested.empty() && !fb.empty()) {
                 std::string display = DisplayNameOf(fb);
-                requested = display.empty() ? fb : display;
+                fallback = display.empty() ? fb : display;
             }
             j["requested_hero"] = requested.empty() ? nlohmann::json(nullptr) : nlohmann::json(requested);
+            j["fallback_hero"] = fallback.empty() ? nlohmann::json(nullptr) : nlohmann::json(fallback);
             j["pawn_hero"] = nullptr;
             j["hero_matches"] = nullptr;
+            j["hero_matches_fallback"] = nullptr;
             j["pawn_skin_ok"] = nullptr;
             j["pawn_skin_wrong"] = nullptr;
             if (own) {
@@ -389,6 +394,7 @@ namespace GameState {
                 std::string hero = PawnHero(own, known);
                 j["pawn_hero"] = hero;
                 if (known && !requested.empty()) j["hero_matches"] = hero == requested;
+                if (known && !fallback.empty()) j["hero_matches_fallback"] = hero == fallback;
                 std::string wrong = WrongSkin(own);
                 j["pawn_skin_ok"] = wrong.empty();
                 if (!wrong.empty()) j["pawn_skin_wrong"] = wrong;
