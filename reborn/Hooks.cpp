@@ -1122,6 +1122,13 @@ namespace Hooks {
         static int messagesLogged = 0;
         if (messagesLogged < 40) { messagesLogged++; printf("[NETWORKING] control message %u\n", (unsigned)message); }
 
+        // NMT_DebugText: the client's chosen name, sent while joining (PlayerNames::SendJoinName).
+        // Read here instead of by the engine, which would only log it.
+        if (message == 0x11) {
+            PlayerNames::OnJoinText(connection, inbunch);
+            return;
+        }
+
         WorldControlMessage.call<void>(world, connection, message, inbunch);
 
         if (message == 0x0) {
@@ -1439,18 +1446,6 @@ namespace Hooks {
                                     pc->MyPoplarPRI->Perks[2].Rarity = GameUtils::RarityStringToRarity(serverPlayer.GearSlotThree->GetFullName());
                                 }
 
-                                std::wstring wPlayerName = std::wstring(serverPlayer.Name.begin(), serverPlayer.Name.end());
-
-                                // Assign the name with the engine's own FString::operator= (battleborn+0x39ec0) so the
-                                // buffer belongs to the engine's string allocator (tag 2). The old FString(wcsdup(...))
-                                // put a buffer from the SDK's EngineMalloc into the PRI; when the PRI's name refresh
-                                // (battleborn+0x123b530 -> +0x123ac90, run from the actor tick) reassigned PlayerName,
-                                // the allocator's ownership check on that buffer failed and it crashed on purpose
-                                // (battleborn+0xd2cf24, write to address 0x17).
-                                {
-                                    struct { const wchar_t* begin; const wchar_t* end; } range = { wPlayerName.c_str(), wPlayerName.c_str() + wPlayerName.size() + 1 }; // end includes the terminator, like FString::Num()
-                                    reinterpret_cast<void (*)(FString*, void*)>(Globals::baseAddress + 0x039ec0)(&pc->MyPoplarPRI->PlayerName, &range);
-                                }
                                 pc->MyPoplarPRI->UniqueId.bHasValue = true;
                                 pc->MyPoplarPRI->UniqueId.RawId[0x0] = id;
                             }
@@ -1462,6 +1457,10 @@ namespace Hooks {
                             pc->Player = serverPlayer.Connection;
 
                             pc->RemoteRole = ENetRole::ROLE_AutonomousProxy;
+
+                            // The name goes on the PRI now, before its first replication: PlayerName
+                            // is sent only with a PRI's first update (battleborn+0x39ecb0).
+                            PlayerNames::SetHumanName(pc, serverPlayer.WantedName.empty() ? serverPlayer.Name : serverPlayer.WantedName);
 
                             SDKUtils::GetLastOfClass<AGameInfo>()->eventPostLogin(pc);
 
@@ -1816,11 +1815,6 @@ namespace Hooks {
                 }
             }
         }
-
-        // A client's chosen name (PlayerNames::ClientTick). Handled here so the game's own
-        // ChangeName rules cannot rename or refuse it.
-        if (Globals::amServer && Globals::netDriver && PlayerNames::OnServerChangeName(object, function, params))
-            return;
 
         static UFunction* characterSelectUFunction = nullptr;
 

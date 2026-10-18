@@ -74,51 +74,93 @@ namespace PlayerNames {
         }
     }
 
-    void InstallHooks() {
-        g_refreshName = safetyhook::create_inline((void*)(Globals::baseAddress + 0x123ac90), &RefreshNameHook);
-        if (!g_refreshName)
-            printf("[STARTUP] hook FAILED: player name refresh (battleborn+0x123ac90)\n");
-    }
-
     std::string ChosenName() {
         const std::string& test = LaunchOptions::Get().name;
         return CleanName(test.empty() ? StartKey::PlayerName() : test);
     }
 
+    void SendJoinName(UNetConnection* connection) {
+        static UNetConnection* sentTo = nullptr;
+        if (!connection || connection == sentTo) return;
+        // The control channel (connection+0xf48), which the engine's send uses without a check.
+        if (!*reinterpret_cast<void**>(reinterpret_cast<char*>(connection) + 0xf48)) return;
+        sentTo = connection;
+        std::string name = ChosenName();
+        std::wstring w = L"RebornName=" + std::wstring(name.begin(), name.end());
+        FString text;
+        text.ArrayData = w.c_str();
+        text.ArrayCount = text.ArrayMax = (int32_t)w.size() + 1;
+        // The engine's NMT_DebugText send (battleborn+0x3edc70, used by the NETDEBUGTEXT command):
+        // it writes the text into a reliable control bunch, so the buffer stays ours.
+        reinterpret_cast<void (*)(UNetConnection*, FString*)>(Globals::baseAddress + 0x3edc70)(connection, &text);
+        printf("[NAMES] client: sent name \"%s\" with the join\n", name.c_str());
+    }
+
+    // The client's pending-level control-message handler (battleborn+0x4c2000, UNetPendingLevel::
+    // NotifyControlMessage: 1 Welcome, 3 Challenge, 7 Uses, 0x13/0x15 the handshake). The mod's
+    // server skips Challenge/Login, so the stock "?Name=" never goes out; once the server has
+    // welcomed us, send the name ourselves. It arrives before NMT_Join, so before the login.
+    SafetyHookInline g_pendingControlMessage;
+
+    void PendingControlMessageHook(void* notify, UNetConnection* connection, uint8_t message, void* inbunch) {
+        g_pendingControlMessage.call<void>(notify, connection, message, inbunch);
+        if (message == 0x1)
+            SendJoinName(connection);
+    }
+
+    void InstallHooks() {
+        g_refreshName = safetyhook::create_inline((void*)(Globals::baseAddress + 0x123ac90), &RefreshNameHook);
+        if (!g_refreshName)
+            printf("[STARTUP] hook FAILED: player name refresh (battleborn+0x123ac90)\n");
+        if (!Globals::amServer) {
+            g_pendingControlMessage = safetyhook::create_inline((void*)(Globals::baseAddress + 0x4c2000), &PendingControlMessageHook);
+            if (!g_pendingControlMessage)
+                printf("[STARTUP] hook FAILED: pending-level control messages (battleborn+0x4c2000)\n");
+        }
+    }
+
+    void OnJoinText(UNetConnection* connection, void* inbunch) {
+        // FArchive << FString (battleborn+0x515b0), as the engine's own NMT_DebugText handler reads it.
+        FString text;
+        reinterpret_cast<void (*)(void*, FString*)>(Globals::baseAddress + 0x0515b0)(inbunch, &text);
+        std::string s = text.ArrayCount > 0 && text.ArrayData ? text.ToString() : std::string();
+        if (text.ArrayData)
+            reinterpret_cast<void (*)(int, const void*)>(Globals::baseAddress + 0xd2e720)(2, text.ArrayData);   // the engine's free
+
+        const std::string key = "RebornName=";
+        if (s.rfind(key, 0) != 0) {
+            printf("[NET] debug text from a client: %s\n", s.c_str());
+            return;
+        }
+        std::string wanted = s.substr(key.size());
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            if (sp.Connection == connection) {
+                sp.WantedName = wanted;
+                printf("[NAMES] %s asked to be \"%s\"\n", sp.Name.c_str(), wanted.c_str());
+                return;
+            }
+        }
+        printf("[NAMES] a connection with no player asked to be \"%s\"; ignored\n", wanted.c_str());
+    }
+
     void ClientTick(float dt) {
-        static APlayerController* sentTo = nullptr;
         static float sinceLog = 0.f;
         static std::string lastSeen;
 
         APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
-        if (!pc || !pc->WorldInfo || pc->WorldInfo->NetMode != ENetMode::NM_Client) {
-            sentTo = nullptr;
-            return;
-        }
+        if (!pc || !pc->WorldInfo || pc->WorldInfo->NetMode != ENetMode::NM_Client) return;
 
         sinceLog += dt;
-        if (sinceLog >= 5.f) {
-            sinceLog = 0.f;
-            std::string seen = NamesSeen(pc->WorldInfo);
-            if (seen != lastSeen) {
-                printf("[NAMES] client: players %s\n", seen.c_str());
-                lastSeen = seen;
-            }
+        if (sinceLog < 5.f) return;
+        sinceLog = 0.f;
+        std::string seen = NamesSeen(pc->WorldInfo);
+        if (seen != lastSeen) {
+            printf("[NAMES] client: players %s\n", seen.c_str());
+            lastSeen = seen;
         }
-
-        // Once per controller, as soon as the server has logged it in. The RPC is reliable.
-        if (pc == sentTo || Gone(pc->PlayerReplicationInfo)) return;
-        sentTo = pc;
-        std::string name = ChosenName();
-        std::wstring w(name.begin(), name.end());
-        FString text;
-        text.ArrayData = w.c_str();
-        text.ArrayCount = text.ArrayMax = (int32_t)w.size() + 1;
-        pc->ServerChangeName(text);   // copied into the RPC; the buffer stays ours
-        printf("[NAMES] client: sent name \"%s\"\n", name.c_str());
     }
 
-    void SetHumanName(APlayerController* pc, const std::string& wanted) {
+    void SetHumanName(APlayerController* pc, std::string wanted) {   // a copy: callers pass ServerPlayer::Name, changed below
         if (Gone(pc) || Gone(pc->PlayerReplicationInfo)) return;
         APlayerReplicationInfo* pri = pc->PlayerReplicationInfo;
 
@@ -136,8 +178,8 @@ namespace PlayerNames {
         Assign(&pri->PlayerName, name);
         pri->bPlayerNameDirty = 1;   // the refresh hook copies it into the other three
         // PlayerName replicates only with a PRI's first update (bNetInitial, see the PRI's
-        // replication list at battleborn+0x39ecb0), so clients that already have this PRI keep
-        // the old name; only players who arrive later see the new one.
+        // replication list at battleborn+0x39ecb0): a later change reaches only players who
+        // arrive later, so this runs at login.
 
         std::string was = "?";
         for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
@@ -148,15 +190,5 @@ namespace PlayerNames {
             }
         }
         printf("[NAMES] %s is now \"%s\" (asked for \"%s\")\n", was.c_str(), name.c_str(), wanted.c_str());
-    }
-
-    bool OnServerChangeName(UObject* object, UFunction* function, void* params) {
-        static UFunction* changeName = nullptr;
-        if (!changeName) changeName = UFunction::FindFunction("Function Engine.PlayerController.ServerChangeName");
-        if (!changeName || function != changeName || !params || !object || !object->IsA(APlayerController::StaticClass()))
-            return false;
-        auto* p = reinterpret_cast<APlayerController_execServerChangeName_Params*>(params);
-        SetHumanName(reinterpret_cast<APlayerController*>(object), p->S.ArrayCount > 0 ? p->S.ToString() : std::string());
-        return true;
     }
 }

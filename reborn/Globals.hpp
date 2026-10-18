@@ -29,6 +29,8 @@ namespace Globals {
         // Late join: seconds this player has been logged in after the pick phase with no pick.
         float NoPickSeconds = 0.f;
         int UniqueId = 0;
+        // The name the client asked for while joining (PlayerNames::OnJoinText); set at login.
+        std::string WantedName;
 
         // An empty CharacterObjectName leaves Character null: the game's hero screen picks it
         // (CharSelect::OnServerTick reads the pick when the phase completes).
