@@ -42,6 +42,7 @@ namespace Autopilot {
         float g_menuTime = 0.f;           // seconds the menu condition has held continuously
         bool g_leftMenu = false;          // Launching: the world has left the menu at least once
         bool g_startupPending = false;    // startup finished; pick a save and continue on the next tick
+        bool g_matchOver = false;         // the joined match was Ended (or abandoned) when last seen
         float g_possessionLogTimer = 0.f; // client: seconds until the next possession census
         // CharacterSelect: our clicks on the game's own hero grid.
         int g_selectClicks = 0;           // clicks sent so far
@@ -607,6 +608,21 @@ namespace Autopilot {
         const bool inMenu = InMenu();
         if (inMenu) g_menuTime += dt; else g_menuTime = 0.f;
         if (!inMenu && Globals::GetGWorld()) g_leftMenu = true;
+        static float sinceMatchCheck = 0.f;   // LevelGRI scans every object: once a second
+        sinceMatchCheck += dt;
+        if (!inMenu && sinceMatchCheck >= 1.f) {
+            sinceMatchCheck = 0.f;
+            if (APoplarGameReplicationInfo* gri = CharSelect::LevelGRI())
+                g_matchOver = gri->CurrentMatchState.State >= 7;   // MatchState_Ended or Shutdown
+        }
+        // Sent home after the server ended the match (e.g. abandoned for too few players): a
+        // player would stay in the menu, so do not join again.
+        if (g_matchOver && g_menuTime >= kMenuGrace
+            && (g_phase == Phase::CharacterSelect || g_phase == Phase::Playing)) {
+            std::printf("[AUTOPILOT] back in the menu after the server ended the match; staying in the menu\n");
+            SetPhase(Phase::Off);
+            return;
+        }
 
         // While joined: what this client knows about its pawn, every 2 s (prints on change).
         if (!inMenu && (!opt.join.empty() || opt.browse || !opt.startGame.empty()) && (g_phase == Phase::CharacterSelect || g_phase == Phase::Playing)) {

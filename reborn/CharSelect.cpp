@@ -361,6 +361,21 @@ namespace CharSelect {
         ServerNetworking::CatchUpPackageMapsForQueuedBots();
         APoplarCharacterSelectManager* m = LiveManager(gri);
         if (!m) return;
+
+        // Abandon (Ghidra): a waiting room with bAbandonMatchIfTimeRunsOut (the Versus one) that
+        // times out short of players ends the match itself (+0x11ee710 -> the game's end-match
+        // call with outcome TooFewPlayers), so the match is Ended before the pick phase completes.
+        // The game sends the players home; end the server game as at a normal match end.
+        if (!g_phaseComplete && gri->CurrentMatchState.State >= 7 /* MatchState_Ended */) {
+            if (Globals::ShutdownTimer == 0.0f) {
+                printf("[CHARSEL] match abandoned: not enough players (match %d, outcome %d, %d/%d connected)\n",
+                    gri->CurrentMatchState.State, (int)gri->CurrentMatchState.Outcome, ConnectedPlayers(m),
+                    m->NumberOfExpectatedPlayerConnections);
+                printf("[GAME] Match ended (abandoned), shutting down in 10sec!\n");
+                Globals::ShutdownTimer = 10.0f;
+            }
+            return;
+        }
         WatchWaitingRoom(m);
 
         if (!g_phaseComplete) {
