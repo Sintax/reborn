@@ -59,6 +59,8 @@ namespace PlayerNames {
             }
             Assign(&pri->PlayerNameTruncatedHTML, pri->PlayerNameTruncated.ArrayData, pri->PlayerNameTruncated.ArrayCount);
             pri->bPlayerNameDirty = 0;
+            // Not called: the original's name-changed virtual (PRI vtable +0xda8), which it runs only
+            // on a client after a Steam lookup. The screens show the name without it (runs 20261018-190820, -191235).
         }
 
         std::string NamesSeen(AWorldInfo* wi) {
@@ -79,12 +81,15 @@ namespace PlayerNames {
         return CleanName(test.empty() ? StartKey::PlayerName() : test);
     }
 
+    // Called once per join: the server sends Welcome once per connection. No "already sent"
+    // memory, so a later join on a connection at a reused address still sends.
     void SendJoinName(UNetConnection* connection) {
-        static UNetConnection* sentTo = nullptr;
-        if (!connection || connection == sentTo) return;
+        if (!connection) return;
         // The control channel (connection+0xf48), which the engine's send uses without a check.
-        if (!*reinterpret_cast<void**>(reinterpret_cast<char*>(connection) + 0xf48)) return;
-        sentTo = connection;
+        if (!*reinterpret_cast<void**>(reinterpret_cast<char*>(connection) + 0xf48)) {
+            printf("[NAMES] client: no control channel at the welcome; the server will use its fallback name\n");
+            return;
+        }
         std::string name = ChosenName();
         std::wstring w = L"RebornName=" + std::wstring(name.begin(), name.end());
         FString text;
@@ -123,24 +128,40 @@ namespace PlayerNames {
         // FArchive << FString (battleborn+0x515b0), as the engine's own NMT_DebugText handler reads it.
         FString text;
         reinterpret_cast<void (*)(void*, FString*)>(Globals::baseAddress + 0x0515b0)(inbunch, &text);
-        std::string s = text.ArrayCount > 0 && text.ArrayData ? text.ToString() : std::string();
+        // By the count, not wcslen: the reader does not promise a final 0.
+        std::string s;
+        if (text.ArrayData && text.ArrayCount > 1)
+            s = ToAscii(std::wstring(text.ArrayData, text.ArrayCount - 1));
         if (text.ArrayData)
             reinterpret_cast<void (*)(int, const void*)>(Globals::baseAddress + 0xd2e720)(2, text.ArrayData);   // the engine's free
 
+        // Client text reaches the log only cleaned or made safe, and the odd lines are capped,
+        // so a client cannot forge log lines or flood the log.
+        static int oddLines = 0;
         const std::string key = "RebornName=";
         if (s.rfind(key, 0) != 0) {
-            printf("[NET] debug text from a client: %s\n", s.c_str());
+            if (oddLines < 10) {
+                oddLines++;
+                printf("[NET] debug text from a client (%zu characters): %s\n", s.size(), SafeLogText(s).c_str());
+            }
             return;
         }
-        std::string wanted = s.substr(key.size());
+        std::string wanted = CleanName(s.substr(key.size()));
         for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
             if (sp.Connection == connection) {
+                static int nameLines = 0;
+                if (sp.WantedName != wanted && nameLines < 50) {   // repeats and floods stay out of the log
+                    nameLines++;
+                    printf("[NAMES] %s asked to be \"%s\" (%zu characters sent)\n", SafeLogText(sp.Name).c_str(), wanted.c_str(), s.size() - key.size());
+                }
                 sp.WantedName = wanted;
-                printf("[NAMES] %s asked to be \"%s\"\n", sp.Name.c_str(), wanted.c_str());
                 return;
             }
         }
-        printf("[NAMES] a connection with no player asked to be \"%s\"; ignored\n", wanted.c_str());
+        if (oddLines < 10) {
+            oddLines++;
+            printf("[NAMES] a connection with no player asked to be \"%s\"; ignored\n", wanted.c_str());
+        }
     }
 
     void ClientTick(float dt) {
@@ -169,7 +190,7 @@ namespace PlayerNames {
             int count = pc->WorldInfo->GRI->PRIArray.ArrayCount;
             for (int i = 0; i < count && i < 64; i++) {
                 APlayerReplicationInfo* other = pc->WorldInfo->GRI->PRIArray[i];
-                if (Gone(other) || other == pri || other->bBot) continue;
+                if (Gone(other) || other == pri) continue;   // bots too: no human named like a bot
                 taken.push_back(other->PlayerName.ToString());
             }
         }
@@ -189,6 +210,6 @@ namespace PlayerNames {
                 break;
             }
         }
-        printf("[NAMES] %s is now \"%s\" (asked for \"%s\")\n", was.c_str(), name.c_str(), wanted.c_str());
+        printf("[NAMES] %s is now \"%s\" (asked for \"%s\")\n", SafeLogText(was).c_str(), name.c_str(), SafeLogText(wanted).c_str());
     }
 }

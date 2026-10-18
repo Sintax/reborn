@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cctype>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,8 @@ namespace PlayerNames {
         return true;
     }
 
-    // `name`, or `name 2`, `name 3`, ... when another player already has it (ignoring case).
+    // `name`, or `name-2`, `name-3`, ... when another player already has it (ignoring case). The
+    // name is cut so the result stays within 24 characters and keeps CleanName's characters.
     inline std::string UniqueName(const std::string& name, const std::vector<std::string>& taken) {
         auto isTaken = [&](const std::string& n) {
             for (const std::string& t : taken) if (SameName(t, n)) return true;
@@ -36,8 +38,28 @@ namespace PlayerNames {
         };
         if (!isTaken(name)) return name;
         for (int i = 2;; i++) {
-            std::string candidate = name + " " + std::to_string(i);
+            std::string suffix = "-" + std::to_string(i);
+            std::string candidate = name.substr(0, kMaxNameLength - suffix.size()) + suffix;
             if (!isTaken(candidate)) return candidate;
         }
+    }
+
+    // Wide text from a client as plain ASCII; anything else becomes '?'.
+    inline std::string ToAscii(const std::wstring& text) {
+        std::string out;
+        for (wchar_t c : text) out += (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+        return out;
+    }
+
+    // Client text made safe for one log line: control and non-ASCII characters become '?' (so it
+    // cannot start a fake line), at most `max` characters, "..." when cut.
+    inline std::string SafeLogText(const std::string& text, size_t max = 40) {
+        std::string out;
+        for (char c : text) {
+            if (out.size() == max) return out + "...";
+            unsigned char u = (unsigned char)c;
+            out += (u >= 0x20 && u < 0x7f) ? c : '?';
+        }
+        return out;
     }
 }

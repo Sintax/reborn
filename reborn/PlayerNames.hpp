@@ -32,8 +32,10 @@ namespace PlayerNames {
     // sees change.
     void ClientTick(float dt);
 
-    // Server: the one place a human's name is set. Cleans it, adds " 2", " 3"... when another
-    // human has it, sets the scoreboard name and the ServerPlayer name, logs "[NAMES] ...".
+    // Server: the one place a human's name is set. Cleans it, adds "-2", "-3"... when another
+    // player (human or bot) has it, sets the scoreboard name and the ServerPlayer name, logs "[NAMES] ...".
     // Called at login, before the PRI's first replication (later changes do not reach clients).
+    // The client's chosen name wins over a coordinator lobby name for now; the approved-account
+    // check planned for web accounts belongs here.
     void SetHumanName(APlayerController* pc, std::string wanted);
 }
