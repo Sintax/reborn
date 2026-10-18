@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <random>
 #include <string>
 
@@ -52,6 +53,12 @@ namespace Autopilot {
         bool g_takenLogged = false;       // the "pick taken" line was printed
         bool g_cellTried[30] = {};
         bool g_confirmDue = false;        // the last click's "Confirm Character" dialog is still to be answered
+        // The hero the server took when it was not -rbcharacter's (that one was held by another
+        // player or banned, so the autopilot picked the next free one); empty otherwise. Read by
+        // the debug server's thread, so behind a lock.
+        std::mutex g_fallbackMutex;
+        std::string g_fallbackHero;
+        void SetFallbackHero(const std::string& h) { std::lock_guard<std::mutex> l(g_fallbackMutex); g_fallbackHero = h; }
         // The game's pick phase, judged once per launch: its first second shows how long it runs.
         // The server's 5 s edit of PhaseDef_AllPlayers_Select (RandomHero games) is made on the
         // server's own copy of the definition and is not replicated: the client's copy and the
@@ -88,6 +95,7 @@ namespace Autopilot {
                 g_takenLogged = false;
                 g_confirmDue = false;
                 for (bool& t : g_cellTried) t = false;
+                SetFallbackHero("");
             }
             if (p == Phase::Launching) {   // a new game: judge its pick phase afresh
                 g_pickPhaseSeenAt = -1.f;
@@ -398,6 +406,7 @@ namespace Autopilot {
             if (why && !g_takenLogged) {
                 g_takenLogged = true;
                 std::printf("[AUTOPILOT] pick of cell %d taken (%s; selection state %d)\n", g_lastCell, why, (int)pri->CharacterSelectionState);
+                if (g_lastCell >= 0 && g_lastCell != g_wantedCell) SetFallbackHero(CellHero(m, g_lastCell));
             }
             return why != nullptr;
         }
@@ -546,6 +555,12 @@ namespace Autopilot {
                 if (!g_cellTried[i] && c.NameID && !c.SelectedBy && !c.BannedBy) next = i;
             }
             if (next < 0) return;
+            if (next != g_wantedCell && g_lastCell == g_wantedCell) {
+                const FCharacterSelectionData& w = m->MasterCharacterList[g_wantedCell];
+                std::printf("[AUTOPILOT] cell %d refused (%s), picking %d (%s)\n", g_lastCell,
+                            w.BannedBy ? "banned" : w.SelectedBy ? "another player holds it" : "not taken",
+                            next, CellHero(m, next).c_str());
+            }
             std::printf("[AUTOPILOT] cell %d not taken after %.0f s (movie state %d, selection state %d, %s); %s\n",
                         g_lastCell, kPickRetrySeconds, (int)mv->PlayerUIState[0], pri ? (int)pri->CharacterSelectionState : -1,
                         GridState(pc, mv).c_str(), next == g_wantedCell ? "clicking it again" : "trying the next free hero");
@@ -556,6 +571,8 @@ namespace Autopilot {
     bool Active() { return LaunchOptions::Get().autopilot && !Globals::amServer; }
 
     bool PickLockedByServer() { return g_pickLocked; }
+
+    std::string FallbackHero() { std::lock_guard<std::mutex> l(g_fallbackMutex); return g_fallbackHero; }
 
     const char* PhaseName() {
         if (!Active()) return "off";

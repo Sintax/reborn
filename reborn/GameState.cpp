@@ -372,7 +372,13 @@ namespace GameState {
             // hero_matches (null with no pick, no pawn, or a hero that maps to no display name).
             // In a game where the timer picks (RandomHero) there is no pick, so both stay null.
             // pawn_skin_ok false (pawn_skin_wrong says which) when it wears another hero's skin.
+            // When -rbcharacter's hero was held by another player (a Ban Pick game keeps every hero
+            // unique across both teams) the autopilot picks another, and that is the pick to check.
             std::string requested = Autopilot::PickLockedByServer() ? "" : RequestedHero();
+            if (std::string fb = Autopilot::FallbackHero(); !requested.empty() && !fb.empty()) {
+                std::string display = DisplayNameOf(fb);
+                requested = display.empty() ? fb : display;
+            }
             j["requested_hero"] = requested.empty() ? nlohmann::json(nullptr) : nlohmann::json(requested);
             j["pawn_hero"] = nullptr;
             j["hero_matches"] = nullptr;
