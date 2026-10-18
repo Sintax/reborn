@@ -4,7 +4,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 MOD_PROJECT = REPO / "reborn" / "reborn.vcxproj"
 MOD_DLL = REPO / "reborn" / "x64" / "Release" / "reborn.dll"
-GAME_DIR = Path(os.environ.get("BB_GAME_DIR", r"D:\SteamLibrary\steamapps\common\Battleborn"))
+GAME_DIR = Path(os.environ.get("BB_GAME_DIR", r"C:\Users\djsin\Games\Battleborn"))
 WIN64 = GAME_DIR / "Binaries" / "Win64"
 PKG = Path(__file__).resolve().parent
 LOG_DIR = Path(os.environ["USERPROFILE"]) / "Documents" / "RebornLogs"
