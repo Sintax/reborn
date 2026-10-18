@@ -59,4 +59,8 @@ namespace CharSelect {
     // ("[CHARSEL] late join: <name> picked <hero>"), or after 60 s without one
     // ("[CHARSEL] late join: <name> made no pick in 60 s; spawning with the game's class").
     void OnServerTick(float dt);
+
+    // Client, four times a second: Globals::GearBoxOpen is true while the local controller's
+    // CurrentCharacterSelectMovieState is InProgress (2, the hero screen is up), false otherwise.
+    void UpdateGearBox();
 }

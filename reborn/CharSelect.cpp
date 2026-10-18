@@ -425,4 +425,16 @@ namespace CharSelect {
             }
         }
     }
+
+    // PoplarPlayerController.ECharacterSelectMovieState (uescript-bb): Closed, LoadingLevel,
+    // InProgress, ClashScreen, Closing.
+    void UpdateGearBox() {
+        bool open = false;
+        if (!Globals::amServer && !Globals::amStandalone) {
+            APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+            open = IsLive(pc) && pc->CurrentCharacterSelectMovieState == ECharacterSelectMovieState::CharacterSelectMovie_InProgress;
+        }
+        if (open != Globals::GearBoxOpen) printf("[CHARSEL] gear box %s\n", open ? "shown" : "hidden");
+        Globals::GearBoxOpen = open;
+    }
 }

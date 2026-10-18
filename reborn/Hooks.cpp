@@ -1222,6 +1222,13 @@ namespace Hooks {
         }
         else {
             PlayerNames::ClientTick(DeltaTime);
+            // Four times a second: finding the local controller walks the object list.
+            static float sinceGearBox = 0.0f;
+            sinceGearBox += DeltaTime;
+            if (sinceGearBox >= 0.25f) {
+                sinceGearBox = 0.0f;
+                CharSelect::UpdateGearBox();
+            }
             static float sinceCharSel = 0.0f;
             sinceCharSel += DeltaTime;
             if (sinceCharSel >= 1.0f) {
@@ -1752,8 +1759,8 @@ namespace Hooks {
         // resolves to the default hero (Class_ModernSoldier) and so replaces the player's pick.
         // Drop it while the player has no pawn; the spawn retry sends the real class path itself.
         // Still needed with every hero owned: the empty-path fallback in the native
-        // (battleborn+0x1184b90) is not an ownership check. The grey picker's lock-in
-        // (Overlay::LockInCharacter) sends it; runs 20261017-030022 and -033105 logged this drop.
+        // (battleborn+0x1184b90) is not an ownership check. The old grey picker's lock-in sent it
+        // (runs 20261017-030022 and -033105 logged this drop); the picker is gone, the guard stays.
         static UFunction* serverPlayerSelectClassUFunction = nullptr;
 
         if (!serverPlayerSelectClassUFunction)
@@ -1773,12 +1780,9 @@ namespace Hooks {
             }
         }
 
-        // The client's lock-in (Overlay::LockInCharacter) sends ServerSelectCharacter with no character,
-        // which the server resolves to the default class (Class_ModernSoldier) and so keeps undoing the
-        // character we assigned at login. Substitute the server-assigned character.
-        // Still needed while the grey picker exists: its lock-in sends ServerSelectCharacter(none)
-        // and re-sends it (runs 20261017-030022 and -033105 logged the substitution). A pick made
-        // on the game's own grid sends neither, so neither part of this hook runs for it.
+        // A lock-in with no character (the old grey picker sent one) makes the server fall back to
+        // the default class (Class_ModernSoldier). Substitute the server-assigned character.
+        // A pick made on the game's own grid sends neither, so neither part of this hook runs for it.
         static UFunction* serverSelectCharacterUFunction = nullptr;
 
         if (!serverSelectCharacterUFunction)
@@ -1816,31 +1820,17 @@ namespace Hooks {
             }
         }
 
-        static UFunction* characterSelectUFunction = nullptr;
-
-        if (!characterSelectUFunction)
-            characterSelectUFunction = UFunction::FindFunction("Function PoplarGame.PoplarCharacterSelectGFxMovie.extRequestPopulatePerks");
-
-        // Do not set the movie's bMovieAndManagerReady here (this used to). The movie's own tick
-        // (battleborn+0x135e570) runs its one-time setup only while that flag is still clear and
-        // the select manager has its style and phase: it sets the flag, builds the phase timeline
-        // and both players' menus, and calls CheckForEntitlementsReceived (vtable slot 0x5a0,
-        // +0x135d1e0), whose poll is the only thing that moves the hero grid out of its waiting
-        // state (+0x11560d0). Setting the flag early skipped all of it, so the grid ignored
-        // every click.
-        if (!Globals::amServer && !Globals::amStandalone && function == characterSelectUFunction) {
-            Globals::CharacterSelectMenuOpen = true;
-        }
-
+        // Never set the movie's bMovieAndManagerReady from here (this file used to): the movie's
+        // own tick (battleborn+0x135e570) does its one-time setup only while that flag is clear,
+        // and that setup is what lets the hero grid take clicks.
         static UFunction* characterSelectClosedUFunction = nullptr;
 
         if (!characterSelectClosedUFunction)
             characterSelectClosedUFunction = UFunction::FindFunction("Function PoplarGame.PoplarCharacterSelectGFxMovie.WaitForCharacterSelectLevelToUnload");
 
+        // The hero screen is closing: send the gear picked in the Gear box.
         if (!Globals::amServer && !Globals::amStandalone && function == characterSelectClosedUFunction) {
             SetGear();   // schedules its work on the game thread
-
-            Globals::CharacterSelectMenuOpen = false;
         }
 
         static UFunction* matchEndedUFunction = nullptr;

@@ -164,9 +164,8 @@ namespace Globals {
     
     extern std::vector<AActor*> NetworkObjectList;
 
-    extern bool CharacterSelectMenuOpen;
-
-    extern bool CharacterSelectHasLockedIn;
+    // The game's hero screen is up on this client (CharSelect::UpdateGearBox); shows the Gear box.
+    extern bool GearBoxOpen;
 
     extern bool CharacterSelectThisPossesionsTheRealOne;
 

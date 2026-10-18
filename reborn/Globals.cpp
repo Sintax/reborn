@@ -99,9 +99,7 @@ namespace Globals {
 
     std::vector<AActor*> NetworkObjectList = std::vector<AActor*>();
 
-    bool CharacterSelectMenuOpen = false;
-
-    bool CharacterSelectHasLockedIn = false;
+    bool GearBoxOpen = false;
 
     bool CharacterSelectThisPossesionsTheRealOne = false;
 
@@ -123,7 +121,6 @@ namespace Globals {
         Globals::timeTillStartupMassacre = 0.0f;
         Globals::didStandaloneCharacterInitialization = false;
         Globals::didSendPreferencesToServer = false;
-        Globals::CharacterSelectHasLockedIn = false;
         Globals::CharacterSelectThisPossesionsTheRealOne = false;
 
         // Actors outside any level (archetypes, class defaults) must not point at a world: a
