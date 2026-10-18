@@ -479,7 +479,8 @@ namespace ServerNetworking {
             for (UObject* o : needed)
                 if (!PackageMapSupportsObject(c, o)) missing++;
         float now = gi->WorldInfo ? gi->WorldInfo->TimeSeconds : 0.f;
-        if (!missing || now - lastRefresh < 5.f)
+        // The map's clock restarts at 0 on every map; a time before the last catch-up is a new map.
+        if (!missing || (now >= lastRefresh && now - lastRefresh < 5.f))
             return;
         lastRefresh = now;
         printf("[NETWORKING] %d queued bots are loaded but %d of their objects are missing from in-match players' package maps; catching the maps up\n",
