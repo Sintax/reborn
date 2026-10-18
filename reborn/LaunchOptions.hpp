@@ -25,6 +25,7 @@ namespace LaunchOptions {
         std::string coordinator;      // "host:port" of the matchmaking service (empty = Constants::GameCoordinatorEndpoint)
         std::string coordinatorKey;   // server: the token the service gave this server; with coordinator, turns on coordinator mode
         std::string character;        // display name from Constants::CharacterSelectCharacterTable
+        std::string name;             // client, test players only: the name to play as instead of reborn-player.txt
         unsigned int seed = 0;
         int hangSeconds = 60;
         bool testHang = false;        // freeze the game thread 20 s after play starts

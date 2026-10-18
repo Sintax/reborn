@@ -20,6 +20,8 @@ int main() {
     auto s = LaunchOptions::Parse(LR"(Serverborn.exe -rbservermap=IceScort_P?SpawnBotsTeamA=4 -rbplayers=2)");
     CHECK(s.serverMap == L"IceScort_P?SpawnBotsTeamA=4");
     CHECK(s.players == 2);
+    CHECK(s.name.empty());
+    CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbname=Test-c2").name == "Test-c2");
 
     // Matchmaking: the client points at the coordinator; a coordinator-launched server also gets its key.
     auto c = LaunchOptions::Parse(L"Battleborn.exe -rbcoordinator=203.0.113.10:5000");

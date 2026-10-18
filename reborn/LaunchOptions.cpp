@@ -69,6 +69,7 @@ namespace LaunchOptions {
             else if (key == L"-rbcoordinatorkey" && !val.empty()) o.coordinatorKey = Narrow(val);
             else if (key == L"-rbplayers") { if (ToInt(val, 1, 10, n)) o.players = n; else o.errors.push_back(a); }
             else if (key == L"-rbcharacter" && !val.empty()) o.character = Narrow(val);
+            else if (key == L"-rbname" && !val.empty()) o.name = Narrow(val);   // test players only
             else if (key == L"-rbseed") { if (ToInt(val, 0, INT_MAX, n)) o.seed = (unsigned)n; else o.errors.push_back(a); }
             else if (key == L"-rbhangsecs") { if (ToInt(val, 5, 3600, n)) o.hangSeconds = n; else o.errors.push_back(a); }
             else if (key == L"-rbtesthang") o.testHang = true;

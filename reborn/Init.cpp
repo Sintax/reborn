@@ -3,6 +3,7 @@
 #include "Diagnostics.hpp"
 #include "CharSelectRules.hpp"
 #include "CharSelect.hpp"
+#include "PlayerNames.hpp"
 
 namespace Init {
     void Globals() {
@@ -60,6 +61,7 @@ namespace Init {
         Hooks::ConsoleCommand = safetyhook::create_inline((void*)(Globals::baseAddress + 0x01fca00), &Hooks::ConsoleCommandHook);
         Hooks::ProcessEvent = safetyhook::create_inline((void*)(Globals::baseAddress + 0x109ca0), &Hooks::ProcessEventHook);
         Hooks::ProcessRemoteFunction = safetyhook::create_inline((void*)(Globals::baseAddress + 0x0728fd0), &Hooks::ProcessRemoteFunctionHook);
+        PlayerNames::InstallHooks();
     }
 
     void ImGUI() {

@@ -166,6 +166,8 @@
     <ClInclude Include="StartKey.hpp" />
     <ClInclude Include="CharSelect.hpp" />
     <ClInclude Include="CharSelectRules.hpp" />
+    <ClInclude Include="PlayerNameRules.hpp" />
+    <ClInclude Include="PlayerNames.hpp" />
     <ClInclude Include="UiStyle.hpp" />
     <ClInclude Include="StartGameWindow.hpp" />
   </ItemGroup>
@@ -212,6 +214,7 @@
     <ClCompile Include="LocalHost.cpp" />
     <ClCompile Include="StartKey.cpp" />
     <ClCompile Include="CharSelect.cpp" />
+    <ClCompile Include="PlayerNames.cpp" />
     <ClCompile Include="UiStyle.cpp" />
     <ClCompile Include="StartGameWindow.cpp" />
   </ItemGroup>

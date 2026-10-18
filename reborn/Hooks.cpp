@@ -14,6 +14,7 @@
 #include "GameState.hpp"
 #include "LaunchOptions.hpp"
 #include "CharSelect.hpp"
+#include "PlayerNames.hpp"
 
 namespace Hooks {
     SafetyHookInline ProcessRemoteFunction;
@@ -1213,6 +1214,7 @@ namespace Hooks {
             CharSelect::OnServerTick(DeltaTime);
         }
         else {
+            PlayerNames::ClientTick(DeltaTime);
             static float sinceCharSel = 0.0f;
             sinceCharSel += DeltaTime;
             if (sinceCharSel >= 1.0f) {
@@ -1814,6 +1816,11 @@ namespace Hooks {
                 }
             }
         }
+
+        // A client's chosen name (PlayerNames::ClientTick). Handled here so the game's own
+        // ChangeName rules cannot rename or refuse it.
+        if (Globals::amServer && Globals::netDriver && PlayerNames::OnServerChangeName(object, function, params))
+            return;
 
         static UFunction* characterSelectUFunction = nullptr;
 
