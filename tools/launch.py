@@ -15,14 +15,39 @@ from . import config
 GAME_BASE_ARGS = ["-windowed", "-ResX=960", "-ResY=540", "-nosound", "-nomoviestartup", "-NOSPLASH"]
 # Spike S3: three instances at 960x540 push this laptop's free RAM under 2 GB, so in multiplayer
 # the server renders nothing and clients run small.
-CLIENT_RES = ["-ResX=1280", "-ResY=720"]
+CLIENT_RES_FALLBACK = (1008, 567)
+# The game does not declare DPI awareness, so Windows enlarges its window by the display scale
+# (1280x720 became 1620x949 on screen at 125 %). These are the window frame and title bar at 100 %.
+FRAME_W, FRAME_H = 16, 39
+
+
+def fit_client_res(work_w: int, scale: float, players: int = 2) -> tuple[int, int]:
+    """Largest 16:9 game resolution whose scaled window fits `players` side by side across a
+    work area `work_w` pixels wide. Width is a multiple of 16."""
+    w = int((work_w / players - FRAME_W * scale) / scale) // 16 * 16
+    return w, w * 9 // 16
+
+
+def client_res() -> tuple[int, int]:
+    """Test-player resolution that keeps two player windows side by side on this screen."""
+    try:
+        u32 = ctypes.windll.user32
+        work = (ctypes.c_long * 4)()
+        if not u32.SystemParametersInfoW(0x0030, 0, work, 0):   # SPI_GETWORKAREA
+            return CLIENT_RES_FALLBACK
+        return fit_client_res(work[2] - work[0], u32.GetDpiForSystem() / 96)
+    except Exception:
+        return CLIENT_RES_FALLBACK
 
 
 def base_args(role: str) -> list[str]:
     if role == "solo":
         return list(GAME_BASE_ARGS)
     a = [x for x in GAME_BASE_ARGS if not x.startswith(("-ResX=", "-ResY="))]
-    return a + (["-nullrhi"] if role == "server" else CLIENT_RES)
+    if role == "server":
+        return a + ["-nullrhi"]
+    w, h = client_res()
+    return a + [f"-ResX={w}", f"-ResY={h}"]
 GAME_EXES = ("Battleborn.exe", "Serverborn.exe")
 STEAMID_BASE = 76561197960287930
 LOADER_FILES = ("steamclient_loader_x64.exe", "steamclient64.dll", "steamclient.dll")
