@@ -60,6 +60,7 @@ namespace LaunchOptions {
                 if (comma != std::wstring::npos && ToInt(val.substr(0, comma), 0, 5, ta) && ToInt(val.substr(comma + 1), 0, 5, tb)) { o.botsA = ta; o.botsB = tb; }
                 else o.errors.push_back(a);
             }
+            else if (key == L"-rbdraftstyle" && !val.empty()) o.draftStyle = Narrow(val);
             else if (key == L"-rbhost" && !val.empty()) o.host = val;
             else if (key == L"-rbsolomap" && !val.empty()) o.soloMap = val;
             else if (key == L"-rbservermap" && !val.empty()) o.serverMap = val;

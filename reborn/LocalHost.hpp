@@ -10,8 +10,10 @@
 namespace LocalHost {
     enum class Status { Idle, Starting, ReadyToJoin, Running, Failed };
 
-    // mapUrl is what the server opens, e.g. "Caverns_P". Returns at once; the work runs on its own thread.
-    void Start(const std::string& mapUrl, const std::string& displayName, int players);
+    // mapUrl is what the server opens, e.g. "Caverns_P". draftStyleValue is the game's draft style
+    // CodeName (e.g. "BanPick3v3"), added as ?DraftStyle=; empty = none. Returns at once; the work runs on
+    // its own thread.
+    void Start(const std::string& mapUrl, const std::string& displayName, int players, const std::string& draftStyleValue = "");
     // Stops a server that is starting or running.
     void Stop();
 

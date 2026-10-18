@@ -224,7 +224,8 @@ namespace GameCoordinator {
             return out;
         }
         out.ok = true;
-        std::printf("[NETWORKING] started \"%s\" on the server: %s (%s)\n", request.name.c_str(), out.connectString.c_str(), out.guid.c_str());
+        std::printf("[NETWORKING] started \"%s\" on the server: %s (%s), draft style %s\n", request.name.c_str(), out.connectString.c_str(),
+                    out.guid.c_str(), request.draftStyle.c_str());
         return out;
     }
 

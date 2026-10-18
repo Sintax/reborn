@@ -172,6 +172,16 @@ namespace Constants {
         }
     };
 
+    // Versus draft styles: what the player sees, and the name sent to the matchmaking service
+    // (gamecontroller DraftStyles.Names).
+    const std::vector<std::pair<std::string, std::string>> DraftStyleNames = {
+        { "Quick Select", "QuickSelect" },
+        { "Ban Pick", "BanPick" },
+        { "Captain's Draft", "CaptainsDraft" },
+        { "Chaos Rumble", "ChaosRumble" },
+        { "Classic", "Classic" }
+    };
+
     const std::vector<std::pair<std::string, std::string>> GameCreationOptions = {
         {
             "Story - Prologue", "open PvE_Prologue_P"

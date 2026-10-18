@@ -1,4 +1,5 @@
 #include "LocalHost.hpp"
+#include "StartGameRequest.hpp"
 
 #include <Windows.h>
 #include <TlHelp32.h>
@@ -228,7 +229,7 @@ namespace LocalHost {
         }
     }
 
-    void Start(const std::string& mapUrl, const std::string& displayName, int players) {
+    void Start(const std::string& mapUrl, const std::string& displayName, int players, const std::string& draftStyleValue) {
         unsigned gen;
         {
             std::lock_guard lock(g_mu);
@@ -236,8 +237,9 @@ namespace LocalHost {
             g_status = Status::Starting;
             g_message = "Getting ready...";
         }
-        std::printf("[HOST] hosting %s (%s) for %d player(s)\n", displayName.c_str(), mapUrl.c_str(), players);
-        std::thread(Run, gen, mapUrl, displayName, players).detach();
+        std::string url = StartGame::WithDraftStyle(mapUrl, draftStyleValue);
+        std::printf("[HOST] hosting %s (%s) for %d player(s)\n", displayName.c_str(), url.c_str(), players);
+        std::thread(Run, gen, url, displayName, players).detach();
     }
 
     void Stop() {

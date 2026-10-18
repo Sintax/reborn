@@ -14,6 +14,7 @@ namespace LaunchOptions {
         std::string startGame;        // client autopilot: start this map/mode on the server, then join it
         int startPlayers = 1;         // humans the started game waits for
         int botsA = 5, botsB = 5;     // bots per team for a started Versus game
+        std::string draftStyle = "QuickSelect"; // client autopilot: Versus draft style for -rbstartgame/-rbhost (Constants::DraftStyleNames name)
         std::wstring host;           // client: press "Host Game" for this map at the menu (LocalHost.cpp)
         std::wstring soloMap;         // solo: map to open
         std::wstring serverMap;       // server: travel URL, e.g. "Dojo_P" or "IceScort_P?SpawnBotsTeamA=4"

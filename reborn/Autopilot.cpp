@@ -212,6 +212,7 @@ namespace Autopilot {
                     req.players = opt.startPlayers;
                     req.botsTeamA = StartGame::IsVersus(req.mapMode) ? opt.botsA : 0;
                     req.botsTeamB = StartGame::IsVersus(req.mapMode) ? opt.botsB : 0;
+                    req.draftStyle = opt.draftStyle;
                     std::string instance(opt.instance.begin(), opt.instance.end());
                     req.playerName = StartKey::PlayerName().empty() ? instance : StartKey::PlayerName();
                     req.name = StartKey::DefaultGameName(req.playerName, req.mapMode);
@@ -261,7 +262,11 @@ namespace Autopilot {
                     Overlay::StartLaunchSequence(L"open 127.0.0.1");
                 } else if (LocalHost::GetStatus() != LocalHost::Status::Starting) {
                     std::string map(opt.host.begin(), opt.host.end());
-                    LocalHost::Start(map, map, opt.players > 0 ? opt.players : 1);
+                    int players = opt.players > 0 ? opt.players : 1;
+                    std::string draft = opt.draftStyle == "QuickSelect" ? "" : StartGame::DraftStyleValue(opt.draftStyle, StartGame::TeamSize(map, players));
+                    if (draft.empty() && opt.draftStyle != "QuickSelect")
+                        std::printf("[AUTOPILOT] -rbdraftstyle: \"%s\" is not a draft style; hosting without one\n", opt.draftStyle.c_str());
+                    LocalHost::Start(map, map, players, draft);
                 }
             }
             SetPhase(Phase::Launching);

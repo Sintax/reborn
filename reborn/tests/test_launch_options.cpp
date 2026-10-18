@@ -58,6 +58,9 @@ int main() {
     CHECK(!sgDefaults.minConsole);
     CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbminconsole").minConsole);
     CHECK(!LaunchOptions::Parse(L"Battleborn.exe -rbbots=9,1").errors.empty());
+    CHECK(sgDefaults.draftStyle == "QuickSelect");
+    auto ds = LaunchOptions::Parse(L"Battleborn.exe -rbautopilot -rbhost=Viaduct_P -rbdraftstyle=BanPick");
+    CHECK(ds.draftStyle == "BanPick" && ds.errors.empty() && ds.unknown.empty());
 
     // Every networked game runs the game's own character select: the server's map string asks for it once.
     CHECK(CharSelect::WithTournamentMode(L"open Caverns_P") == L"open Caverns_P?bTournamentMode=1");

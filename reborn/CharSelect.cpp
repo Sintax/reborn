@@ -29,8 +29,8 @@ namespace CharSelect {
                     UPoplarCharacterSelectPhaseDefinition* p = s->CharacterSelectPhaseDefs[i];
                     phases += (phases.empty() ? "" : " > ") + (p ? p->GetName() : std::string("null"));
                 }
-                printf("[CHARSEL] style %s \"%s\" unique %d botpick %.0fs blind %u pve %u 5v5 %u 3v3 %u: %s\n", s->GetName().c_str(),
-                    s->StyleName.ToString().c_str(), (int)s->UniquenessLevel, s->SimulatedBotSelectionTime, s->bBlindSelection,
+                printf("[CHARSEL] style %s code \"%s\" \"%s\" unique %d botpick %.0fs blind %u pve %u 5v5 %u 3v3 %u: %s\n", s->GetName().c_str(),
+                    s->CodeName.ToString().c_str(), s->StyleName.ToString().c_str(), (int)s->UniquenessLevel, s->SimulatedBotSelectionTime, s->bBlindSelection,
                     s->bSupports_PvE, s->bSupports_PvP_5v5, s->bSupports_PvP_3v3, phases.c_str());
             }
             for (UPoplarCharacterSelectPhaseDefinition* p : SDKUtils::GetAllOfClass<UPoplarCharacterSelectPhaseDefinition>()) {
@@ -57,7 +57,7 @@ namespace CharSelect {
         }
     }
 
-    void ApplyServerRules(bool randomHero) {
+    void ApplyServerRules(APoplarGameInfo* gameInfo, bool randomHero) {
         UPoplarCharacterSelectPhaseDefinition* waitAbandon = nullptr;
         UPoplarCharacterSelectPhaseDefinition* waitNoAbandon = nullptr;
         UPoplarCharacterSelectPhaseDefinition* pick = nullptr;
@@ -77,6 +77,12 @@ namespace CharSelect {
                 waitAbandon ? "found" : "missing", waitNoAbandon ? "found" : "missing", pick ? "found" : "missing");
         printf("[CHARSEL] rules: waiting-for-players %.0f s, pick %.0f s\n", kWaitingForPlayersSeconds,
             pick ? pick->DurationOfPhase : -1.f);
+
+        // Draft style: the game's InitGame (0x1474140) reads ?DraftStyle=<CodeName> and ?DraftStyleIndex=<n>
+        // from the map URL itself, so the server only passes the option on (no ApplyDraftStyle needed).
+        if (gameInfo)
+            printf("[CHARSEL] draft style \"%s\" index %d (from the map URL; empty = the game's default)\n",
+                gameInfo->CharacterSelectStyleOptionString.ToString().c_str(), gameInfo->CharacterSelectStyleOption);
         g_rulesApplied = true;
     }
 

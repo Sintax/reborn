@@ -2,6 +2,7 @@
 
 #include "CharSelectRules.hpp"
 
+class APoplarGameInfo;
 class APoplarGameReplicationInfo;
 class APoplarPlayerController;
 class UPoplarPlayerNameIdentifierDefinition;
@@ -10,8 +11,9 @@ class UPoplarPlayerNameIdentifierDefinition;
 // carries ?bTournamentMode=1, see WithTournamentMode).
 namespace CharSelect {
     // Server, once the match's game info is set up: give players 120 s to arrive in the waiting
-    // room; with randomHero the pick phase lasts 5 s instead of the game's 60 s.
-    void ApplyServerRules(bool randomHero);
+    // room; with randomHero the pick phase lasts 5 s instead of the game's 60 s. Logs the draft
+    // style the game read from the map URL ("[CHARSEL] draft style ...").
+    void ApplyServerRules(APoplarGameInfo* gameInfo, bool randomHero);
 
     // Server, at startup: the select manager's waiting room expects as many players as the match
     // is for (ServerSettings::NumPlayersToStart), so it waits (120 s) until that many have logged

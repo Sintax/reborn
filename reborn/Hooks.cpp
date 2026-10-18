@@ -2399,7 +2399,7 @@ namespace Hooks {
 
             a1->EffectiveNumPlayers = ServerSettings::NumPlayersToStart;
 
-            CharSelect::ApplyServerRules(ServerSettings::RandomHero);
+            CharSelect::ApplyServerRules(a1, ServerSettings::RandomHero);
 
             ServerNetworking::InitListen();
             GameState::SetListening(true);
