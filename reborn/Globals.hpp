@@ -111,10 +111,8 @@ namespace Globals {
 
     extern float ShutdownTimer;
     
-    extern bool CreateGameOpen;
-
-    // "Start a game on the server" (Overlay.cpp): the panel, the one-time name prompt, and the game being started.
-    extern bool StartServerGameOpen;
+    // "Start a Game" (StartGameWindow.cpp): the window, the one-time name prompt, and the server game being started.
+    extern bool StartGameOpen;
     extern bool PlayerNameOpen;
     extern std::string PendingStartGuid;
     extern std::string StartGameStatus;
@@ -155,8 +153,6 @@ namespace Globals {
     extern GameCoordinator::ServerBrowserEntry CurrentMatchEntry;
 
     extern bool ConnectedToGameCoordinatorMatch;
-    
-    extern bool DisplayWaitingForPlayers;
 
     UWorld* GetGWorld();
 

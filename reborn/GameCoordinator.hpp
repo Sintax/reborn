@@ -190,8 +190,6 @@ namespace GameCoordinator {
 
     void RefreshServerBrowser();
 
-    void RefreshWaitingForPlayers();
-
     void CreateGame(std::string InstanceName, std::string HumanReadableInstanceMapMode, std::string ServerStartupCommand, int MaxNumPlayers, std::string Password);
 
     struct StartResult { bool ok = false; std::string guid, connectString, error; };

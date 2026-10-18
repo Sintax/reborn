@@ -160,30 +160,6 @@ namespace GameCoordinator {
 
         return;
     }
-
-    void RefreshWaitingForPlayers() {
-        httplib::Result result;
-
-        Client();
-
-        result = Client().Get("/api/games");
-
-        if (!result || result->status != 200) {
-            std::cout << "[NETWORKING] Failed to refresh server list!" << std::endl;
-            return;
-        }
-
-        // Find the game we joined by its address: the list can reorder between refreshes.
-        for (const nlohmann::json& entry : nlohmann::json::parse(result->body)) {
-            ServerBrowserEntry candidate(entry);
-            if (candidate.ServerConnectString == Globals::CurrentMatchEntry.ServerConnectString) {
-                Globals::CurrentMatchEntry = candidate;
-                break;
-            }
-        }
-
-        return;
-    }
 }
 
 namespace GameCoordinator {

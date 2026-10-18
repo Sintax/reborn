@@ -49,9 +49,7 @@ namespace Globals {
 
     bool ServerBrowserOpen = false;
 
-    bool CreateGameOpen = false;
-
-    bool StartServerGameOpen = false;
+    bool StartGameOpen = false;
     bool PlayerNameOpen = false;
     std::string PendingStartGuid = "";
     std::string StartGameStatus = "";
@@ -94,8 +92,6 @@ namespace Globals {
     GameCoordinator::ServerBrowserEntry CurrentMatchEntry;
 
     bool ConnectedToGameCoordinatorMatch = false;
-
-    bool DisplayWaitingForPlayers = false;
 
     std::optional<GameCoordinator::Lobby> CurrentLobby = std::optional<GameCoordinator::Lobby>();
 

@@ -7,18 +7,12 @@
 #include "Hooks.hpp"
 #include "LocalHost.hpp"
 #include "StartKey.hpp"
-#include "StartGameRequest.hpp"
+#include "StartGameWindow.hpp"
+#include "UiStyle.hpp"
 
 #include <algorithm>
-#include <atomic>
 
 namespace Overlay {
-    namespace {
-        // Bumped when a server start is requested and again when the player cancels. A start that finishes
-        // after a cancel sees the number has moved on and gives the server game back instead of joining it.
-        std::atomic<int> g_startRequestId{0};
-    }
-
     void OpenServerBrowser() {
         std::thread t(GameCoordinator::RefreshServerBrowser);
         t.detach();
@@ -28,24 +22,6 @@ namespace Overlay {
 
     void OpenDirectConnect() {
         Globals::DirectConnectOpen = true;
-    }
-
-    void UpdateWaitingForPlayers() {
-        bool shouldExit = false;
-
-        while (!shouldExit && !Globals::SaveManagerOpen) {
-            GameCoordinator::RefreshWaitingForPlayers();
-
-            if (Globals::CurrentMatchEntry.MatchStarted) {
-                shouldExit = true;
-                Globals::DisplayWaitingForPlayers = false;
-            }
-            else {
-                Globals::DisplayWaitingForPlayers = true;
-            }
-
-            Sleep(2 * 1000);
-        }
     }
 
     void StartLaunchSequence(const wchar_t* command) {
@@ -59,14 +35,9 @@ namespace Overlay {
             Globals::LaunchCommand = command;
         }
         else {
+            // The game's own select screen is the waiting room now; nothing is drawn while it waits.
             Engine::ExecConsoleCommand(command);
-
-            if (Globals::ConnectedToGameCoordinatorMatch) {
-                Globals::ConnectedToGameCoordinatorMatch = false;
-
-                std::thread t(UpdateWaitingForPlayers);
-                t.detach();
-            }
+            Globals::ConnectedToGameCoordinatorMatch = false;
         }
     }
 
@@ -144,12 +115,13 @@ namespace Overlay {
     }
 
     void Render() {
+        UiStyle::Apply();
+
         if (Globals::LaunchSequenceState > Globals::ELaunchSequenceState::NotOpen) {
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always);
+            UiStyle::NextWindow(0.5f);
             ImGui::Begin("Launch Sequence", &Globals::SoloVSAIOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
             ImVec2 textSize;
             if (Globals::LaunchSequenceState == Globals::ELaunchSequenceState::CharacterSelect) {
@@ -330,17 +302,15 @@ namespace Overlay {
                 }
             }
 
-            float availWidth = ImGui::GetContentRegionAvail().x;
-            float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = (availWidth - spacing) * 0.5f;
+            float buttonWidth = UiStyle::ButtonWidth(2);
 
             if (Globals::LaunchSequenceState == Globals::ELaunchSequenceState::CharacterSelect) {
-                if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Close", buttonWidth)) {
                     Globals::LaunchSequenceState = Globals::ELaunchSequenceState::NotOpen;
                 }
             }
             else {
-                if (ImGui::Button("Back", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Back", buttonWidth)) {
                     Globals::LaunchSequenceState = (Globals::ELaunchSequenceState)(Globals::LaunchSequenceState - 1);
                 }
             }
@@ -348,21 +318,14 @@ namespace Overlay {
             ImGui::SameLine();
 
             if (Globals::LaunchSequenceState == Globals::ELaunchSequenceState::GearSelect) {
-                if (ImGui::Button("Start!", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Start!", buttonWidth)) {
                     Globals::LaunchSequenceState = Globals::ELaunchSequenceState::NotOpen;
                     std::cout << "[GAME] Entering the match!" << std::endl;
                     Engine::ExecConsoleCommand(Globals::LaunchCommand);
-
-                    if (!Globals::amStandalone && Globals::ConnectedToGameCoordinatorMatch) {
-                        Globals::ConnectedToGameCoordinatorMatch = false;
-
-                        std::thread t(UpdateWaitingForPlayers);
-                        t.detach();
-                    }
                 }
             }
             else {
-                if (ImGui::Button("Next", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Next", buttonWidth)) {
                     Globals::LaunchSequenceState = (Globals::ELaunchSequenceState)(Globals::LaunchSequenceState + 1);
                 }
             }
@@ -371,7 +334,7 @@ namespace Overlay {
         }
 
         if (Globals::CharacterSelectMenuOpen) {
-            ImGui::Begin("Character & Gear Select", &Globals::CreateGameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
+            ImGui::Begin("Character & Gear Select", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
 
             ImGui::SetWindowFontScale(2.0f);
 
@@ -592,133 +555,15 @@ namespace Overlay {
             ImGui::End();
         }
 
-        // The server started by "Host Game" is ready: join it like a Direct Connect to this PC.
-        if (LocalHost::TakeReadyToJoin()) {
-            Globals::amStandalone = false;
-            Globals::ConnectedToGameCoordinatorMatch = false;
-            StartLaunchSequence(L"open 127.0.0.1");
-        }
-
-        LocalHost::Status hostStatus = LocalHost::GetStatus();
-        if (hostStatus == LocalHost::Status::Starting || hostStatus == LocalHost::Status::Failed) {
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.4f, 0), ImGuiCond_Always);
-            ImGui::Begin("Hosting", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-            ImGui::SetWindowFontScale(2.0f);
-            ImGui::TextWrapped("%s", LocalHost::GetStatusText().c_str());
-            if (hostStatus == LocalHost::Status::Starting) {
-                if (ImGui::Button("Cancel", ImVec2(-1.0f, 0))) LocalHost::Stop();
-            }
-            else if (ImGui::Button("Close", ImVec2(-1.0f, 0))) {
-                LocalHost::Dismiss();
-            }
-            ImGui::End();
-        }
-
-        if (Globals::CreateGameOpen) {
-            static std::pair<std::string, std::string> MapMode = std::make_pair("Story - The Algorithm", "open Caverns_P");
-
-            static int MaxNumPlayers = 1;
-
-            ImGui::Begin("Host a Game", &Globals::CreateGameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-
-            ImGui::SetWindowFontScale(2.0f);
-
-            ImGui::PushID("MapMode");
-
-            static std::string mapModeDisplay = "Story - The Algorithm";
-
-            mapModeDisplay = MapMode.first;
-
-            if (ImGui::BeginCombo("Map/Mode Selection", mapModeDisplay.c_str(), ImGuiComboFlags_WidthFitPreview | ImGuiComboFlags_HeightLarge)) {
-                static std::string displayOneFilter = "";
-
-                ImGui::InputText("Filter Maps/Modes", &displayOneFilter);
-
-                for (int i = 0; i < Constants::GameCreationOptions.size(); i++) {
-                    auto& cmpMapMode = Constants::GameCreationOptions[i];
-
-                    if (displayOneFilter.empty() || cmpMapMode.first.contains(displayOneFilter)) {
-                        if (ImGui::Selectable(cmpMapMode.first.c_str(), MapMode == cmpMapMode)) {
-                            MapMode = cmpMapMode;
-                        }
-                    }
-                }
-
-                ImGui::EndCombo();
-            }
-
-            ImGui::PopID();
-
-            // Story missions and operations take up to 5 players; versus up to 10.
-            const bool pve = MapMode.first.starts_with("Story") || MapMode.first.starts_with("Operations");
-            const int maxPlayers = pve ? 5 : 10;
-            MaxNumPlayers = std::clamp(MaxNumPlayers, 1, maxPlayers);
-            ImGui::SliderInt("Players (including you)", &MaxNumPlayers, 1, maxPlayers);
-
-            ImGui::TextWrapped("The match starts when this many players have joined. Friends join with Direct Connect to your PC's address (UDP port 7777).");
-
-            const bool busy = LocalHost::GetStatus() == LocalHost::Status::Starting;
-            if (busy) ImGui::BeginDisabled();
-            if (ImGui::Button("Host Game!", ImVec2(-1.0f, 0))) {
-                Globals::CreateGameOpen = false;
-                std::string map = MapMode.second.starts_with("open ") ? MapMode.second.substr(5) : MapMode.second;
-                LocalHost::Start(map, MapMode.first, MaxNumPlayers);
-            }
-            if (busy) ImGui::EndDisabled();
-            ImGui::End();
-        }
-
-        if (Globals::DisplayWaitingForPlayers) {
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.25f, ImGui::GetIO().DisplaySize.y * 0.25f), ImGuiCond_Always);
-
-            ImGui::Begin("Waiting For Players", &Globals::DisplayWaitingForPlayers, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
-
-            ImGui::SetWindowFontScale(2.0f);
-
-            std::string waitingString = "";
-
-            if (Globals::CurrentMatchEntry.CurrentNumPlayers == Globals::CurrentMatchEntry.MaxNumPlayers) {
-                waitingString += "All Players Connected!";
-            }
-            else if (Globals::CurrentMatchEntry.CurrentNumPlayers > Globals::CurrentMatchEntry.MaxNumPlayers) {
-                waitingString += "You're in for a good one!";
-            }
-            else {
-                waitingString += "Waiting For Players (";
-                waitingString += std::to_string(Globals::CurrentMatchEntry.CurrentNumPlayers);
-                waitingString += "/";
-                waitingString += std::to_string(Globals::CurrentMatchEntry.MaxNumPlayers);
-                waitingString += ")...";
-            }
-
-            ImVec2 textSize;
-            textSize = ImGui::CalcTextSize(waitingString.c_str());
-
-            float windowWidth = ImGui::GetContentRegionAvail().x;
-
-            float centerX = (windowWidth - textSize.x) * 0.5f;
-
-            float windowHeight = ImGui::GetContentRegionAvail().y;
-
-            float centerY = (windowHeight - textSize.y) * 0.5f;
-
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + centerX);
-
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + centerY);
-
-            ImGui::Text(waitingString.c_str());
-
-            ImGui::End();
-        }
+        // "Start a Game": runs every frame so a start under way is followed even with the window closed.
+        static StartGameModel startGame;
+        StartGameWindow::Draw(startGame);
 
         if (Globals::ServerBrowserOpen) {
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always);
+            UiStyle::NextWindow(0.5f);
             ImGui::Begin("Server Browser", &Globals::ServerBrowserOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
             ImVec2 textSize;
             textSize = ImGui::CalcTextSize("Server Browser");
@@ -731,47 +576,31 @@ namespace Overlay {
 
             ImGui::Text("Server Browser");
 
-            float availWidth = ImGui::GetContentRegionAvail().x;
-            float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = (availWidth - 4 * spacing) * 0.2f;
+            // Two buttons a row, so the labels fit at small window sizes.
+            float buttonWidth = UiStyle::ButtonWidth(2);
 
-            if (ImGui::Button("Host Game", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Start a Game", buttonWidth)) {
                 Globals::ServerBrowserOpen = false;
-                Globals::CreateGameOpen = true;
+                // Starting on the server names the game after the player, so ask for a name first.
+                if (!StartKey::Key().empty() && StartKey::PlayerName().empty()) Globals::PlayerNameOpen = true;
+                else Globals::StartGameOpen = true;
             }
 
             ImGui::SameLine();
 
-            const bool haveKey = !StartKey::Key().empty();
-            if (!haveKey) ImGui::BeginDisabled();
-            if (ImGui::Button("Start Server Game", ImVec2(buttonWidth, 0))) {
-                Globals::ServerBrowserOpen = false;
-                if (StartKey::PlayerName().empty()) Globals::PlayerNameOpen = true;
-                else Globals::StartServerGameOpen = true;
-            }
-            if (!haveKey) {
-                ImGui::EndDisabled();
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("You need a server key from the host (reborn-key.txt in the game's Win64 folder).");
-            }
-
-            ImGui::SameLine();
-
-            if (ImGui::Button("Direct Connect", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Direct Connect", buttonWidth)) {
                 Globals::ServerBrowserOpen = false;
                 Globals::DirectConnectOpen = true;
             }
 
-            ImGui::SameLine();
-
-            if (ImGui::Button("Refresh Server Browser", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Refresh", buttonWidth)) {
                 std::thread t(GameCoordinator::RefreshServerBrowser);
                 t.detach();
             }
 
             ImGui::SameLine();
 
-            if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Close", buttonWidth)) {
                 Globals::ServerBrowserOpen = false;
             }
 
@@ -782,12 +611,13 @@ namespace Overlay {
                 ImGuiTableFlags_Sortable |
                 ImGuiTableFlags_ScrollY)) {
 
-                // Setup table headers
+                // Setup table headers; the fixed columns grow with the text size
+                const float colScale = UiStyle::FontScale(ImGui::GetIO().DisplaySize.y);
                 ImGui::TableSetupColumn("Server Name", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Map & Mode", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-                ImGui::TableSetupColumn("Players", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Map & Mode", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Players", ImGuiTableColumnFlags_WidthFixed, 80.0f * colScale);
+                ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100.0f * colScale);
+                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 80.0f * colScale);
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableHeadersRow();
 
@@ -851,150 +681,29 @@ namespace Overlay {
 
         if (Globals::PlayerNameOpen) {
             static std::string name = StartKey::PlayerName();
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::Begin("Your name", &Globals::PlayerNameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
-            ImGui::SetWindowFontScale(2.0f);
-            ImGui::TextUnformatted("Shown to other players and used to name your games.");
+            UiStyle::NextWindow();
+            ImGui::Begin("Your name", &Globals::PlayerNameOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+            UiStyle::WindowFont();
+            ImGui::TextWrapped("Shown to other players and used to name your games.");
+            ImGui::SetNextItemWidth(-1.0f);
             ImGui::InputTextWithHint("##name", "Shown to other players", &name);
             std::string trimmed = StartKey::TrimKey(name);
             const bool okEnabled = !trimmed.empty() && trimmed.size() <= 24;
             if (!okEnabled) ImGui::BeginDisabled();
-            if (ImGui::Button("OK", ImVec2(-1.0f, 0))) {
+            if (UiStyle::Button("OK")) {
                 StartKey::SavePlayerName(trimmed);
                 Globals::PlayerNameOpen = false;
-                Globals::StartServerGameOpen = true;
+                Globals::StartGameOpen = true;
             }
             if (!okEnabled) ImGui::EndDisabled();
             ImGui::End();
         }
 
-        if (Globals::StartServerGameOpen) {
-            static std::pair<std::string, std::string> mapMode = Constants::GameCreationOptions[0];
-            static std::string filter, gameName, lastDefault;
-            static int players = 1, botsA = 5, botsB = 5;
-            std::string def = StartKey::DefaultGameName(StartKey::PlayerName(), mapMode.first);
-            if (gameName == lastDefault) gameName = def;
-            lastDefault = def;
-
-            ImGui::Begin("Start a Game on the Server", &Globals::StartServerGameOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-            ImGui::SetWindowFontScale(2.0f);
-            if (ImGui::BeginCombo("Map/Mode", mapMode.first.c_str(), ImGuiComboFlags_WidthFitPreview | ImGuiComboFlags_HeightLarge)) {
-                ImGui::InputText("Filter", &filter);
-                for (const auto& option : Constants::GameCreationOptions) {
-                    if (filter.empty() || option.first.contains(filter)) {
-                        if (ImGui::Selectable(option.first.c_str(), mapMode == option)) mapMode = option;
-                    }
-                }
-                ImGui::EndCombo();
-            }
-            const int maxPlayers = StartGame::MaxPlayersFor(mapMode.first);
-            players = std::clamp(players, 1, maxPlayers);
-            ImGui::SliderInt("Players to wait for", &players, 1, maxPlayers);
-            if (StartGame::IsVersus(mapMode.first)) {
-                ImGui::SliderInt("Team A bots", &botsA, 0, 5);
-                ImGui::SliderInt("Team B bots", &botsB, 0, 5);
-            }
-            ImGui::InputText("Game name", &gameName);
-            ImGui::TextWrapped("The server starts the game now; you join as soon as it is ready. Friends find it in the server browser.");
-
-            // Not while another start is still being set up or waited for.
-            const bool canStart = !StartKey::TrimKey(gameName).empty() && Globals::PendingStartGuid.empty() && Globals::StartGameStatus.empty();
-            if (!canStart) ImGui::BeginDisabled();
-            if (ImGui::Button("Start", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, 0))) {
-                StartGame::Request req;
-                req.name = StartKey::TrimKey(gameName);
-                req.mapMode = mapMode.first;
-                req.mapCommand = mapMode.second;
-                req.players = players;
-                req.botsTeamA = StartGame::IsVersus(mapMode.first) ? botsA : 0;
-                req.botsTeamB = StartGame::IsVersus(mapMode.first) ? botsB : 0;
-                req.playerName = StartKey::PlayerName();
-                Globals::StartServerGameOpen = false;
-                Globals::StartGameStatus = "Starting your game...";
-                Globals::PendingStartSince = ImGui::GetTime();
-                const int requestId = ++g_startRequestId;
-                std::thread([req, requestId]() {
-                    GameCoordinator::StartResult r = GameCoordinator::StartGame(req);
-                    if (requestId != g_startRequestId.load()) {
-                        // The player cancelled while the server was still starting it: give the game back.
-                        if (r.ok) GameCoordinator::CancelGame(r.guid);
-                        return;
-                    }
-                    if (r.ok) {
-                        Globals::CurrentMatchEntry.ServerConnectString = r.connectString;
-                        Globals::PendingStartGuid = r.guid;
-                    }
-                    else {
-                        Globals::StartGameStatus = "PROBLEM: " + r.error;
-                    }
-                }).detach();
-            }
-            if (!canStart) ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::Button("Close", ImVec2(-1.0f, 0))) Globals::StartServerGameOpen = false;
-            ImGui::End();
-        }
-
-        if (!Globals::StartGameStatus.empty() || !Globals::PendingStartGuid.empty()) {
-            static double lastRefresh = 0.0;
-            static bool seenOnce = false;
-            const bool pending = !Globals::PendingStartGuid.empty();
-            const bool problem = Globals::StartGameStatus.rfind("PROBLEM:", 0) == 0;
-            if (pending) {
-                if (ImGui::GetTime() - lastRefresh > 3.0) {
-                    lastRefresh = ImGui::GetTime();
-                    std::thread(GameCoordinator::RefreshServerBrowser).detach();
-                }
-                auto e = GameCoordinator::FindEntry(Globals::PendingStartGuid);
-                if (e && e->Ready) {
-                    Globals::CurrentMatchEntry = *e;
-                    Globals::amStandalone = false;
-                    Globals::ConnectedToGameCoordinatorMatch = true;
-                    std::wstring cmd(e->ServerConnectString.begin(), e->ServerConnectString.end());
-                    Globals::PendingStartGuid.clear();
-                    Globals::StartGameStatus.clear();
-                    seenOnce = false;
-                    StartLaunchSequence(_wcsdup(cmd.c_str()));
-                } else {
-                    if (e) seenOnce = true;
-                    const bool vanished = seenOnce && !e;
-                    if (vanished || ImGui::GetTime() - Globals::PendingStartSince > 150.0) {
-                        Globals::StartGameStatus = "PROBLEM: the server did not start. Its log is on the host machine (matchmaking.log).";
-                        std::string guid = Globals::PendingStartGuid;
-                        std::thread([guid]() { GameCoordinator::CancelGame(guid); }).detach();   // do not leave it holding a slot
-                        Globals::PendingStartGuid.clear();
-                        seenOnce = false;
-                    }
-                }
-            }
-            if (!Globals::StartGameStatus.empty()) {
-                ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-                // A fixed width, height fitted to the text. Auto-resize alone gave wrapped text
-                // no width to wrap into, so every letter landed on its own line.
-                ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.4f, 0.0f), ImGuiCond_Always);
-                ImGui::Begin("Starting your game", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
-                ImGui::SetWindowFontScale(2.0f);
-                ImGui::TextWrapped("%s", Globals::StartGameStatus.c_str());
-                if (ImGui::Button(problem ? "Close" : "Cancel", ImVec2(-1.0f, 0))) {
-                    ++g_startRequestId;   // a start still in flight will hand its game back when it finishes
-                    if (!Globals::PendingStartGuid.empty()) {
-                        std::string guid = Globals::PendingStartGuid;
-                        std::thread([guid]() { GameCoordinator::CancelGame(guid); }).detach();
-                    }
-                    Globals::PendingStartGuid.clear();
-                    Globals::StartGameStatus.clear();
-                    seenOnce = false;
-                }
-                ImGui::End();
-            }
-        }
-
         if (Globals::DirectConnectOpen) {
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.25f, ImGui::GetIO().DisplaySize.y * 0.25f), ImGuiCond_Always);
+            UiStyle::NextWindow();
             ImGui::Begin("Direct Connect", &Globals::DirectConnectOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
             ImVec2 textSize;
             textSize = ImGui::CalcTextSize("Direct Connect");
@@ -1011,18 +720,16 @@ namespace Overlay {
 
             ImGui::InputText("Enter Server IP: ", &ipToConnectTo);
 
-            float availWidth = ImGui::GetContentRegionAvail().x;
-            float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = (availWidth - spacing) * 0.5f;
+            float buttonWidth = UiStyle::ButtonWidth(2);
 
-            if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Close", buttonWidth)) {
                 Globals::DirectConnectOpen = false;
             }
 
             ImGui::SameLine();
 
             if (!ipToConnectTo.empty()) {
-                if (ImGui::Button("Start!", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Start!", buttonWidth)) {
                     std::wstring wIp(ipToConnectTo.begin(), ipToConnectTo.end());
 
                     std::wstring wcmd = L"open ";
@@ -1043,12 +750,11 @@ namespace Overlay {
         if (Globals::SaveManagerOpen) {
             static int selectedSave = 0;
 
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always);
+            UiStyle::NextWindow(0.5f);
             ImGui::Begin("Reborn Save Manager", &Globals::SaveManagerOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
-            if (ImGui::Button("+ New Save", ImVec2(-1.0f, 0))) {
+            if (UiStyle::Button("+ New Save")) {
                 Globals::NewSaveOpen = true;
             }
             for (int i = 0; i < Globals::saveFiles.size(); i++) {
@@ -1057,7 +763,7 @@ namespace Overlay {
                 }
             }
             if (Globals::saveFiles.size() > 0) {
-                if (ImGui::Button("Select Save & Start Game!", ImVec2(-1.0f, 0))) {
+                if (UiStyle::Button("Select Save & Start Game!")) {
                     Globals::SaveManagerOpen = false;
                     Globals::CurrentSaveFile = selectedSave;
                     Hooks::StartupCompletedHook();
@@ -1072,11 +778,10 @@ namespace Overlay {
         if (Globals::SoloVSAIOpen) {
             static const wchar_t* commandToExecute = nullptr;
 
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always);
+            UiStyle::NextWindow(0.5f);
             ImGui::Begin("Solo VS AI", &Globals::SoloVSAIOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
             ImVec2 textSize = ImGui::CalcTextSize("Versus Private (Solo vs AI)");
 
@@ -1138,18 +843,16 @@ namespace Overlay {
                 ImGui::Unindent();
             }
 
-            float availWidth = ImGui::GetContentRegionAvail().x;
-            float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = (availWidth - spacing) * 0.5f;
+            float buttonWidth = UiStyle::ButtonWidth(2);
 
-            if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Close", buttonWidth)) {
                 Globals::SoloVSAIOpen = false;
             }
 
             if (commandToExecute != nullptr) {
                 ImGui::SameLine();
 
-                if (ImGui::Button("Play!", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Play!", buttonWidth)) {
                     Globals::amStandalone = true;
                     StartLaunchSequence(commandToExecute);
                     commandToExecute = nullptr;
@@ -1165,11 +868,10 @@ namespace Overlay {
         if (Globals::CampaignOpen) {
             static const wchar_t* commandToExecute = nullptr;
 
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always);
+            UiStyle::NextWindow(0.5f);
             ImGui::Begin("Campaign", &Globals::SoloVSAIOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
             ImVec2 textSize = ImGui::CalcTextSize("Campaign (Story Private)");
 
@@ -1187,18 +889,16 @@ namespace Overlay {
                 }
             }
 
-            float availWidth = ImGui::GetContentRegionAvail().x;
-            float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = (availWidth - spacing) * 0.5f;
+            float buttonWidth = UiStyle::ButtonWidth(2);
 
-            if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Close", buttonWidth)) {
                 Globals::CampaignOpen = false;
             }
 
             if (commandToExecute != nullptr) {
                 ImGui::SameLine();
 
-                if (ImGui::Button("Play!", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Play!", buttonWidth)) {
                     Globals::amStandalone = true;
                     StartLaunchSequence(commandToExecute);
                     commandToExecute = nullptr;
@@ -1212,11 +912,10 @@ namespace Overlay {
         if (Globals::OperationsOpen) {
             static const wchar_t* commandToExecute = nullptr;
 
-            ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always);
+            UiStyle::NextWindow(0.5f);
             ImGui::Begin("Operations", &Globals::SoloVSAIOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
 
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
             ImVec2 textSize = ImGui::CalcTextSize("Operations (Operations Private)");
 
@@ -1234,18 +933,16 @@ namespace Overlay {
                 }
             }
 
-            float availWidth = ImGui::GetContentRegionAvail().x;
-            float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = (availWidth - spacing) * 0.5f;
+            float buttonWidth = UiStyle::ButtonWidth(2);
 
-            if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+            if (UiStyle::Button("Close", buttonWidth)) {
                 Globals::OperationsOpen = false;
             }
 
             if (commandToExecute != nullptr) {
                 ImGui::SameLine();
 
-                if (ImGui::Button("Play!", ImVec2(buttonWidth, 0))) {
+                if (UiStyle::Button("Play!", buttonWidth)) {
                     Globals::amStandalone = true;
                     StartLaunchSequence(commandToExecute);
                     commandToExecute = nullptr;
@@ -1260,11 +957,14 @@ namespace Overlay {
             static std::string saveName = "";
             static bool startWithEverything = true;
 
-            ImGui::Begin("New Save", &Globals::NewSaveOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+            UiStyle::NextWindow();
+            ImGui::Begin("New Save", &Globals::NewSaveOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
-            ImGui::SetWindowFontScale(2.0f);
+            UiStyle::WindowFont();
 
-            ImGui::InputText("Display Name (Visible in Multiplayer & Singleplayer)", &saveName);
+            ImGui::TextWrapped("Display Name (Visible in Multiplayer & Singleplayer)");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputText("##savename", &saveName);
             /*
             if (ImGui::RadioButton("Earn Gear, Mutations & Character Skins by Playing!", !startWithEverything)) {
                 startWithEverything = false;
@@ -1274,7 +974,7 @@ namespace Overlay {
             if (ImGui::RadioButton("Start With Everything!", startWithEverything)) {
                 startWithEverything = true;
             }
-            if (ImGui::Button("Create Save File!", ImVec2(-1.0f, 0))) {
+            if (UiStyle::Button("Create Save File!")) {
                 Globals::NewSaveOpen = false;
                 Metagame::CreateNewSave(saveName, startWithEverything);
             }
