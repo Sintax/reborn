@@ -89,10 +89,17 @@ in the `Win64` folder).
 1. At the main menu, choose **Story**, **Operations** or **Versus**. The server browser opens and
    lists the games running on the server.
 2. **Join a game:** click **Join** on a game marked **Joinable!**.
-3. **Start your own game:** click **Start Server Game**, pick a map and mode, how many players to
-   wait for (1 to play alone right away), and bots for Versus, then **Start**. When the server is
-   ready, you join it automatically. Friends see your game in the browser and can join.
-4. Pick your hero, lock in, and play. A match starts once the chosen number of players is in.
+3. **Start your own game:** click **Start a Game**. Leave **Run on** as **the server**, pick a map
+   and mode, how many players to wait for (1 to play alone right away), and for Versus the bots
+   on each team and a draft style (Quick Select, Ban Pick, Captain's Draft, Chaos Rumble or
+   Classic). Give the game a name, then click **Start**. When the server is ready, you join it
+   automatically. Friends see your game in the browser and can join.
+4. Pick your hero, skin and taunt on the game's own hero-select screen, and play. If you run out
+   of time, the timer picks for you (in a random-hero game it picks for everyone). A small
+   **Gear** box in the bottom-right corner holds your three gear choices. Everyone sees the name
+   in your `reborn-player.txt`.
+5. The game waits up to 2 minutes for everyone to join. After that a Story game starts anyway,
+   and a Versus game is cancelled if not enough people came (you go back to the main menu).
 
 If the list stays empty after **Refresh Server Browser**, the server may be down. Tell the host.
 

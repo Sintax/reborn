@@ -36,7 +36,12 @@ and they click **Join**.
    minute or two it starts one game server per entry in its roster (a console window each).
 2. Which games it runs is in `matchmakingppsettings.json` under `"Roster"`: a name, the
    map, and how many players the match waits for. The kit ships with one entry, The
-   Algorithm for 2 players. Edit it with Notepad, then run `StopMatchmaking.bat` and
+   Algorithm for 2 players. Two optional settings per entry: `"RandomHero": true` means the
+   timer picks a hero for every player (nobody picks by hand; the setting reaches the game
+   server through its config, not the command line). `"DraftStyle"` is one of `QuickSelect`
+   (the default), `BanPick`, `CaptainsDraft`, `ChaosRumble` or `Classic`; it only applies to
+   Versus, and the service turns it into the game's own value (Ban Pick and Captain's Draft use
+   the 3v3 version when teams have 3 or fewer). Edit it with Notepad, then run `StopMatchmaking.bat` and
    `StartMatchmaking.bat` again. Each entry needs about 1.3 GB of memory; on a 6 GB machine
    keep it to one or two.
 3. When a match ends, the service starts a fresh server for that entry by itself.
@@ -48,8 +53,9 @@ The service writes what it is doing to its window; the game servers log as usual
 
 ## Letting friends start games on the server
 
-Players with a key can press **Start Server Game** in the server browser, pick a map, mode,
-player count and (for Versus) bots per team, and the service starts that game for them. Games
+Players with a key can press **Start a Game** in the server browser, leave **Run on** as the
+server, pick a map, mode, player count, a game name and (for Versus) bots per team and a draft
+style, and the service starts that game for them. Games
 started this way shut down when the match ends, when nobody joins within 3 minutes, or 1 minute
 after the last player leaves. At most three games run at once (the three ports), counting the
 roster.

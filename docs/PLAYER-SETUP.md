@@ -100,14 +100,35 @@ in the `Win64` folder).
 1. At the main menu, choose **Story**, **Operations** or **Versus**. The server browser opens and
    lists the games running on the server.
 2. **Join a game:** click **Join** on a game marked **Joinable!**.
-3. Pick your hero, lock in, and play. A match starts once enough players are in.
+3. Pick your hero and play. A match starts once enough players are in.
+
+Choose your hero, skin and taunt on the game's own hero-select screen. If you run out of
+time, the timer picks for you. In a random-hero game, the timer picks a hero for everyone. A
+small **Gear** box in the bottom-right corner holds your three gear choices. Your name on this
+screen and on the scoreboard is the one you typed the first time you ran the game (saved in
+`reborn-player.txt` next to the game).
+
+The game waits up to 2 minutes for everyone to join. If time runs out, a Story game starts
+anyway. A Versus game is cancelled if not enough people came; you go back to the main menu.
 
 If the list stays empty after **Refresh Server Browser**, the server may be down. Tell the host.
 
-**Starting your own game** needs a server key from the host (`reborn-key.txt`). Put it in the
-`Win64` folder. Then **Start Server Game** in the server browser lets you pick a map and mode, how
-many players to wait for (1 to play alone), and bots for Versus. You join automatically when the
-server is ready, and others see your game in the browser.
+**Starting your own game:** to run it on the server you need a server key from the host
+(`reborn-key.txt`). Put it in the `Win64` folder.
+
+Click **Start a Game** in the server browser. In the **Start a Game** window:
+
+- **Run on:** **the server** (needs your `reborn-key.txt`) or **my PC**.
+- Pick the map and mode, and how many **players to wait for** (1 to play alone).
+- Versus only: **bots on team A and B** (0 to 5 each) and a **draft style**: Quick Select, Ban
+  Pick, Captain's Draft, Chaos Rumble or Classic. (Ban Pick and Captain's Draft use the 3v3
+  version when each team has 3 players or fewer.)
+- On the server you also give the game a **name**.
+
+Then click **Start**.
+
+You join automatically when the game is ready. Games on the server also show up in the browser
+for others.
 
 ## If something goes wrong
 

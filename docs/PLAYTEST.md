@@ -34,7 +34,12 @@ the full steps and a manual way.
    lists the games running on the Reborn server, with how many players are in each.
 4. Click **Join** on a game that says **Joinable!**. (Or click **Direct Connect** and type
    an address a friend gives you.)
-5. Pick your hero, lock in, and play. The match starts when enough players have joined.
+5. Pick your hero, skin and taunt on the game's own hero-select screen, and play. If you run out
+   of time, the timer picks for you. A small **Gear** box (bottom-right) holds your three gear
+   choices. Everyone sees the name you typed the first time you ran the game (saved in
+   `reborn-player.txt` next to the game).
+6. The game waits up to 2 minutes for everyone to join. After that a Story game starts anyway,
+   and a Versus game is cancelled if not enough people came (you go back to the main menu).
 
 If the list is empty, click **Refresh Server Browser**; if it stays empty, the Reborn
 server is down or your network blocks it. Direct Connect still works. To use a different
@@ -78,9 +83,11 @@ Nothing in the logs is personal beyond your Windows user name in file paths.
 ## Starting your own game on the host's server
 
 If the host sent you a `reborn-key.txt`, put it in the game's `Binaries\Win64` folder (next to
-`Battleborn.exe`). In the server browser, **Start Server Game** then lets you pick a map and
-mode, how many players to wait for, and bots for Versus. You join automatically when the server is
-ready; friends find the game in the browser. The first time, the game asks for a display name.
+`Battleborn.exe`). In the server browser, click **Start a Game**. Leave **Run on** as **the
+server**, pick a map and mode, how many players to wait for, and for Versus the bots on each team
+and a draft style (Quick Select, Ban Pick, Captain's Draft, Chaos Rumble or Classic). Give the
+game a name and click **Start**. You join automatically when the server is ready; friends find the
+game in the browser. The first time, the game asks for a display name.
 
 ## For the host
 
@@ -90,10 +97,12 @@ No Python needed. This works for solo play too: set the players to 1.
 
 1. Start the game with `steamclient_loader_x64.exe` as usual.
 2. At the main menu, choose a public mode (Story, Operations or Versus). The server browser opens.
-3. Click **Host Game**.
-4. Pick the mission or map, and how many players (including you). The match starts once that many
-   have joined.
-5. Click **Host Game!** The mod starts a server on your PC in the background. This takes a minute
+3. Click **Start a Game**.
+4. Set **Run on** to **my PC**. Pick the mission or map, and how many players to wait for
+   (including you). For Versus you can also set the bots on each team and a draft style. The
+   game waits up to 2 minutes for everyone; Story then starts anyway, and Versus is cancelled if
+   not enough people came.
+5. Click **Start**. The mod starts a server on your PC in the background. This takes a minute
    or two, then your game joins it by itself.
 6. Friends join with **Direct Connect** to your address (see "Let your friend reach you" below).
 
