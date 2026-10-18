@@ -56,8 +56,6 @@ namespace Globals {
         }
     };
 
-    extern ServerPlayer* NextExpectedServerPlayer;
-
     extern std::vector<ServerPlayer> ServerPlayers;
 
     extern uintptr_t baseAddress;
@@ -168,14 +166,6 @@ namespace Globals {
     extern bool GearBoxOpen;
 
     extern bool GearViewerOpen;
-
-    extern std::string MyGCGuid;
-    
-    extern std::string MyGCKey;
-
-    extern std::vector<GameCoordinator::Lobby> Lobbies;
-
-    extern std::optional<GameCoordinator::Lobby> CurrentLobby;
 
     namespace Telemetry {
         extern std::mutex TickrateMutex;

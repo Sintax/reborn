@@ -1132,35 +1132,19 @@ namespace Hooks {
         WorldControlMessage.call<void>(world, connection, message, inbunch);
 
         if (message == 0x0) {
-            if (ServerSettings::amRunningWithGameCoordinator && Globals::NextExpectedServerPlayer) {
-                printf("[NETWORKING] Welcoming %s\n", Globals::NextExpectedServerPlayer->Name.c_str());
+            // Welcome whoever arrives (LAN, Direct Connect, or a server-browser roster server).
+            printf("[NETWORKING] Welcoming a new player!\n");
 
-                for (Globals::ServerPlayer& serverPlayer : Globals::ServerPlayers) {
-                    if (&serverPlayer == Globals::NextExpectedServerPlayer) {
-                        serverPlayer.Connection = connection;
-                        Globals::NextExpectedServerPlayer = nullptr;
+            // No hero yet: the game's hero screen picks it (CharSelect::OnServerTick reads it).
+            Globals::ServerPlayer serverPlayer = Globals::ServerPlayer("LAN Player", "", "", "", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_MaxShield_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_ShieldPen_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_HealthRegen_Legendary_LLC2");
 
-                        break;
-                    }
-                }
+            serverPlayer.Connection = connection;
 
-                reinterpret_cast<void* (*)(UWorld*, UNetConnection*)>(Globals::baseAddress + 0x045b060)(world, connection);
-            }
-            else {
-                // No lobby told us who is coming (LAN, Direct Connect, or a server-browser roster server): welcome whoever arrives.
-                printf("[NETWORKING] Welcoming a new player!\n");
+            Globals::ServerPlayers.push_back(serverPlayer);
 
-                // No hero yet: the game's hero screen picks it (CharSelect::OnServerTick reads it).
-                Globals::ServerPlayer serverPlayer = Globals::ServerPlayer("LAN Player", "", "", "", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_MaxShield_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_ShieldPen_Legendary_UPR2", "PoplarPerkFunction GD_Gear_DAH.Gear.PF_Gear_HealthRegen_Legendary_LLC2");
+            reinterpret_cast<void* (*)(UWorld*, UNetConnection*)>(Globals::baseAddress + 0x045b060)(world, connection);
 
-                serverPlayer.Connection = connection;
-
-                Globals::ServerPlayers.push_back(serverPlayer);
-
-                reinterpret_cast<void* (*)(UWorld*, UNetConnection*)>(Globals::baseAddress + 0x045b060)(world, connection);
-
-                ServerNetworking::LogConnectionPackageMap(connection);
-            }
+            ServerNetworking::LogConnectionPackageMap(connection);
         }
         else if (message == 0x9) {
             Globals::ServerPlayer* player = ConnectionToServerPlayer(connection);

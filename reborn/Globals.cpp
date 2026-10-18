@@ -1,8 +1,6 @@
 #include "Globals.hpp"
 
 namespace Globals {
-    ServerPlayer* NextExpectedServerPlayer = nullptr;
-
     std::vector<ServerPlayer> ServerPlayers = std::vector<ServerPlayer>();
 
     uintptr_t baseAddress = 0x0;
@@ -80,8 +78,6 @@ namespace Globals {
 
     std::shared_ptr<httplib::Client> GameCoordinatorHttpClient;
 
-    std::vector<GameCoordinator::Lobby> Lobbies = std::vector<GameCoordinator::Lobby>();
-
     ELaunchSequenceState LaunchSequenceState = ELaunchSequenceState::NotOpen;
 
     const wchar_t* LaunchCommand = nullptr;
@@ -93,8 +89,6 @@ namespace Globals {
 
     bool ConnectedToGameCoordinatorMatch = false;
 
-    std::optional<GameCoordinator::Lobby> CurrentLobby = std::optional<GameCoordinator::Lobby>();
-
     std::mutex NetworkObjectListMutex = std::mutex();
 
     std::vector<AActor*> NetworkObjectList = std::vector<AActor*>();
@@ -102,9 +96,6 @@ namespace Globals {
     bool GearBoxOpen = false;
 
     bool GearViewerOpen = false;
-
-    std::string MyGCGuid = "";
-    std::string MyGCKey = "";
 
     UWorld* GetGWorld() {
         return *reinterpret_cast<UWorld**>(baseAddress + 0x34dfca0);
