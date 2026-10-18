@@ -167,8 +167,6 @@ namespace Globals {
     // The game's hero screen is up on this client (CharSelect::UpdateGearBox); shows the Gear box.
     extern bool GearBoxOpen;
 
-    extern bool CharacterSelectThisPossesionsTheRealOne;
-
     extern bool GearViewerOpen;
 
     extern std::string MyGCGuid;

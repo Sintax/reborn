@@ -101,8 +101,6 @@ namespace Globals {
 
     bool GearBoxOpen = false;
 
-    bool CharacterSelectThisPossesionsTheRealOne = false;
-
     bool GearViewerOpen = false;
 
     std::string MyGCGuid = "";
@@ -121,7 +119,6 @@ namespace Globals {
         Globals::timeTillStartupMassacre = 0.0f;
         Globals::didStandaloneCharacterInitialization = false;
         Globals::didSendPreferencesToServer = false;
-        Globals::CharacterSelectThisPossesionsTheRealOne = false;
 
         // Actors outside any level (archetypes, class defaults) must not point at a world: a
         // rooted archetype with WorldInfo set keeps the old world alive and the map change after

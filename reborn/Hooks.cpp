@@ -1506,6 +1506,11 @@ namespace Hooks {
 
     SafetyHookInline MainMenu;
 
+    // Client only. battleborn+0x127D860 is a script-node style virtual (no class name; RTTI is
+    // stripped) that checks an online-service counter and a per-player stat, then grants reward
+    // items. Returning 1 right away means the node never runs, so no service call happens on the
+    // main menu (the online service this talks to no longer exists). Not part of character select.
+    // Added in the first commit (cb9bb4a).
     bool MainMenuHook(__int64 a1, __int64* a2, __int64 a3, __int64 a4, int a5, int a6, __int64* a7) {
         return 1;
     }
@@ -2018,7 +2023,7 @@ namespace Hooks {
             if (!Globals::amStandalone) {
                 APoplarPlayerController* ppc = reinterpret_cast<APoplarPlayerController*>(object);
 
-                if (!Globals::amServer) { // && Globals::CharacterSelectThisPossesionsTheRealOne
+                if (!Globals::amServer) {
                     if (UMHW_DeathRecap* recap = SDKUtils::GetLastOfClass<UMHW_DeathRecap>())
                         recap->SetVisible(false, 0.0f);
 
@@ -2304,6 +2309,17 @@ namespace Hooks {
         TerminateProcess(GetCurrentProcess(), kQuitDuringStartupExitCode);
     }
 
+    // Client only; both hooks use JustDoNothingHook. Added in d961601 ("fixup PC crash on rez in story").
+    // Both are parts of the "player was revived" path, and both end in the same call: the player
+    // controller's "rebuild input context" virtual (vtable slot 0x30c0).
+    //  - JustDoNothing  = battleborn+0x16EC4D0, a pawn virtual. Plays the revive animation
+    //    ("RevivedAnimFinished"), sets the pawn's bRespawning flag, refreshes input.
+    //  - JustDoNothing2 = battleborn+0xE5F320, a per-tick check on the player controller (called
+    //    from its PlayerTick). When the pawn, its health state or cinematic mode changes, it
+    //    refreshes input.
+    // Doing nothing means the client skips the revive animation and input refresh. That avoids the
+    // crash on rez in story missions. Side effect: input bindings may not switch on revive or cutscene.
+    // Kept: a crash-free revive has not been re-tested without them.
     SafetyHookInline JustDoNothing;
 
     SafetyHookInline JustDoNothing2;

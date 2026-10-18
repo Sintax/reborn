@@ -50,7 +50,8 @@ namespace Init {
             CharSelect::InstallServerHooks();
         }
         else {
-            Hooks::MainMenu = safetyhook::create_inline((void*)(Globals::baseAddress + 0x127D860), &Hooks::MainMenuHook);
+            // Three client-only "do nothing" hooks; what each one stops is explained in Hooks.cpp.
+            Hooks::MainMenu =safetyhook::create_inline((void*)(Globals::baseAddress + 0x127D860), &Hooks::MainMenuHook);
             Hooks::JustDoNothing = safetyhook::create_inline((void*)(Globals::baseAddress + 0x16EC4D0), &Hooks::JustDoNothingHook);
             Hooks::JustDoNothing2 = safetyhook::create_inline((void*)(Globals::baseAddress + 0xE5F320), &Hooks::JustDoNothingHook);
             // Client: link queued NMT_Uses entries whose package is already loaded (ClientNetworking::LinkLoadedPendingPackages).
