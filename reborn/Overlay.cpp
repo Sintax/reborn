@@ -314,6 +314,8 @@ namespace Overlay {
 
         // The Gear box, while the game's own hero screen is up. Bottom-right: in Versus the
         // top-right holds the enemy team list, the left our team list, the centre the hero.
+        // The screen's own loadout row cannot replace it yet: loadouts came from the old online
+        // service, so every player has none (NumLoadoutEntitlements 0) and the cells stay locked.
         if (Globals::GearBoxOpen && Globals::CurrentSaveFile < Globals::saveFiles.size()) {
             ImVec2 screen = ImGui::GetIO().DisplaySize;
             ImGui::SetNextWindowPos(ImVec2(screen.x - 16.0f, screen.y - 16.0f), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
