@@ -191,6 +191,16 @@ namespace PlayerNames {
             for (int i = 0; i < count && i < 64; i++) {
                 APlayerReplicationInfo* other = pc->WorldInfo->GRI->PRIArray[i];
                 if (Gone(other) || other == pri) continue;   // bots too: no human named like a bot
+                // A human who left keeps a PRI here for a while (run 20261018-215253: the rejoiner
+                // became "Test-c2-2"); only a human still at a connection holds a name.
+                if (!other->bBot) {
+                    AActor* owner = other->Owner;
+                    if (Gone(owner) || !owner->IsA(APlayerController::StaticClass())
+                        || !reinterpret_cast<APlayerController*>(owner)->Player) {
+                        printf("[NAMES] \"%s\" left the game; the name is free\n", SafeLogText(other->PlayerName.ToString()).c_str());
+                        continue;
+                    }
+                }
                 taken.push_back(other->PlayerName.ToString());
             }
         }

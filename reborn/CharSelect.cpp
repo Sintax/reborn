@@ -204,7 +204,9 @@ namespace CharSelect {
         // Latched, never reset: one server process hosts one match (ShutdownTimer ends it).
         bool g_phaseComplete = false;   // this match's pick phase has completed
         float g_sinceServerTick = 0.f;
-        const float kLateJoinPickSeconds = 60.f;
+        // A late joiner gets no hero screen (see EarlierHero's note), so there is nothing to wait
+        // for beyond the game's default pending class, which arrives about 1 s after the login.
+        const float kLateJoinSettleSeconds = 3.f;
 
         bool IsLive(UObject* o) { return o && !(o->ObjectFlags & kPendingKill); }
 
@@ -213,10 +215,12 @@ namespace CharSelect {
             return IsLive(m) ? m : nullptr;
         }
 
-        UPoplarPlayerNameIdentifierDefinition* PickedHeroFrom(APoplarCharacterSelectManager* m, APoplarPlayerController* pc, const char** source) {
+        // usePending false: only what the hero screen recorded (a late joiner's pending class is just
+        // the controller's default, not a pick).
+        UPoplarPlayerNameIdentifierDefinition* PickedHeroFrom(APoplarCharacterSelectManager* m, APoplarPlayerController* pc, const char** source, bool usePending = true) {
             const char* from = nullptr;
             UPoplarPlayerNameIdentifierDefinition* hero = nullptr;
-            if (pc && pc->PendingPlayerClassNameId) {
+            if (usePending && pc && pc->PendingPlayerClassNameId) {
                 hero = pc->PendingPlayerClassNameId;
                 from = "pending class";
             }
@@ -244,6 +248,50 @@ namespace CharSelect {
             APlayerController* a = sp.Connection->Actor;
             if (!IsLive(a) || !a->IsA(APoplarPlayerController::StaticClass())) return nullptr;
             return reinterpret_cast<APoplarPlayerController*>(a);
+        }
+
+        // A player who joins after the pick phase (Ghidra): the game's PostLogin (battleborn+0x1481ba0)
+        // adds new humans to the select manager (+0x11e9620 -> +0x11ea610) only while the manager is
+        // InProgress, so a late joiner gets no team record, no SelectedBy, no hero screen (the client's
+        // movie stays Closed) and only the controller's default pending class (Oscar Mike, seen in
+        // run 20261018-214639). A player who drops and rejoins arrives the same way, as a new
+        // ServerPlayer; the old one stays in the list with no connection.
+
+        // The hero this player had before dropping out: an earlier ServerPlayer with no connection
+        // that asked for the same name (WantedName comes with the join, before the login names it).
+        UPoplarPlayerNameIdentifierDefinition* EarlierHero(const Globals::ServerPlayer& sp) {
+            const std::string& me = sp.WantedName.empty() ? sp.Name : sp.WantedName;
+            UPoplarPlayerNameIdentifierDefinition* hero = nullptr;
+            for (const Globals::ServerPlayer& other : Globals::ServerPlayers) {
+                if (&other == &sp || other.Connection || !other.Character) continue;
+                const std::string& them = other.WantedName.empty() ? other.Name : other.WantedName;
+                if (them == me) hero = other.Character;   // the latest one wins
+            }
+            return hero;
+        }
+
+        // Always a hero for a player the game recorded no pick for: the game's pending class, else
+        // a hero no other connected player has, else the first hero in the game's list.
+        UPoplarPlayerNameIdentifierDefinition* FallbackHero(APoplarCharacterSelectManager* m, APoplarPlayerController* pc, const char** source) {
+            if (pc && pc->PendingPlayerClassNameId) {
+                *source = "pending class";
+                return pc->PendingPlayerClassNameId;
+            }
+            UPoplarPlayerNameIdentifierDefinition* first = nullptr;
+            for (int i = 0; m && i < 0x1E; i++) {
+                UPoplarPlayerNameIdentifierDefinition* id = m->MasterCharacterList[i].NameID;
+                if (!IsLive(id)) continue;
+                if (!first) first = id;
+                bool held = false;
+                for (Globals::ServerPlayer& other : Globals::ServerPlayers)
+                    if (other.Character == id && other.Connection && ServerNetworking::IsLiveConnection(other.Connection)) held = true;
+                if (!held) {
+                    *source = "first hero no one holds";
+                    return id;
+                }
+            }
+            *source = "first hero in the list";
+            return first;
         }
 
         void HandToSpawn(Globals::ServerPlayer& sp) {
@@ -395,23 +443,29 @@ namespace CharSelect {
                     sp.Character = hero;
                     printf("[CHARSEL] %s locked in %s (from the %s)\n", sp.Name.c_str(), hero->GetName().c_str(), source);
                 }
+                else if (UPoplarPlayerNameIdentifierDefinition* fallback = FallbackHero(m, pc, &source)) {
+                    // Logged in during "Prepare for Battle" but not in a team slot: no pick recorded.
+                    sp.Character = fallback;
+                    printf("[CHARSEL] %s has no recorded pick; spawning as %s (fallback, from the %s)\n", sp.Name.c_str(), fallback->GetName().c_str(), source);
+                }
                 else {
-                    printf("[CHARSEL] %s has no recorded pick; the game's random rule should have assigned one\n", sp.Name.c_str());
+                    printf("[CHARSEL] %s has no recorded pick and the game lists no heroes; spawning with the game's class\n", sp.Name.c_str());
                 }
                 HandToSpawn(sp);
             }
             return;
         }
 
-        // Late join: a player logged in after the phase completed gets the hero screen; once
-        // their lock-in is recorded, spawn them. With no pick after kLateJoinPickSeconds, spawn
-        // them anyway with whatever class the game has pending (the helper copes with no hero).
+        // Late join (and rejoin): a player logged in after the phase completed. The game records
+        // no pick for them, so: the hero they had before a drop, else, after a short settle, a
+        // concrete fallback hero (FallbackHero: the game's pending class first).
         for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
             if (sp.SpawnScheduled) continue;
             APoplarPlayerController* pc = LiveController(sp);
             if (!pc || IsLive(pc->Pawn)) continue;
             const char* source = nullptr;
-            UPoplarPlayerNameIdentifierDefinition* hero = PickedHeroFrom(m, pc, &source);
+            UPoplarPlayerNameIdentifierDefinition* hero = PickedHeroFrom(m, pc, &source, false);
+            if (!hero && (hero = EarlierHero(sp))) source = "hero they had before leaving";
             if (hero) {
                 sp.Character = hero;
                 printf("[CHARSEL] late join: %s picked %s (from the %s, after %.0f s)\n", sp.Name.c_str(), hero->GetName().c_str(), source, sp.NoPickSeconds);
@@ -419,10 +473,15 @@ namespace CharSelect {
                 continue;
             }
             sp.NoPickSeconds += elapsed;
-            if (sp.NoPickSeconds >= kLateJoinPickSeconds) {
-                printf("[CHARSEL] late join: %s made no pick in %.0f s; spawning with the game's class\n", sp.Name.c_str(), kLateJoinPickSeconds);
-                HandToSpawn(sp);
+            if (sp.NoPickSeconds < kLateJoinSettleSeconds) continue;
+            if ((hero = FallbackHero(m, pc, &source))) {
+                sp.Character = hero;
+                printf("[CHARSEL] late joiner %s spawned as %s (fallback), from the %s\n", sp.Name.c_str(), hero->GetName().c_str(), source);
             }
+            else {
+                printf("[CHARSEL] late joiner %s: the game lists no heroes; spawning with the game's class\n", sp.Name.c_str());
+            }
+            HandToSpawn(sp);
         }
     }
 

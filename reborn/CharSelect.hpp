@@ -55,9 +55,10 @@ namespace CharSelect {
     // waiting room, a no-show is no longer expected); when the manager becomes Complete, sets
     // Globals::haveHumansStarted, logs "[CHARSEL] <name> locked in <hero>" for every logged-in
     // player without a pawn and hands each one to Hooks::SpawnPawnForServerPlayer. After that, a
-    // player logged in later is handed over once the game has a pick for them
-    // ("[CHARSEL] late join: <name> picked <hero>"), or after 60 s without one
-    // ("[CHARSEL] late join: <name> made no pick in 60 s; spawning with the game's class").
+    // player logged in later (a late joiner or a rejoiner; the game shows them no hero screen) is
+    // handed over with the hero they had before a drop ("[CHARSEL] late join: <name> picked
+    // <hero>"), or after a few seconds with a concrete fallback hero
+    // ("[CHARSEL] late joiner <name> spawned as <hero> (fallback), from the <source>").
     void OnServerTick(float dt);
 
     // Client, four times a second: Globals::GearBoxOpen is true while the local controller's

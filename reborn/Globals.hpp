@@ -26,7 +26,7 @@ namespace Globals {
         bool Joined = false;
         // CharSelect::OnServerTick handed this player to the spawn helper (once per player).
         bool SpawnScheduled = false;
-        // Late join: seconds this player has been logged in after the pick phase with no pick.
+        // Late join: seconds this player has been logged in after the pick phase with no hero yet.
         float NoPickSeconds = 0.f;
         int UniqueId = 0;
         // The name the client asked for while joining (PlayerNames::OnJoinText); set at login.
