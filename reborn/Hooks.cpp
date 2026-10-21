@@ -15,6 +15,7 @@
 #include "LaunchOptions.hpp"
 #include "CharSelect.hpp"
 #include "PlayerNames.hpp"
+#include "Access.hpp"
 
 namespace Hooks {
     SafetyHookInline ProcessRemoteFunction;
@@ -1113,6 +1114,12 @@ namespace Hooks {
     void WorldControlMessageHook(UWorld* world, UNetConnection* connection, uint8_t message, void* inbunch) {
         if (!Globals::amServer) {
             // Client: the first argument is the world's FNetworkNotify sub-object (UWorld + 0x58).
+            // NMT_DebugText in the loaded map: the original (battleborn+0x45c540) only reads the
+            // text and frees it, so read it here instead (a refusal from the server, Access).
+            if (message == 0x11) {
+                Access::OnClientText(inbunch);
+                return;
+            }
             WorldControlMessage.call<void>(world, connection, message, inbunch);
             if (message == 0x7) // NMT_Uses: link it now if the engine queued it behind a package that is still loading
                 ClientNetworking::LinkLoadedPendingPackages(reinterpret_cast<UWorld*>(reinterpret_cast<char*>(world) - 0x58), true, "NMT_Uses");
@@ -1148,6 +1155,11 @@ namespace Hooks {
         }
         else if (message == 0x9) {
             Globals::ServerPlayer* player = ConnectionToServerPlayer(connection);
+
+            // The name and key arrived before NMT_Join (same reliable control channel). A refused
+            // player is never marked joined, so it is never logged in; Access closes it shortly.
+            if (player && !Access::AllowJoin(*player))
+                player = nullptr;
 
             if (player) {
                 printf("[NETWORKING] Spawning %s!\n", player->Name.c_str());
@@ -1202,6 +1214,7 @@ namespace Hooks {
         // [CHARSEL]: the game's own character-select phase (see CharSelect.cpp). The server's
         // OnServerTick logs it and spawns the players when the pick phase completes.
         if (Globals::amServer) {
+            Access::Tick(DeltaTime);   // the user list (re-read every 2 s) and refused players' closes
             CharSelect::OnServerTick(DeltaTime);
         }
         else {

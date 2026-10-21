@@ -31,6 +31,11 @@ namespace Globals {
         int UniqueId = 0;
         // The name the client asked for while joining (PlayerNames::OnJoinText); set at login.
         std::string WantedName;
+        // The key the client sent while joining (PlayerNames::OnJoinText), trimmed. NEVER printed
+        // or logged anywhere; only Access compares it with the user list.
+        std::string Key;
+        // Access turned this player away; its connection closes shortly (Access::Tick).
+        bool Refused = false;
 
         // An empty CharacterObjectName leaves Character null: the game's hero screen picks it
         // (CharSelect::OnServerTick reads the pick when the phase completes).

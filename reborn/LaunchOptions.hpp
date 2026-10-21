@@ -26,6 +26,9 @@ namespace LaunchOptions {
         std::string coordinatorKey;   // server: the token the service gave this server; with coordinator, turns on coordinator mode
         std::string character;        // display name from Constants::CharacterSelectCharacterTable
         std::string name;             // client, test players only: the name to play as instead of reborn-player.txt
+        std::string key;              // client, test players only: the key to send instead of reborn-key.txt (never logged)
+        bool keySet = false;          // -rbkey= was given; an empty -rbkey= means "send no key"
+        std::wstring users;           // server, tests only: the user list file instead of <Win64>\reborn-users.json
         unsigned int seed = 0;
         int hangSeconds = 60;
         bool testHang = false;        // freeze the game thread 20 s after play starts

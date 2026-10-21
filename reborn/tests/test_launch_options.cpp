@@ -23,6 +23,15 @@ int main() {
     CHECK(s.name.empty());
     CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbname=Test-c2").name == "Test-c2");
 
+    // User keys (tests): the client's key, where an empty -rbkey= means "send no key"; the server's list.
+    CHECK(!s.keySet && s.key.empty() && s.users.empty());
+    auto k = LaunchOptions::Parse(L"Battleborn.exe -rbkey=TESTKEYCCCCCCCCCCCCCCC22");
+    CHECK(k.keySet && k.key == "TESTKEYCCCCCCCCCCCCCCC22" && k.unknown.empty());
+    auto noKey = LaunchOptions::Parse(L"Battleborn.exe -rbkey=");
+    CHECK(noKey.keySet && noKey.key.empty() && noKey.unknown.empty());
+    auto u = LaunchOptions::Parse(LR"(Serverborn.exe "-rbusers=C:\runs\x y\users.json")");
+    CHECK(u.users == LR"(C:\runs\x y\users.json)" && u.unknown.empty());
+
     // Matchmaking: the client points at the coordinator; a coordinator-launched server also gets its key.
     auto c = LaunchOptions::Parse(L"Battleborn.exe -rbcoordinator=203.0.113.10:5000");
     CHECK(c.coordinator == "203.0.113.10:5000");

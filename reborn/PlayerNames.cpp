@@ -1,4 +1,5 @@
 #include "PlayerNames.hpp"
+#include "Access.hpp"
 #include "Globals.hpp"
 #include "LaunchOptions.hpp"
 #include "StartKey.hpp"
@@ -81,24 +82,56 @@ namespace PlayerNames {
         return CleanName(test.empty() ? StartKey::PlayerName() : test);
     }
 
-    // Called once per join: the server sends Welcome once per connection. No "already sent"
-    // memory, so a later join on a connection at a reused address still sends.
-    void SendJoinName(UNetConnection* connection) {
-        if (!connection) return;
+    std::string JoinKey() {
+        const LaunchOptions::Options& o = LaunchOptions::Get();
+        return o.keySet ? StartKey::TrimKey(o.key) : StartKey::Key();
+    }
+
+    bool SendControlText(UNetConnection* connection, const std::string& ascii) {
+        if (!connection) return false;
         // The control channel (connection+0xf48), which the engine's send uses without a check.
-        if (!*reinterpret_cast<void**>(reinterpret_cast<char*>(connection) + 0xf48)) {
-            printf("[NAMES] client: no control channel at the welcome; the server will use its fallback name\n");
-            return;
-        }
-        std::string name = ChosenName();
-        std::wstring w = L"RebornName=" + std::wstring(name.begin(), name.end());
+        if (!*reinterpret_cast<void**>(reinterpret_cast<char*>(connection) + 0xf48)) return false;
+        std::wstring w(ascii.begin(), ascii.end());
         FString text;
         text.ArrayData = w.c_str();
         text.ArrayCount = text.ArrayMax = (int32_t)w.size() + 1;
         // The engine's NMT_DebugText send (battleborn+0x3edc70, used by the NETDEBUGTEXT command):
-        // it writes the text into a reliable control bunch, so the buffer stays ours.
+        // it writes the text into a reliable control bunch, so the buffer stays ours. Bunches on
+        // the control channel arrive in the order they were sent.
         reinterpret_cast<void (*)(UNetConnection*, FString*)>(Globals::baseAddress + 0x3edc70)(connection, &text);
+        return true;
+    }
+
+    std::string ReadControlText(void* inbunch) {
+        // FArchive << FString (battleborn+0x515b0), as the engine's own NMT_DebugText handler reads it.
+        FString text;
+        reinterpret_cast<void (*)(void*, FString*)>(Globals::baseAddress + 0x0515b0)(inbunch, &text);
+        // By the count, not wcslen: the reader does not promise a final 0.
+        std::string s;
+        if (text.ArrayData && text.ArrayCount > 1)
+            s = ToAscii(std::wstring(text.ArrayData, text.ArrayCount - 1));
+        if (text.ArrayData)
+            reinterpret_cast<void (*)(int, const void*)>(Globals::baseAddress + 0xd2e720)(2, text.ArrayData);   // the engine's free
+        return s;
+    }
+
+    // Called once per join: the server sends Welcome once per connection. No "already sent"
+    // memory, so a later join on a connection at a reused address still sends.
+    void SendJoinName(UNetConnection* connection) {
+        if (!connection) return;
+        std::string name = ChosenName();
+        if (!SendControlText(connection, "RebornName=" + name)) {
+            printf("[NAMES] client: no control channel at the welcome; the server will use its fallback name\n");
+            return;
+        }
         printf("[NAMES] client: sent name \"%s\" with the join\n", name.c_str());
+        // The key goes second, on the same reliable channel, so the server has both before
+        // NMT_Join. Its text is never logged. No key (no reborn-key.txt, or -rbkey=): nothing sent.
+        std::string key = JoinKey();
+        if (key.empty())
+            printf("[ACCESS] client: no key to send with the join\n");
+        else if (SendControlText(connection, "RebornKey=" + key))
+            printf("[ACCESS] client: sent a key with the join\n");
     }
 
     // The client's pending-level control-message handler (battleborn+0x4c2000, UNetPendingLevel::
@@ -111,6 +144,10 @@ namespace PlayerNames {
         g_pendingControlMessage.call<void>(notify, connection, message, inbunch);
         if (message == 0x1)
             SendJoinName(connection);
+        // NMT_DebugText: this handler has no case for it (the bunch is left unread), so a server
+        // message sent before the map has loaded is read here (Access::OnClientText).
+        else if (message == 0x11)
+            Access::OnClientText(inbunch);
     }
 
     void InstallHooks() {
@@ -125,19 +162,30 @@ namespace PlayerNames {
     }
 
     void OnJoinText(UNetConnection* connection, void* inbunch) {
-        // FArchive << FString (battleborn+0x515b0), as the engine's own NMT_DebugText handler reads it.
-        FString text;
-        reinterpret_cast<void (*)(void*, FString*)>(Globals::baseAddress + 0x0515b0)(inbunch, &text);
-        // By the count, not wcslen: the reader does not promise a final 0.
-        std::string s;
-        if (text.ArrayData && text.ArrayCount > 1)
-            s = ToAscii(std::wstring(text.ArrayData, text.ArrayCount - 1));
-        if (text.ArrayData)
-            reinterpret_cast<void (*)(int, const void*)>(Globals::baseAddress + 0xd2e720)(2, text.ArrayData);   // the engine's free
+        std::string s = ReadControlText(inbunch);
 
         // Client text reaches the log only cleaned or made safe, and the odd lines are capped,
         // so a client cannot forge log lines or flood the log.
         static int oddLines = 0;
+
+        // The player's key (sent after the name). Kept for Access; its text never reaches a log.
+        const std::string keyTag = "RebornKey=";
+        if (s.rfind(keyTag, 0) == 0) {
+            std::string sent = StartKey::TrimKey(s.substr(keyTag.size()));
+            if (sent.size() > 64) sent.clear();   // no real key is this long: treat as no key
+            for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+                if (sp.Connection == connection) {
+                    sp.Key = sent;
+                    return;
+                }
+            }
+            if (oddLines < 10) {
+                oddLines++;
+                printf("[ACCESS] a connection with no player sent a key; ignored\n");
+            }
+            return;
+        }
+
         const std::string key = "RebornName=";
         if (s.rfind(key, 0) != 0) {
             if (oddLines < 10) {

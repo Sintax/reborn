@@ -17,15 +17,22 @@ class UNetConnection;
 namespace PlayerNames {
     // Client and server, at startup: hook the game's player-name refresh (battleborn+0x123ac90).
     // Client also: hook the joining handler (battleborn+0x4c2000) so that, once the server has
-    // welcomed us, "RebornName=<ChosenName>" goes to it as an NMT_DebugText control message. It
-    // arrives before NMT_Join, so before the login.
+    // welcomed us, "RebornName=<ChosenName>" goes to it as an NMT_DebugText control message, then
+    // "RebornKey=<key>" (-rbkey= for test players, else reborn-key.txt; none when empty). Both
+    // arrive before NMT_Join, so before the login.
     void InstallHooks();
 
     // The name this player chose: -rbname (test players only) or reborn-player.txt, cleaned.
     std::string ChosenName();
 
+    // Either side: sends `ascii` as an NMT_DebugText control message (reliable, in order with the
+    // other control messages). False when the connection has no control channel.
+    bool SendControlText(UNetConnection* connection, const std::string& ascii);
+    // Either side, on NMT_DebugText: reads the message's text from the bunch (as ASCII).
+    std::string ReadControlText(void* inbunch);
+
     // Server, on NMT_DebugText: reads the text; "RebornName=..." is kept as the player's
-    // WantedName. Logs "[NAMES] ...".
+    // WantedName, "RebornKey=..." as its Key (never logged). Logs "[NAMES] ...".
     void OnJoinText(UNetConnection* connection, void* inbunch);
 
     // Client, every tick in a network game: logs "[NAMES] client: players ..." when the names it
