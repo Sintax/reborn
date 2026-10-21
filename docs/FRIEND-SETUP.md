@@ -89,7 +89,7 @@ in the `Win64` folder).
 1. At the main menu, choose **Story**, **Operations** or **Versus**. The server browser opens and
    lists the games running on the server.
 2. **Join a game:** click **Join** on a game marked **Joinable!**.
-3. **Start your own game:** click **Start a Game**. Leave **Run on** as **the server**, pick a map
+3. **Start your own game:** (the host must allow it for you) click **Start a Game**. Leave **Run on** as **the server**, pick a map
    and mode, how many players to wait for (1 to play alone right away), and for Versus the bots
    on each team and a draft style (Quick Select, Ban Pick, Captain's Draft, Chaos Rumble or
    Classic). Give the game a name, then click **Start**. When the server is ready, you join it
@@ -102,6 +102,16 @@ in the `Win64` folder).
    and a Versus game is cancelled if not enough people came (you go back to the main menu).
 
 If the list stays empty after **Refresh Server Browser**, the server may be down. Tell the host.
+
+## "Improper Credentials!"
+
+If the game shows a **Reborn** notice saying **Improper Credentials!**, the server did not let you
+in. Click **OK**, then check these:
+
+1. Open `reborn-player.txt` in the `Win64` folder. The name in it must be exactly the name the host
+   registered for you.
+2. Check that `reborn-key.txt` is in the same folder and is the file from this zip.
+3. Still refused? The host may have removed you, or the key may be wrong. Ask the host for a new key.
 
 ## If something goes wrong
 

@@ -113,12 +113,16 @@ anyway. A Versus game is cancelled if not enough people came; you go back to the
 
 If the list stays empty after **Refresh Server Browser**, the server may be down. Tell the host.
 
-**Starting your own game:** to run it on the server you need a server key from the host
-(`reborn-key.txt`). Put it in the `Win64` folder.
+**Your key:** to join the server you need two small files in the `Win64` folder: `reborn-player.txt`
+(your name) and `reborn-key.txt` (a key from the host). The host registers your name and key on the
+server. Without both, the server turns you away (see "Improper Credentials!" below).
+
+**Starting your own game:** the host also has to allow you to start games. You do not change
+anything on your PC; just ask the host.
 
 Click **Start a Game** in the server browser. In the **Start a Game** window:
 
-- **Run on:** **the server** (needs your `reborn-key.txt`) or **my PC**.
+- **Run on:** **the server** (the host must allow it for you) or **my PC**.
 - Pick the map and mode, and how many **players to wait for** (1 to play alone).
 - Versus only: **bots on team A and B** (0 to 5 each) and a **draft style**: Quick Select, Ban
   Pick, Captain's Draft, Chaos Rumble or Classic. (Ban Pick and Captain's Draft use the 3v3
@@ -129,6 +133,16 @@ Then click **Start**.
 
 You join automatically when the game is ready. Games on the server also show up in the browser
 for others.
+
+## "Improper Credentials!"
+
+If the game shows a **Reborn** notice saying **Improper Credentials!**, the server did not let you
+in. Click **OK**, then check these:
+
+1. Open `reborn-player.txt` in the `Win64` folder. The name in it must be exactly the name the host
+   registered for you.
+2. Check that `reborn-key.txt` is in the same folder and is the file the host sent you.
+3. Still refused? The host may have removed you, or the key may be wrong. Ask the host for a new key.
 
 ## If something goes wrong
 

@@ -77,8 +77,21 @@ already running carry on.
    `Reloaded the user list: <count> users (<names>)` after each change. If the file is saved with
    a JSON mistake, the log warns and the last good list stays in use.
 
-The first time the service starts with old `"StartKeys"` in its settings and no user list, it
-turns them into users who can start games. After that, `StartKeys` is no longer used.
+A player the server refuses sees a **Reborn** notice saying **Improper Credentials!**. That happens
+with no key file, a key that is not on your list, a key that belongs to a different name, or after
+you removed them. The player's fix: make sure the name in `reborn-player.txt` matches the name you
+registered and `reborn-key.txt` is the file you sent. Otherwise add them again with a new key.
+
+To change a name: `python -m tools.vm user rename <old> <new>`. The player must then use the new
+name in `reborn-player.txt`.
+
+"Require keys to join" is on by default. `python -m tools.vm user require-keys off` lets anyone join
+(on again with `on`). `python -m tools.vm --help` lists every command.
+
+**Upgrading from the old setup:** the first time the service starts with old `"StartKeys"` in its
+settings and no user list, it turns them into users who can start games. After that, `StartKeys` is
+no longer used. Those users work with their key alone until you rename them to the player's real
+name with `user rename <old> <new>`; after that the player's `reborn-player.txt` must match.
 
 The timeouts are `"RequestedGame": { "NoJoinSeconds": 180, "EmptySeconds": 60 }` in the matchmaking
 `appsettings.json`. `matchmaking.log` records which player started each game.

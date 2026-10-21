@@ -80,10 +80,21 @@ Those are the most useful things you can send.
 
 Nothing in the logs is personal beyond your Windows user name in file paths.
 
+## "Improper Credentials!"
+
+If the game shows a **Reborn** notice saying **Improper Credentials!**, the server did not let you
+in. Click **OK**, then check these:
+
+1. Open `reborn-player.txt` in the `Win64` folder. The name in it must be exactly the name the host
+   registered for you.
+2. Check that `reborn-key.txt` is in the same folder and is the file the host sent you.
+3. Still refused? The host may have removed you, or the key may be wrong. Ask the host for a new key.
+
 ## Starting your own game on the host's server
 
-If the host sent you a `reborn-key.txt`, put it in the game's `Binaries\Win64` folder (next to
-`Battleborn.exe`). In the server browser, click **Start a Game**. Leave **Run on** as **the
+Joining the host's server needs your `reborn-key.txt` (from the host) in the game's `Binaries\Win64`
+folder, next to `reborn-player.txt` (your name). To start games, the host also has to tick "can
+create games" for you; nothing changes on your PC. In the server browser, click **Start a Game**. Leave **Run on** as **the
 server**, pick a map and mode, how many players to wait for, and for Versus the bots on each team
 and a draft style (Quick Select, Ban Pick, Captain's Draft, Chaos Rumble or Classic). Give the
 game a name and click **Start**. You join automatically when the server is ready; friends find the
