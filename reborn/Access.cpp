@@ -27,11 +27,7 @@ namespace Access {
         // Server state (game thread only).
         bool g_started = false;
         fs::path g_path;
-        std::optional<AccessRules::AccessList> g_list;   // the last good list
-        bool g_unreadable = false;      // the file was bad before any good read: refuse everyone
-        bool g_fileSeen = false;        // a file was there at some read
-        bool g_problemLogged = false;   // the current bad file has been logged once
-        bool g_goneLogged = false;      // the file's removal has been logged once
+        AccessRules::ReloadState g_state;   // the last good list, and what has been logged
         fs::file_time_type g_lastWrite{};
         float g_sinceCheck = 0.f;
 
@@ -54,67 +50,60 @@ namespace Access {
             return ss.str();
         }
 
-        void LogList(const char* how) {
-            printf("[ACCESS] user list %s%s: %zu users, keys required %s\n", PathText().c_str(), how,
-                g_list->users.size(), g_list->requireKeys ? "yes" : "no");
+        void Report(AccessRules::ReloadLog log) {
+            using AccessRules::ReloadLog;
+            const std::optional<AccessRules::AccessList>& list = g_state.list;
+            switch (log) {
+            case ReloadLog::None: break;
+            case ReloadLog::NoFileAtStart:
+                printf("[ACCESS] no user list: anyone can join\n");
+                break;
+            case ReloadLog::Loaded:
+            case ReloadLog::Reloaded:
+                printf("[ACCESS] user list %s%s: %zu users, keys required %s\n", PathText().c_str(),
+                    log == ReloadLog::Reloaded ? " (re-read)" : "", list->users.size(), list->requireKeys ? "yes" : "no");
+                break;
+            case ReloadLog::BadKeptList:
+                printf("[ACCESS] PROBLEM: the user list %s could not be read or is not the expected shape; keeping the last good list (%zu users)\n",
+                    PathText().c_str(), list->users.size());
+                break;
+            case ReloadLog::BadRefuseAll:
+                printf("[ACCESS] PROBLEM: the user list %s could not be read or is not the expected shape; every join is refused until it is fixed\n",
+                    PathText().c_str());
+                break;
+            case ReloadLog::GoneKeptList:
+                // Set RequireKeys false (not delete the file) to open the server.
+                printf("[ACCESS] PROBLEM: the user list %s is gone; keeping the last list read\n", PathText().c_str());
+                break;
+            case ReloadLog::GoneNoGate:
+                printf("[ACCESS] the unreadable user list %s is gone and no list was ever read: anyone can join\n", PathText().c_str());
+                break;
+            }
         }
 
-        // Reads the list if it is new or changed. True when a good list was (re)loaded, which is
-        // the only time joined players are checked again: a bad or missing file never removes
-        // anyone (Review Focus 2).
-        bool Load(bool first) {
+        // Reads the list if it is new or changed; what that means is AccessRules::ApplyRead. True
+        // when a good list was (re)loaded, which is the only time joined players are checked
+        // again: a bad or missing file never removes anyone (Review Focus 2).
+        bool Load() {
             std::error_code ec;
-            bool exists = fs::exists(g_path, ec);
-            if (ec || !exists) {
-                if (first)
-                    printf("[ACCESS] no user list: anyone can join\n");
-                else if (g_fileSeen && !g_goneLogged) {
-                    // Writers replace it with a rename, so it is never missing mid-write; someone
-                    // removed it. Keep what we have (set RequireKeys false to open the server).
-                    g_goneLogged = true;
-                    if (g_list) {
-                        printf("[ACCESS] PROBLEM: the user list %s is gone; keeping the last list read\n", PathText().c_str());
-                    } else {
-                        // The only file ever seen was unreadable and no good list was read: with the
-                        // file gone this is "no file" again, not a reason to refuse everyone.
-                        g_unreadable = false;
-                        g_problemLogged = false;
-                        printf("[ACCESS] the unreadable user list %s is gone and no list was ever read: anyone can join\n", PathText().c_str());
-                    }
-                }
-                return false;
-            }
-            g_goneLogged = false;
-            fs::file_time_type written = fs::last_write_time(g_path, ec);
-            if (ec) written = fs::file_time_type{};
-            if (!first && g_fileSeen && !ec && written == g_lastWrite) return false;
-            g_fileSeen = true;
-
-            std::optional<std::string> text = ReadWhole(g_path);
+            bool exists = fs::exists(g_path, ec) && !ec;
+            fs::file_time_type written{};
             std::optional<AccessRules::AccessList> parsed;
-            if (text) parsed = AccessRules::ParseAccessList(*text);
-            if (!parsed) {
-                // g_lastWrite is left alone, so the next check reads it again (a read can also fail
-                // while another program has the file open).
-                if (!g_problemLogged) {
-                    g_problemLogged = true;
-                    if (g_list)
-                        printf("[ACCESS] PROBLEM: the user list %s could not be read or is not the expected shape; keeping the last good list (%zu users)\n",
-                            PathText().c_str(), g_list->users.size());
-                    else
-                        printf("[ACCESS] PROBLEM: the user list %s could not be read or is not the expected shape; every join is refused until it is fixed\n",
-                            PathText().c_str());
-                }
-                if (!g_list) g_unreadable = true;
-                return false;
+            if (exists) {
+                written = fs::last_write_time(g_path, ec);
+                if (ec) written = fs::file_time_type{};
+                // Unchanged since the last good read: nothing to do.
+                if (g_state.started && g_state.fileSeen && !ec && written == g_lastWrite) return false;
+                std::optional<std::string> text = ReadWhole(g_path);
+                if (text) parsed = AccessRules::ParseAccessList(*text);
             }
-            bool reload = g_list.has_value() || g_unreadable;
-            g_list = std::move(parsed);
-            g_unreadable = false;
-            g_problemLogged = false;
-            g_lastWrite = written;
-            LogList(reload ? " (re-read)" : "");
-            return true;
+            bool good = parsed.has_value();
+            AccessRules::ReloadOutcome outcome = AccessRules::ApplyRead(g_state, exists, std::move(parsed));
+            // Only a good read moves g_lastWrite, so a bad file is read again at the next check (a
+            // read can also fail while another program has the file open).
+            if (good) g_lastWrite = written;
+            Report(outcome.log);
+            return outcome.listChanged;
         }
 
         void Start() {
@@ -122,17 +111,17 @@ namespace Access {
             g_started = true;
             const std::wstring& given = LaunchOptions::Get().users;
             g_path = given.empty() ? StartKey::Win64Dir() / kUsersFile : fs::path(given);
-            Load(true);
+            Load();
         }
 
         AccessRules::AccessDecision Decide(const Globals::ServerPlayer& sp) {
-            return AccessRules::CheckJoin(g_list ? &*g_list : nullptr, g_unreadable, sp.WantedName, sp.Key);
+            return AccessRules::CheckJoin(g_state.list ? &*g_state.list : nullptr, g_state.unreadable, sp.WantedName, sp.Key);
         }
 
         // The user whose key the player sent, for the log (name only).
         std::string UserNameFor(const Globals::ServerPlayer& sp) {
-            if (!g_list) return "";
-            for (const AccessRules::AccessUser& u : g_list->users)
+            if (!g_state.list) return "";
+            for (const AccessRules::AccessUser& u : g_state.list->users)
                 if (!u.key.empty() && u.key == sp.Key) return PlayerNames::SafeLogText(u.name);
             return "";
         }
@@ -171,7 +160,7 @@ namespace Access {
         g_sinceCheck += dt;
         if (g_sinceCheck < kCheckSeconds) return;
         g_sinceCheck = 0.f;
-        if (!Load(false)) return;
+        if (!Load()) return;
         // The list changed: anyone playing who no longer passes is removed the same way.
         for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
             if (!sp.Joined || sp.Refused || !sp.Connection || !ServerNetworking::IsLiveConnection(sp.Connection))
@@ -196,9 +185,9 @@ namespace Access {
             Refuse(sp, d.reason, "");
             return false;
         }
-        if (!g_list)
+        if (!g_state.list)
             printf("[ACCESS] \"%s\" may join (no user list)\n", name.c_str());
-        else if (!g_list->requireKeys)
+        else if (!g_state.list->requireKeys)
             printf("[ACCESS] \"%s\" may join (keys not required)\n", name.c_str());
         else
             printf("[ACCESS] \"%s\" may join (user \"%s\")\n", name.c_str(), UserNameFor(sp).c_str());

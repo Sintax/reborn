@@ -101,24 +101,43 @@ static void key_compare_is_exact() {
     CHECK(Decides(l, "Sintax", std::string(kSintaxKey) + " ", "unknown key"));   // trimming is the caller's job
 }
 
+// The shared list of damaged files: matchmaking (gamecontroller.Tests/UserListTests.cs BadShapes)
+// and tools/vm.py (debugloop/tests/test_vm.py BAD_USER_FILES) refuse exactly these too.
+static const char* const kBadUserFiles[] = {
+    "",
+    "not json",
+    R"({ "Users": [ )",                                               // truncated (mid-rewrite)
+    "[]",
+    "42",
+    "{}",                                                             // no Users
+    R"({"RequireKeys": true})",
+    R"({"Users": {}})",                                               // Users not an array
+    R"({"Users": "x"})",
+    R"({"Users": null})",
+    R"({"RequireKeys": "yes", "Users": []})",                         // RequireKeys not a bool
+    R"({"RequireKeys": "true", "Users": []})",
+    R"({"RequireKeys": 1, "Users": []})",
+    R"({"RequireKeys": null, "Users": []})",
+    R"({"Users": [5]})",                                              // a user that is not an object
+    R"({"Users": [{"Key": "K"}]})",                                   // no Name
+    R"({"Users": [{"Name": "A"}]})",                                  // no Key
+    R"({"Users": [{"Name": "", "Key": "K"}]})",
+    R"({"Users": [{"Name": "A", "Key": ""}]})",
+    R"({"Users": [{"Name": 1, "Key": "K"}]})",
+    R"({"Users": [{"Name": "A", "Key": 7}]})",
+    R"({"Users": [{"Name": null, "Key": "K"}]})",
+    R"({"Users": [{"Name": "A", "Key": "K", "CanCreateGames": "true"}]})",
+    R"({"Users": [{"Name": "A", "Key": "K", "CanCreateGames": 1}]})",
+    R"({"Users": [{"Name": "A", "Key": "K", "CanCreateGames": null}]})",
+    R"({"Users": [{"Name": "A", "Key": "K", "ConfirmName": "false"}]})",
+    R"({"Users": [{"Name": "A", "Key": "K", "ConfirmName": 0}]})",
+};
+
 static void parse_rejects_bad_json_and_wrong_shapes() {
     using AccessRules::ParseAccessList;
-    CHECK(!ParseAccessList(""));
-    CHECK(!ParseAccessList("not json"));
-    CHECK(!ParseAccessList("{ \"Users\": [ "));                    // truncated (mid-rewrite)
-    CHECK(!ParseAccessList("[]"));
-    CHECK(!ParseAccessList("42"));
-    CHECK(!ParseAccessList("{}"));                                 // no Users
-    CHECK(!ParseAccessList(R"({"RequireKeys": true})"));
-    CHECK(!ParseAccessList(R"({"Users": {}})"));                   // Users not an array
-    CHECK(!ParseAccessList(R"({"Users": "x"})"));
-    CHECK(!ParseAccessList(R"({"Users": null})"));
-    CHECK(!ParseAccessList(R"({"RequireKeys": "yes", "Users": []})"));   // RequireKeys not a bool
-    CHECK(!ParseAccessList(R"({"Users": [ 5 ]})"));                // a user that is not an object
-    CHECK(!ParseAccessList(R"({"Users": [ {"Name": 1, "Key": "K"} ]})"));
-    CHECK(!ParseAccessList(R"({"Users": [ {"Name": "A", "Key": 7} ]})"));
-    CHECK(!ParseAccessList(R"({"Users": [ {"Name": "A", "Key": "K", "CanCreateGames": "yes"} ]})"));
-    CHECK(!ParseAccessList(R"({"Users": [ {"Name": "A", "Key": "K", "ConfirmName": 1} ]})"));
+    for (const char* bad : kBadUserFiles) {
+        if (ParseAccessList(bad)) { std::printf("FAIL: accepted a bad user list: %s\n", bad); failures++; }
+    }
 
     // Good shapes.
     auto empty = ParseAccessList(R"({"Users": []})");
@@ -147,6 +166,110 @@ static void parse_defaults_require_keys_to_true() {
     CHECK(l && !AccessRules::CheckJoin(&*l, false, "A", "K").allowed);
 }
 
+// --- Re-reading the list while the server runs (Review Focus 2, Ruling 6) ---
+
+using AccessRules::ApplyRead;
+using AccessRules::ReloadLog;
+using AccessRules::ReloadState;
+
+static std::optional<AccessRules::AccessList> Bad() { return std::nullopt; }
+static std::optional<AccessRules::AccessList> Good() { return MakeList(); }
+static std::optional<AccessRules::AccessList> OtherGood() {
+    return AccessRules::ParseAccessList(std::string(R"({"Users": [{"Name": "Kaz", "Key": ")") + kKazKey + R"("}]})");
+}
+
+// Who the state lets in, as Access.cpp asks it.
+static bool Lets(const ReloadState& s, const char* name, const std::string& key) {
+    return AccessRules::CheckJoin(s.list ? &*s.list : nullptr, s.unreadable, name, key).allowed;
+}
+
+static void reload_no_file_at_start_is_no_gate() {
+    ReloadState s;
+    auto o = ApplyRead(s, false, std::nullopt);
+    CHECK(!o.listChanged && o.log == ReloadLog::NoFileAtStart);
+    CHECK(Lets(s, "Anyone", ""));
+    o = ApplyRead(s, false, std::nullopt);              // still nothing: quiet
+    CHECK(!o.listChanged && o.log == ReloadLog::None);
+}
+
+static void reload_first_read_bad_refuses_everyone_and_logs_once() {
+    ReloadState s;
+    auto o = ApplyRead(s, true, Bad());
+    CHECK(!o.listChanged && o.log == ReloadLog::BadRefuseAll);
+    CHECK(s.unreadable && !s.list);
+    CHECK(!Lets(s, "Sintax", kSintaxKey));
+    o = ApplyRead(s, true, Bad());                      // the same bad spell: not logged again
+    CHECK(!o.listChanged && o.log == ReloadLog::None);
+    CHECK(!Lets(s, "Sintax", kSintaxKey));
+}
+
+static void reload_later_bad_read_keeps_the_last_good_list() {
+    ReloadState s;
+    auto o = ApplyRead(s, true, Good());
+    CHECK(o.listChanged && o.log == ReloadLog::Loaded);
+    o = ApplyRead(s, true, Bad());
+    CHECK(!o.listChanged && o.log == ReloadLog::BadKeptList);
+    CHECK(!s.unreadable && s.list && s.list->users.size() == 2);
+    CHECK(Lets(s, "Kaz", kKazKey) && Lets(s, "Sintax", kSintaxKey));
+    o = ApplyRead(s, true, Bad());                      // logged once
+    CHECK(!o.listChanged && o.log == ReloadLog::None);
+    CHECK(Lets(s, "Kaz", kKazKey));
+}
+
+static void reload_file_gone_after_a_good_read_keeps_the_list() {
+    ReloadState s;
+    ApplyRead(s, true, Good());
+    auto o = ApplyRead(s, false, std::nullopt);
+    CHECK(!o.listChanged && o.log == ReloadLog::GoneKeptList);
+    CHECK(Lets(s, "Kaz", kKazKey));
+    CHECK(!Lets(s, "Stranger", "ZZZZZZZZZZZZZZZZZZZZZZZZ"));   // still gated
+    o = ApplyRead(s, false, std::nullopt);              // logged once
+    CHECK(!o.listChanged && o.log == ReloadLog::None);
+}
+
+static void reload_bad_first_file_then_deleted_means_no_gate() {   // Ruling 6
+    ReloadState s;
+    ApplyRead(s, true, Bad());
+    CHECK(!Lets(s, "Stranger", ""));
+    auto o = ApplyRead(s, false, std::nullopt);
+    CHECK(!o.listChanged && o.log == ReloadLog::GoneNoGate);
+    CHECK(!s.unreadable && !s.list);
+    CHECK(Lets(s, "Stranger", ""));
+    o = ApplyRead(s, false, std::nullopt);
+    CHECK(o.log == ReloadLog::None && Lets(s, "Stranger", ""));
+    // A bad file coming back is a new bad spell: refused again, and logged again.
+    o = ApplyRead(s, true, Bad());
+    CHECK(o.log == ReloadLog::BadRefuseAll && !Lets(s, "Stranger", ""));
+}
+
+static void reload_good_read_after_bad_clears_the_problem() {
+    // Bad first, then fixed.
+    ReloadState s;
+    ApplyRead(s, true, Bad());
+    auto o = ApplyRead(s, true, Good());
+    CHECK(o.listChanged && o.log == ReloadLog::Reloaded);
+    CHECK(!s.unreadable && !s.problemLogged);
+    CHECK(Lets(s, "Kaz", kKazKey) && !Lets(s, "Stranger", ""));
+    // Good, bad, then a different good list: it applies, and a later bad spell is logged again.
+    o = ApplyRead(s, true, Bad());
+    CHECK(o.log == ReloadLog::BadKeptList);
+    o = ApplyRead(s, true, OtherGood());
+    CHECK(o.listChanged && o.log == ReloadLog::Reloaded);
+    CHECK(!Lets(s, "Sintax", kSintaxKey) && Lets(s, "Kaz", kKazKey));
+    o = ApplyRead(s, true, Bad());
+    CHECK(o.log == ReloadLog::BadKeptList);
+}
+
+static void reload_file_back_after_removal_is_read_again() {
+    ReloadState s;
+    ApplyRead(s, true, Good());
+    ApplyRead(s, false, std::nullopt);
+    auto o = ApplyRead(s, true, OtherGood());
+    CHECK(o.listChanged && o.log == ReloadLog::Reloaded);
+    o = ApplyRead(s, false, std::nullopt);              // gone again: logged again
+    CHECK(o.log == ReloadLog::GoneKeptList);
+}
+
 static void refused_message_is_exact() {
     CHECK(std::strcmp(AccessRules::kRefusedMessage, "Improper Credentials!") == 0);
 }
@@ -162,6 +285,13 @@ int main() {
     parse_rejects_bad_json_and_wrong_shapes();
     parse_defaults_require_keys_to_true();
     refused_message_is_exact();
+    reload_no_file_at_start_is_no_gate();
+    reload_first_read_bad_refuses_everyone_and_logs_once();
+    reload_later_bad_read_keeps_the_last_good_list();
+    reload_file_gone_after_a_good_read_keeps_the_list();
+    reload_bad_first_file_then_deleted_means_no_gate();
+    reload_good_read_after_bad_clears_the_problem();
+    reload_file_back_after_removal_is_read_again();
 
     if (failures == 0) std::printf("PASS\n");
     return failures == 0 ? 0 : 1;
