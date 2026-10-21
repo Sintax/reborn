@@ -142,7 +142,9 @@ in. Click **OK**, then check these:
 1. Open `reborn-player.txt` in the `Win64` folder. The name in it must be exactly the name the host
    registered for you.
 2. Check that `reborn-key.txt` is in the same folder and is the file the host sent you.
-3. Still refused? The host may have removed you, or the key may be wrong. Ask the host for a new key.
+3. If you changed either file, close the game and start it again: the game reads them only when
+   it starts. Then try to join again.
+4. Still refused? The host may have removed you, or the key may be wrong. Ask the host for a new key.
 
 ## If something goes wrong
 
