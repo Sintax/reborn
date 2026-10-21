@@ -6,18 +6,36 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 
 namespace gamecontroller.Tests;
 
-public class GameControllerStartTests
+public class GameControllerStartTests : IDisposable
 {
+    readonly string _dir = Path.Combine(Path.GetTempPath(), "gcstart-" + Guid.NewGuid().ToString("N"));
+    public GameControllerStartTests() => Directory.CreateDirectory(_dir);
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
     static readonly DateTime T0 = new(2026, 10, 15, 12, 0, 0, DateTimeKind.Utc);
 
-    static (Game controller, ServerRoster roster) Make()
+    // A user list file with the given (name, key, canCreateGames) users.
+    UserList Users(params (string name, string key, bool create)[] users)
+    {
+        string path = Path.Combine(_dir, "reborn-users.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            RequireKeys = true,
+            Users = users.Select(u => new { Name = u.name, Key = u.key, CanCreateGames = u.create, ConfirmName = false, Added = "2026-10-21T18:00:00Z" }),
+        }));
+        return new UserList(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["UsersFile"] = path }).Build());
+    }
+
+    (Game controller, ServerRoster roster) Make() => Make(Users(("dj", "GOODKEY", true)));
+
+    (Game controller, ServerRoster roster) Make(UserList keys)
     {
         var launcher = new FakeLauncher();
         var roster = new ServerRoster(Array.Empty<RosterSlot>(), launcher, new[] { 7777 }, "localhost:5000") { PublicIp = "203.0.113.10" };
-        var keys = new StartKeys(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["StartKeys:dj"] = "GOODKEY" }).Build());
         var controller = new Game(NullLogger<Game>.Instance, roster, keys, new StinkyWordService())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
@@ -102,14 +120,7 @@ public class GameControllerStartTests
     [Fact]
     public void Only_the_key_that_started_a_game_can_cancel_it()
     {
-        var launcher = new FakeLauncher();
-        var roster = new ServerRoster(Array.Empty<RosterSlot>(), launcher, new[] { 7777 }, "localhost:5000") { PublicIp = "203.0.113.10" };
-        var keys = new StartKeys(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            { ["StartKeys:a"] = "KEYA", ["StartKeys:b"] = "KEYB" }).Build());
-        var c = new Game(NullLogger<Game>.Instance, roster, keys, new StinkyWordService())
-        {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
-        };
+        var (c, roster) = Make(Users(("a", "KEYA", true), ("b", "KEYB", true)));
         c.HttpContext.Request.Headers["X-Start-Key"] = "KEYA";
         c.Start(Req());
         string id = roster.Instances.Single().PublicId;
@@ -120,5 +131,27 @@ public class GameControllerStartTests
 
         c.HttpContext.Request.Headers["X-Start-Key"] = "KEYA";
         Assert.Equal(200, Status(c.Cancel(id)));
+    }
+
+    [Fact]
+    public void Start_refuses_a_user_without_game_creation_with_403()
+    {
+        var (c, roster) = Make(Users(("guest", "GUESTKEY", false)));
+        c.HttpContext.Request.Headers["X-Start-Key"] = "GUESTKEY";
+
+        var result = c.Start(Req());
+
+        Assert.Equal(403, Status(result));
+        Assert.Empty(roster.Instances);
+        var body = Assert.IsType<ObjectResult>(result).Value!;
+        Assert.Equal("Your account can't start games on this server.", (string)body.GetType().GetProperty("message")!.GetValue(body)!);
+    }
+
+    [Fact]
+    public void Cancel_refuses_a_user_without_game_creation_with_403()
+    {
+        var (c, _) = Make(Users(("guest", "GUESTKEY", false)));
+        c.HttpContext.Request.Headers["X-Start-Key"] = "GUESTKEY";
+        Assert.Equal(403, Status(c.Cancel("any-game")));
     }
 }

@@ -17,13 +17,7 @@ namespace gamecontroller.Services
 
 		public LoaderServerLauncher(IConfiguration config, ILogger<LoaderServerLauncher> logger)
 		{
-			// The server kit puts the service in Win64\matchmaking; appsettings.json "Win64" can say otherwise.
-			string here = AppContext.BaseDirectory.TrimEnd('\\', '/');
-			string parent = Path.GetDirectoryName(here) ?? here;
-			// A JSON null in appsettings.json reads back as "", not null.
-			string? configured = config["Win64"];
-			_win64 = !string.IsNullOrEmpty(configured) ? configured
-				: File.Exists(Path.Combine(here, "Battleborn.exe")) ? here : parent;
+			_win64 = GameFolder.Resolve(config);
 			_logger = logger;
 			_logger.LogInformation("Game folder: {Win64}", _win64);
 		}

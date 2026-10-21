@@ -24,7 +24,7 @@ builder.Services.AddSingleton<DatabaseSessions>();
 
 builder.Services.AddSingleton<StinkyWordService>();
 
-builder.Services.AddSingleton<StartKeys>();
+builder.Services.AddSingleton<UserList>();
 
 // The servers the service keeps running for the game's server browser: "Roster" in appsettings.json.
 builder.Services.AddSingleton(sp =>
@@ -39,6 +39,9 @@ builder.Services.AddHostedService<RosterService>();
 
 var app = builder.Build();
 started = true;
+
+// First start after the switch from StartKeys: the keys become users. Never overwrites a user list.
+UserList.Migrate(app.Configuration, UserList.PathFor(app.Configuration), app.Services.GetRequiredService<ILoggerFactory>().CreateLogger<UserList>());
 
 // Configure the HTTP request pipeline.
 // Plain HTTP on purpose: the game's httplib client talks HTTP, and a redirect would break it.
