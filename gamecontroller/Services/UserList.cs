@@ -132,12 +132,10 @@ namespace gamecontroller.Services
 				JsonElement root = doc.RootElement;
 				if (root.ValueKind != JsonValueKind.Object) return null;
 
-				bool requireKeys = true;   // missing means required
-				if (root.TryGetProperty("RequireKeys", out JsonElement rk))
-				{
-					if (rk.ValueKind != JsonValueKind.True && rk.ValueKind != JsonValueKind.False) return null;
-					requireKeys = rk.GetBoolean();
-				}
+				// The same strict shape as the game server (reborn/AccessRules.hpp) and tools/vm.py:
+				// Name and Key non-empty strings; RequireKeys, CanCreateGames and ConfirmName optional
+				// but true/false when present. Anything else makes the whole file unreadable.
+				if (!OptionalBool(root, "RequireKeys", true, out bool requireKeys)) return null;   // missing means required
 
 				if (!root.TryGetProperty("Users", out JsonElement list) || list.ValueKind != JsonValueKind.Array) return null;
 				var byKey = new Dictionary<string, UserEntry>(StringComparer.Ordinal);
@@ -146,7 +144,9 @@ namespace gamecontroller.Services
 					if (item.ValueKind != JsonValueKind.Object) return null;
 					string? name = StringOf(item, "Name"), key = StringOf(item, "Key");
 					if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(key)) return null;
-					byKey.TryAdd(key, new UserEntry(name, key, BoolOf(item, "CanCreateGames"), BoolOf(item, "ConfirmName"), DateOf(item, "Added")));
+					if (!OptionalBool(item, "CanCreateGames", false, out bool canCreate)) return null;
+					if (!OptionalBool(item, "ConfirmName", false, out bool confirmName)) return null;
+					byKey.TryAdd(key, new UserEntry(name, key, canCreate, confirmName, DateOf(item, "Added")));
 				}
 				return new Snapshot(true, requireKeys, byKey);
 			}
@@ -159,8 +159,15 @@ namespace gamecontroller.Services
 		private static string? StringOf(JsonElement obj, string name) =>
 			obj.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-		private static bool BoolOf(JsonElement obj, string name) =>
-			obj.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.True;
+		// False when the property is there but is not a JSON true/false; a missing one gives `fallback`.
+		private static bool OptionalBool(JsonElement obj, string name, bool fallback, out bool value)
+		{
+			value = fallback;
+			if (!obj.TryGetProperty(name, out JsonElement v)) return true;
+			if (v.ValueKind != JsonValueKind.True && v.ValueKind != JsonValueKind.False) return false;
+			value = v.GetBoolean();
+			return true;
+		}
 
 		private static DateTime DateOf(JsonElement obj, string name) =>
 			DateTime.TryParse(StringOf(obj, name), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out DateTime d)
@@ -205,6 +212,8 @@ namespace gamecontroller.Services
 			}
 			// Labels only: the keys themselves never go into the log.
 			logger?.LogInformation("Created the user list from {Count} start keys ({Labels})", users.Count, string.Join(", ", users.Select(u => u.Label)));
+			// While StartKeys stays, a missing user list is rebuilt from it, bringing removed people back.
+			logger?.LogWarning("Now delete the StartKeys block from appsettings.json: the user list replaces it");
 			return true;
 		}
 	}

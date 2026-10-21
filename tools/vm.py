@@ -284,11 +284,27 @@ def load_users(path: Path) -> dict:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e:
         raise VmError(f"{path} cannot be read ({type(e).__name__}); fix or remove it first") from None
-    if (not isinstance(data, dict) or not isinstance(data.get("Users"), list)
-            or not all(isinstance(u, dict) and isinstance(u.get("Name"), str) for u in data["Users"])):
+    if not is_user_list(data):
         raise VmError(f"{path} is not a user list (expected RequireKeys and Users); fix or remove it first")
     data.setdefault("RequireKeys", True)
     return data
+
+
+def is_user_list(data) -> bool:
+    """The one strict shape every reader accepts (gamecontroller UserList.cs, reborn/AccessRules.hpp):
+    Users is a list of objects whose Name and Key are non-empty strings; RequireKeys, CanCreateGames
+    and ConfirmName may be left out but are true/false when present. Anything else is unreadable."""
+    def optional_bool(obj: dict, name: str) -> bool:
+        return name not in obj or isinstance(obj[name], bool)
+
+    def good_user(u) -> bool:
+        return (isinstance(u, dict)
+                and isinstance(u.get("Name"), str) and u["Name"] != ""
+                and isinstance(u.get("Key"), str) and u["Key"] != ""
+                and optional_bool(u, "CanCreateGames") and optional_bool(u, "ConfirmName"))
+
+    return (isinstance(data, dict) and optional_bool(data, "RequireKeys")
+            and isinstance(data.get("Users"), list) and all(good_user(u) for u in data["Users"]))
 
 
 def save_users(path: Path, data: dict) -> None:

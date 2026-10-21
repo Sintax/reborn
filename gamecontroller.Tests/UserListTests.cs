@@ -128,6 +128,86 @@ public class UserListTests : IDisposable
         Assert.NotNull(users.ByKey(MikeKey));
     }
 
+    // The shared list of damaged files: the game server (reborn/tests/test_access_rules.cpp) and
+    // tools/vm.py (debugloop/tests/test_vm.py) refuse exactly these too.
+    public static TheoryData<string> BadShapes() => new()
+    {
+        "",
+        "not json",
+        "{ \"Users\": [ ",
+        "[]",
+        "42",
+        "{}",
+        "{\"RequireKeys\": true}",
+        "{\"Users\": {}}",
+        "{\"Users\": \"x\"}",
+        "{\"Users\": null}",
+        "{\"RequireKeys\": \"yes\", \"Users\": []}",
+        "{\"RequireKeys\": \"true\", \"Users\": []}",
+        "{\"RequireKeys\": 1, \"Users\": []}",
+        "{\"RequireKeys\": null, \"Users\": []}",
+        "{\"Users\": [5]}",
+        "{\"Users\": [{\"Key\": \"K\"}]}",
+        "{\"Users\": [{\"Name\": \"A\"}]}",
+        "{\"Users\": [{\"Name\": \"\", \"Key\": \"K\"}]}",
+        "{\"Users\": [{\"Name\": \"A\", \"Key\": \"\"}]}",
+        "{\"Users\": [{\"Name\": 1, \"Key\": \"K\"}]}",
+        "{\"Users\": [{\"Name\": \"A\", \"Key\": 7}]}",
+        "{\"Users\": [{\"Name\": null, \"Key\": \"K\"}]}",
+        "{\"Users\": [{\"Name\": \"A\", \"Key\": \"K\", \"CanCreateGames\": \"true\"}]}",
+        "{\"Users\": [{\"Name\": \"A\", \"Key\": \"K\", \"CanCreateGames\": 1}]}",
+        "{\"Users\": [{\"Name\": \"A\", \"Key\": \"K\", \"CanCreateGames\": null}]}",
+        "{\"Users\": [{\"Name\": \"A\", \"Key\": \"K\", \"ConfirmName\": \"false\"}]}",
+        "{\"Users\": [{\"Name\": \"A\", \"Key\": \"K\", \"ConfirmName\": 0}]}",
+    };
+
+    [Theory]
+    [MemberData(nameof(BadShapes))]
+    public void A_damaged_file_is_unreadable(string text)
+    {
+        // First read bad: the file is there, but nobody is let in.
+        Write(text, 0);
+        var users = Open(Config());
+        Assert.True(users.Exists);
+        Assert.Equal(0, users.Count);
+        Assert.Null(users.ByKey("K"));
+
+        // Later read bad: the last good list stays.
+        Write(Json(true, ("Sintax", DjKey, true, false)), 5);
+        Assert.NotNull(users.ByKey(DjKey));
+        Write(text, 10);
+        Assert.True(users.ByKey(DjKey)!.CanCreateGames);
+    }
+
+    [Fact]
+    public void Optional_settings_have_their_defaults_and_good_shapes_are_read()
+    {
+        Write("﻿{\"Users\": [{\"Name\": \"Bo\", \"Key\": \"K2\"}, {\"Name\": \"Ann\", \"Key\": \"K1\", \"CanCreateGames\": true, \"ConfirmName\": true, \"Extra\": 1}]}", 0);
+        var users = Open(Config());
+        Assert.True(users.RequireKeys);
+        Assert.False(users.ByKey("K2")!.CanCreateGames);
+        Assert.False(users.ByKey("K2")!.ConfirmName);
+        Assert.True(users.ByKey("K1")!.CanCreateGames);
+        Assert.True(users.ByKey("K1")!.ConfirmName);
+
+        Write("{\"RequireKeys\": false, \"Users\": []}", 5);
+        Assert.False(users.RequireKeys);
+        Assert.Equal(0, users.Count);
+    }
+
+    [Fact]
+    public void Migrate_says_to_delete_the_start_keys_afterwards()
+    {
+        var log = new CaptureLogger<UserList>();
+        Assert.True(UserList.Migrate(Config(("dj", DjKey)), FilePath, log));
+        Assert.Single(log.Lines, l => l.Contains("delete the StartKeys block from appsettings.json"));
+
+        // Nothing to say when nothing was migrated.
+        var quiet = new CaptureLogger<UserList>();
+        Assert.False(UserList.Migrate(Config(("dj", DjKey)), FilePath, quiet));
+        Assert.DoesNotContain(quiet.Lines, l => l.Contains("StartKeys"));
+    }
+
     [Fact]
     public void Migrate_turns_start_keys_into_users_that_confirm_their_name()
     {

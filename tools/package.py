@@ -15,7 +15,6 @@ Install.bat copies files/ into the game's Binaries\\Win64 folder. Player guide: 
 from __future__ import annotations
 
 import argparse
-import re
 import subprocess
 import sys
 import zipfile
@@ -117,8 +116,10 @@ def make_zip(out: Path, version: str, with_loader: bool, win64: Path = config.WI
 
 
 def check_friend_name(name: str) -> str:
-    """Names end up in file names and the server's key list: letters, digits, - and _ only."""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", name or ""):
+    """Names end up in file names and the server's user list: the one player-name rule,
+    tools/vm.py valid_name (letters, digits, - and _ only)."""
+    from . import vm   # vm imports this module, so import it only here
+    if not vm.valid_name(name):
         raise ValueError(f"friend name {name!r}: use 1-24 letters, digits, - or _")
     return name
 
