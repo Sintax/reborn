@@ -194,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         (vm.KEYS_DIR / f"reborn-key-{label}.txt").write_text(vm.key_file_text(key), encoding="utf-8", newline="")
         print(f"FRIEND ZIP OK {out}")
         print(f"KEY {label} {key}")
-        print(f"On the VM:   python -m tools.vm addkey {label} {key}   (takes effect at once, no restart)")
+        print(f"On the VM:   python -m tools.vm user add {label} --key {key} [--create]   (takes effect at once, no restart)")
         print("Send the zip to that friend only; it holds the Steam loader and their key.")
         return 0
     suffix = "-with-loader" if a.with_loader else ""

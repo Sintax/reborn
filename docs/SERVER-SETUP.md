@@ -60,18 +60,28 @@ started this way shut down when the match ends, when nobody joins within 3 minut
 after the last player leaves. At most three games run at once (the three ports), counting the
 roster.
 
+Who may start games is a setting on each person's entry in the user list, `reborn-users.json`
+in the game's `Binaries\Win64` folder. Everyone on the list needs a key to join. Only people
+marked "create" can start games. Changes apply within a second, with no restart, and games
+already running carry on.
+
 1. On your own PC: `python -m tools.vm key <friend>` prints a key and writes
    `dist\keys\reborn-key-<friend>.txt`.
-2. On this machine: `python -m tools.vm addkey <friend> <key>` puts it into
-   `matchmaking\appsettings.json` under `"StartKeys"`. The service notices the change within a
-   second; no restart, and games already running carry on.
+2. On this machine: `python -m tools.vm user add <friend> --key <key> --create` adds them and
+   lets them start games. Leave out `--create` if they may only join. Leave out `--key` and the
+   tool makes a key and prints it once.
 3. Send the friend the file. They save it as `reborn-key.txt` in the game's `Binaries\Win64` folder.
-4. To cut someone off, delete their line from `"StartKeys"` and save the file; that also applies at
-   once. `matchmaking.log` shows `Start keys reloaded: <count> (<names>)` after each change.
-   If the file is saved with a JSON mistake, the log shows 0 keys until the mistake is fixed.
+4. To let someone start games, or stop them: `python -m tools.vm user create <friend> on` (or `off`).
+   To cut someone off: `python -m tools.vm user revoke <friend>`.
+   `python -m tools.vm user list` shows everyone, never their keys. `matchmaking.log` shows
+   `Reloaded the user list: <count> users (<names>)` after each change. If the file is saved with
+   a JSON mistake, the log warns and the last good list stays in use.
 
-The timeouts are `"RequestedGame": { "NoJoinSeconds": 180, "EmptySeconds": 60 }` in the same file.
-`matchmaking.log` records which key started each game.
+The first time the service starts with old `"StartKeys"` in its settings and no user list, it
+turns them into users who can start games. After that, `StartKeys` is no longer used.
+
+The timeouts are `"RequestedGame": { "NoJoinSeconds": 180, "EmptySeconds": 60 }` in the matchmaking
+`appsettings.json`. `matchmaking.log` records which player started each game.
 
 ## Start a game by hand (no matchmaking)
 
