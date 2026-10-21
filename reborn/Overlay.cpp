@@ -1,5 +1,6 @@
 #include "Overlay.hpp"
 
+#include "Access.hpp"
 #include "Globals.hpp"
 #include "Engine.hpp"
 #include "GameCoordinator.hpp"
@@ -755,5 +756,23 @@ namespace Overlay {
             }
             ImGui::End();
         }
+
+        // The server turned this player away: its message stays up until OK, even after the game
+        // has dropped back to the menu. Drawn last so it sits on top of everything else.
+        if (Access::HasRefusal()) {
+            UiStyle::NextWindow();
+            ImGui::SetNextWindowFocus();
+            ImGui::Begin("Reborn", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse
+                | ImGuiWindowFlags_NoSavedSettings);
+            UiStyle::WindowFont();
+            ImGui::TextWrapped("%s", Access::Refusal().c_str());
+            if (UiStyle::Button("OK"))
+                AcknowledgeRefusal();
+            ImGui::End();
+        }
+    }
+
+    void AcknowledgeRefusal() {
+        Access::ClearRefusal();
     }
 }

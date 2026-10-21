@@ -27,4 +27,7 @@ namespace Overlay {
     std::string GetItemDisplayName(const Metagame::Item* item);
 
     void Render();
+
+    // The player pressed OK on the server's refusal notice (the autopilot does the same).
+    void AcknowledgeRefusal();
 }

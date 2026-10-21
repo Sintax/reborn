@@ -1,4 +1,5 @@
 #include "Autopilot.hpp"
+#include "Access.hpp"
 #include "CharSelect.hpp"
 #include "Combat.hpp"
 #include "Constants.hpp"
@@ -78,6 +79,8 @@ namespace Autopilot {
         const int kMaxSelectClicks = 5;
         const float kMenuGrace = 2.f;     // menu must hold this long before we call it a real return
         const float kLaunchTimeout = 90.f;
+        const float kNoticeSeconds = 6.f; // refusal notice: seconds in the menu before the autopilot presses OK
+        bool g_refused = false;           // the server refused us: never join again
 
         float Rand(float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(g_rng); }
 
@@ -615,6 +618,22 @@ namespace Autopilot {
             if (APoplarGameReplicationInfo* gri = CharSelect::LevelGRI())
                 g_matchOver = gri->CurrentMatchState.State >= 7;   // MatchState_Ended or Shutdown
         }
+        // The server turned us away ("Improper Credentials!"): a player reads the notice and presses
+        // OK, so do the same once the menu has been up for a few seconds (long enough to be seen),
+        // then stay in the menu. Joining again would only add a dead player entry on the server.
+        if (g_phase != Phase::Off && (g_refused || Access::HasRefusal())) {
+            if (!g_refused) {
+                g_refused = true;
+                std::printf("[AUTOPILOT] the server refused us; not joining again\n");
+            }
+            if (inMenu && g_menuTime >= kNoticeSeconds) {
+                std::printf("[AUTOPILOT] pressing OK on the notice \"%s\"; staying in the menu\n", Access::Refusal().c_str());
+                Overlay::AcknowledgeRefusal();
+                SetPhase(Phase::Off);
+            }
+            return;
+        }
+
         // Sent home after the server ended the match (e.g. abandoned for too few players): a
         // player would stay in the menu, so do not join again.
         if (g_matchOver && g_menuTime >= kMenuGrace

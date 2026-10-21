@@ -72,7 +72,15 @@ namespace Access {
                     // Writers replace it with a rename, so it is never missing mid-write; someone
                     // removed it. Keep what we have (set RequireKeys false to open the server).
                     g_goneLogged = true;
-                    printf("[ACCESS] PROBLEM: the user list %s is gone; keeping the last list read\n", PathText().c_str());
+                    if (g_list) {
+                        printf("[ACCESS] PROBLEM: the user list %s is gone; keeping the last list read\n", PathText().c_str());
+                    } else {
+                        // The only file ever seen was unreadable and no good list was read: with the
+                        // file gone this is "no file" again, not a reason to refuse everyone.
+                        g_unreadable = false;
+                        g_problemLogged = false;
+                        printf("[ACCESS] the unreadable user list %s is gone and no list was ever read: anyone can join\n", PathText().c_str());
+                    }
                 }
                 return false;
             }
