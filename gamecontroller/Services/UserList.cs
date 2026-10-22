@@ -50,6 +50,23 @@ namespace gamecontroller.Services
 			return !string.IsNullOrEmpty(configured) ? configured : Path.Combine(GameFolder.Resolve(config), FileName);
 		}
 
+		// The longest a player name may be (the same rule as tools/vm.py valid_name).
+		public const int MaxNameLength = 24;
+
+		// A name with everything but A-Z, a-z, 0-9, _ and - dropped, cut to MaxNameLength.
+		// Used on names that arrive from elsewhere (a game server's poll) before they are kept or logged.
+		public static string CleanName(string? name)
+		{
+			if (string.IsNullOrEmpty(name)) return "";
+			var kept = new System.Text.StringBuilder(MaxNameLength);
+			foreach (char c in name)
+			{
+				if (kept.Length == MaxNameLength) break;
+				if (c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-') kept.Append(c);
+			}
+			return kept.ToString();
+		}
+
 		public bool RequireKeys => Current.RequireKeys;
 		public int Count => Current.UsersByKey.Count;
 		public bool Exists => Current.Exists;

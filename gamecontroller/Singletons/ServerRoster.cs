@@ -8,6 +8,22 @@ namespace gamecontroller.Singletons
 	public record RosterSlot(string Name, string MapMode, string ServerStartupCommand, int MaxNumPlayers, bool RandomHero = false,
 		string DraftStyle = DraftStyles.QuickSelect);
 
+	// One player as a game server reports them in its poll: Hero is the hero's display name ("" until
+	// picked), Team is -1 while unknown.
+	public record PolledPlayer(string Name, string Hero, int Team)
+	{
+		public const int MaxPlayers = 32;
+		public const int MaxHeroLength = 40;
+
+		// The player as matchmaking keeps it: the name cleaned like user names, the hero cut to plain
+		// printable characters, the team kept in range. Poll text is never trusted as it arrives.
+		public static PolledPlayer Cleaned(PolledPlayer p)
+		{
+			string hero = new string((p.Hero ?? "").Where(c => c >= ' ' && c <= '~').Take(MaxHeroLength).ToArray()).Trim();
+			return new PolledPlayer(gamecontroller.Services.UserList.CleanName(p.Name), hero, Math.Clamp(p.Team, -1, 15));
+		}
+	}
+
 	// Starts and watches Serverborn.exe processes; swapped for a fake in tests.
 	public interface IServerLauncher
 	{
@@ -192,10 +208,12 @@ namespace gamecontroller.Singletons
 
 		public GameCreationConfig? ConfigFor(string token) => Find(token)?.Config;
 
-		public bool RecordPoll(string token, int connectedPlayers, bool humansHaveStarted, DateTime now)
+		public bool RecordPoll(string token, int connectedPlayers, bool humansHaveStarted, IReadOnlyList<PolledPlayer> players, DateTime now)
 		{
 			GameInstance? i = Find(token);
 			if (i == null) return false;
+			// A fresh list each time, swapped in whole, so a reader never sees it half-filled.
+			i.Players = (players ?? []).Where(p => p != null).Take(PolledPlayer.MaxPlayers).Select(PolledPlayer.Cleaned).ToArray();
 			i.CurrentNumPlayers = connectedPlayers;
 			i.MatchStarted = humansHaveStarted;
 			i.LastServerCheckIn = now;

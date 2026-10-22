@@ -20,12 +20,15 @@ namespace gamecontroller.Controllers
 
         private readonly StinkyWordService _words;
 
-        public Game(ILogger<Game> logger, ServerRoster roster, UserList users, StinkyWordService words)
+        private readonly SeenLog _seen;
+
+        public Game(ILogger<Game> logger, ServerRoster roster, UserList users, StinkyWordService words, SeenLog seen)
         {
             _logger = logger;
             _roster = roster;
             _users = users;
             _words = words;
+            _seen = seen;
         }
 
         // The user whose key came with the request, or the refusal to send back: 401 when the key is
@@ -120,10 +123,20 @@ namespace gamecontroller.Controllers
         public void ServerPoll([FromBody] ServerPollBody body)
         {
             string? token = ServerToken();
-            if (token != null)
-            {
-                _roster.RecordPoll(token, body.ConnectedPlayers, body.HumansHaveStarted, DateTime.UtcNow);
-            }
+            if (token == null) return;
+            GameInstance? game = _roster.Instances.FirstOrDefault(i => i.MyGuid == token);
+            if (game == null) return;
+
+            IReadOnlyList<PolledPlayer> before = game.Players;
+            if (!_roster.RecordPoll(token, body.ConnectedPlayers, body.HumansHaveStarted, body.Players ?? [], DateTime.UtcNow)) return;
+            IReadOnlyList<PolledPlayer> after = game.Players;
+            _seen.Saw(after.Select(p => p.Name));
+
+            // Only the cleaned list is logged, and only when it changes (a poll comes every five seconds).
+            if (!before.SequenceEqual(after))
+                _logger.LogInformation("Players in \"{Game}\": {Players}", game.Config.InstanceName,
+                    after.Count == 0 ? "none" : string.Join(", ", after.Select(p =>
+                        $"{p.Name} ({(p.Hero == "" ? "no hero yet" : p.Hero)}, team {p.Team})")));
         }
     }
 
@@ -132,5 +145,7 @@ namespace gamecontroller.Controllers
     {
         public int ConnectedPlayers { get; set; }
         public bool HumansHaveStarted { get; set; }
+        // Missing from servers older than the player list; then treated as empty.
+        public List<PolledPlayer>? Players { get; set; }
     }
 }

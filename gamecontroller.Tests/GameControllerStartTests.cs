@@ -36,7 +36,7 @@ public class GameControllerStartTests : IDisposable
     {
         var launcher = new FakeLauncher();
         var roster = new ServerRoster(Array.Empty<RosterSlot>(), launcher, new[] { 7777 }, "localhost:5000") { PublicIp = "203.0.113.10" };
-        var controller = new Game(NullLogger<Game>.Instance, roster, keys, new StinkyWordService())
+        var controller = new Game(NullLogger<Game>.Instance, roster, keys, new StinkyWordService(), new SeenLog(Path.Combine(_dir, "seen.json"), () => T0))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };

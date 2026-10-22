@@ -103,7 +103,7 @@ public class ServerRosterTests
         // The game server needs a while to load the map before its first check-in.
         roster.Reconcile(T0.AddSeconds(100));
         Assert.Single(launcher.Launched);
-        roster.RecordPoll(roster.Instances[0].MyGuid, 0, false, T0.AddSeconds(100));
+        roster.RecordPoll(roster.Instances[0].MyGuid, 0, false, [], T0.AddSeconds(100));
 
         roster.Reconcile(T0.AddSeconds(121));
 
@@ -132,8 +132,8 @@ public class ServerRosterTests
         roster.Reconcile(T0);
         var token = roster.Instances[0].MyGuid;
 
-        Assert.True(roster.RecordPoll(token, 3, true, T0.AddSeconds(5)));
-        Assert.False(roster.RecordPoll("nope", 1, false, T0.AddSeconds(5)));
+        Assert.True(roster.RecordPoll(token, 3, true, [], T0.AddSeconds(5)));
+        Assert.False(roster.RecordPoll("nope", 1, false, [], T0.AddSeconds(5)));
 
         var entry = Assert.Single(roster.BrowserEntries());
         Assert.Equal(3, entry.CurrentNumPlayers);

@@ -104,6 +104,9 @@ namespace gamecontroller
         public bool HasCheckedIn { get; set; }
         public bool Finished { get; set; }
 
+        // Who is in the game, from the server's last poll (cleaned by ServerRoster.RecordPoll).
+        public IReadOnlyList<PolledPlayer> Players { get; set; } = Array.Empty<PolledPlayer>();
+
         // On-request games (ServerRoster.StartRequested): who started it and when it was last busy.
         public string? KeyLabel { get; set; }
         public DateTime? FirstCheckIn { get; set; }

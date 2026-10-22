@@ -137,12 +137,12 @@ public class RequestedGameTests
     {
         var (roster, launcher) = Make();
         var r = roster.StartRequested(Story(), "dj", T0);
-        roster.RecordPoll(Token(roster, r), 0, false, T0.AddSeconds(20));
-        roster.RecordPoll(Token(roster, r), 0, false, T0.AddSeconds(199));
+        roster.RecordPoll(Token(roster, r), 0, false, [], T0.AddSeconds(20));
+        roster.RecordPoll(Token(roster, r), 0, false, [], T0.AddSeconds(199));
         roster.Reconcile(T0.AddSeconds(199));
         Assert.Single(roster.Instances);
 
-        roster.RecordPoll(Token(roster, r), 0, false, T0.AddSeconds(201));
+        roster.RecordPoll(Token(roster, r), 0, false, [], T0.AddSeconds(201));
         roster.Reconcile(T0.AddSeconds(201));
 
         Assert.Empty(roster.Instances);
@@ -155,15 +155,15 @@ public class RequestedGameTests
     {
         var (roster, launcher) = Make();
         var r = roster.StartRequested(Story(), "dj", T0);
-        roster.RecordPoll(Token(roster, r), 1, true, T0.AddSeconds(30));
-        roster.RecordPoll(Token(roster, r), 1, true, T0.AddSeconds(299));    // last time anyone was there
+        roster.RecordPoll(Token(roster, r), 1, true, [], T0.AddSeconds(30));
+        roster.RecordPoll(Token(roster, r), 1, true, [], T0.AddSeconds(299));    // last time anyone was there
         for (int t = 300; t <= 359; t += 10)                         // then the server keeps checking in, empty
-            roster.RecordPoll(Token(roster, r), 0, true, T0.AddSeconds(t));
-        roster.RecordPoll(Token(roster, r), 0, true, T0.AddSeconds(359));
+            roster.RecordPoll(Token(roster, r), 0, true, [], T0.AddSeconds(t));
+        roster.RecordPoll(Token(roster, r), 0, true, [], T0.AddSeconds(359));
         roster.Reconcile(T0.AddSeconds(359));
         Assert.Single(roster.Instances);
 
-        roster.RecordPoll(Token(roster, r), 0, true, T0.AddSeconds(361));
+        roster.RecordPoll(Token(roster, r), 0, true, [], T0.AddSeconds(361));
         roster.Reconcile(T0.AddSeconds(361));
 
         Assert.Empty(roster.Instances);
@@ -188,7 +188,7 @@ public class RequestedGameTests
         var (roster, _) = Make(Algorithm);
         var story = roster.StartRequested(Story(), "dj", T0);
         var versus = roster.StartRequested(Versus(), "dj", T0);
-        roster.RecordPoll(Token(roster, story), 0, false, T0.AddSeconds(20));
+        roster.RecordPoll(Token(roster, story), 0, false, [], T0.AddSeconds(20));
 
         var entries = roster.BrowserEntries();
 

@@ -26,6 +26,10 @@ builder.Services.AddSingleton<StinkyWordService>();
 
 builder.Services.AddSingleton<UserList>();
 
+// When each player name was last seen in a game; disposed (and so saved) when the service stops.
+builder.Services.AddSingleton(sp => new SeenLog(SeenLog.PathFor(builder.Configuration), () => DateTime.UtcNow,
+    sp.GetRequiredService<ILogger<SeenLog>>()));
+
 // The servers the service keeps running for the game's server browser: "Roster" in appsettings.json.
 builder.Services.AddSingleton(sp =>
 {
