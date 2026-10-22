@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The Control Panel window. Only windows, bindings and the few Windows calls (clipboard,
+       running programs, opening folders); everything else is in ControlPanel.Core. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ControlPanel</RootNamespace>
+    <AssemblyName>ControlPanel</AssemblyName>
+    <!-- WPF0001: the built-in Windows 11 look (Application.ThemeMode) is marked experimental in .NET 9; the owner chose it. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ControlPanel.Core\ControlPanel.Core.csproj" />
+  </ItemGroup>
+
+</Project>

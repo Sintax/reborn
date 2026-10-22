@@ -16,7 +16,7 @@ namespace ControlPanel.Core
 		bool Start(string exe, string args, string workingDir);
 
 		// Runs a program hidden, as administrator (Windows asks the owner), and waits. Its exit code,
-		// or -1 when the owner said no or it could not run.
+		// -1 when the owner said no, or another non-zero code when it could not run.
 		Task<int> RunElevated(string exe, string args);
 
 		// Whether a process by this name (no ".exe") is running.

@@ -1,0 +1,56 @@
+<UserControl x:Class="ControlPanel.Views.GamesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Every running game as a card: what it is, where, how long, and who is playing which hero. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="4,12,4,4">
+            <TextBlock Text="{Binding EmptyText}" Style="{StaticResource NoteText}" FontSize="16"
+                       Visibility="{Binding EmptyText, Converter={StaticResource TextToVisibility}}" />
+
+            <ItemsControl ItemsSource="{Binding Games}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                            <StackPanel>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding State}" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                    <TextBlock Text="{Binding Name}" FontSize="18" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                </DockPanel>
+
+                                <WrapPanel Margin="0,4,0,0">
+                                    <TextBlock Text="{Binding Map}" Margin="0,0,20,0" />
+                                    <TextBlock Text="{Binding Mode}" Margin="0,0,20,0" />
+                                    <TextBlock Text="{Binding Port, StringFormat=Port {0}}" Margin="0,0,20,0" />
+                                    <TextBlock Text="{Binding RunningFor, StringFormat=Running for {0}}" Margin="0,0,20,0"
+                                               Visibility="{Binding RunningFor, Converter={StaticResource TextToVisibility}}" />
+                                    <TextBlock Text="{Binding StartedBy, StringFormat=Started by {0}}" Style="{StaticResource NoteText}"
+                                               Visibility="{Binding StartedBy, Converter={StaticResource TextToVisibility}}" />
+                                </WrapPanel>
+
+                                <TextBlock Text="Nobody is in this game yet." Style="{StaticResource NoteText}" Margin="0,8,0,0"
+                                           Visibility="{Binding Players.Count, Converter={StaticResource ZeroToVisibility}}" />
+                                <ItemsControl ItemsSource="{Binding Players}" Margin="0,8,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,2,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="220" />
+                                                    <ColumnDefinition Width="220" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Hero}" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="2" Text="{Binding Team}" Style="{StaticResource NoteText}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

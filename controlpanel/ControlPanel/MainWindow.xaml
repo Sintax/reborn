@@ -1,0 +1,106 @@
+<Window x:Class="ControlPanel.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:ControlPanel.Views"
+        Title="Battleborn Reborn Control Panel"
+        Width="1100" Height="700" MinWidth="760" MinHeight="480"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="20,12,20,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header: the address players connect to, then how matchmaking is doing. -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="Server address (players connect to this)" Style="{StaticResource NoteText}" />
+                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                    <TextBlock FontSize="28" FontWeight="SemiBold" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="{Binding ServerAddress}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ServerAddress}" Value="">
+                                        <Setter Property="Text" Value="Not known yet" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <Button Content="Copy" Command="{Binding CopyAddressCommand}" Margin="14,0,0,0" MinWidth="80"
+                            VerticalAlignment="Center" ToolTip="Copy the address to send it to a friend" />
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Ellipse Width="12" Height="12" Margin="0,0,8,0" VerticalAlignment="Center">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding MatchmakingUp}" Value="True">
+                                        <Setter Property="Fill" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock FontWeight="SemiBold" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="Matchmaking not running" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding MatchmakingUp}" Value="True">
+                                        <Setter Property="Text" Value="Matchmaking running" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+                <TextBlock Text="{Binding StatusLine}" HorizontalAlignment="Right" Margin="0,4,0,0"
+                           Visibility="{Binding StatusLine, Converter={StaticResource TextToVisibility}}" />
+                <TextBlock Text="{Binding Version, StringFormat=Version {0}}" HorizontalAlignment="Right" Style="{StaticResource NoteText}"
+                           Visibility="{Binding Version, Converter={StaticResource TextToVisibility}}" />
+                <TextBlock Text="{Binding Ports.MemoryText}" HorizontalAlignment="Right" Style="{StaticResource NoteText}"
+                           MaxWidth="520" TextAlignment="Right" />
+            </StackPanel>
+        </Grid>
+
+        <!-- The banner: something is wrong (most often: matchmaking is not running). -->
+        <Border Grid.Row="1" Margin="0,12,0,0" Padding="12,8" CornerRadius="6" BorderThickness="1"
+                Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                Visibility="{Binding Banner, Converter={StaticResource TextToVisibility}}">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Start matchmaking" Command="{Binding StartMatchmakingCommand}"
+                        Style="{DynamicResource AccentButtonStyle}" Margin="12,0,0,0" VerticalAlignment="Center"
+                        Visibility="{Binding MatchmakingUp, Converter={StaticResource NotBoolToVisibility}}" />
+                <TextBlock Text="{Binding Banner}" TextWrapping="Wrap" VerticalAlignment="Center" FontWeight="SemiBold" />
+            </DockPanel>
+        </Border>
+
+        <TabControl x:Name="Tabs" Grid.Row="2" Margin="0,12,0,0" SelectionChanged="Tabs_SelectionChanged">
+            <TabItem Header="Live games">
+                <views:GamesView DataContext="{Binding Games}" />
+            </TabItem>
+            <TabItem Header="Users">
+                <views:UsersView DataContext="{Binding Users}" />
+            </TabItem>
+            <TabItem Header="Ports">
+                <views:PortsView DataContext="{Binding Ports}" />
+            </TabItem>
+            <TabItem x:Name="LogsTab" Header="Logs">
+                <views:LogsView DataContext="{Binding Logs}" />
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>

@@ -1,0 +1,23 @@
+<UserControl x:Class="ControlPanel.Views.LogsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="4,12,4,4">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <Button DockPanel.Dock="Right" Content="Open game logs folder" Command="{Binding OpenGameLogsCommand}" Margin="8,0,0,0"
+                    ToolTip="{Binding GameLogsFolder}" />
+            <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshCommand}" MinWidth="80" />
+            <TextBlock Text="{Binding Message}" Style="{StaticResource NoteText}" VerticalAlignment="Center" />
+        </DockPanel>
+
+        <!-- The end of matchmaking.log, newest at the bottom. -->
+        <TextBox x:Name="LogText" Grid.Row="1" Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" AutomationProperties.Name="Matchmaking log"
+                 FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap" AcceptsReturn="True"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                 VerticalContentAlignment="Top" TextChanged="LogText_TextChanged" />
+    </Grid>
+</UserControl>

@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ControlPanel.Core", "contro
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ControlPanel.Tests", "controlpanel\ControlPanel.Tests\ControlPanel.Tests.csproj", "{8F9F2781-2545-4D0F-99DD-9DD4AD9D8BAD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ControlPanel", "controlpanel\ControlPanel\ControlPanel.csproj", "{D0120F83-2D81-46AD-8543-7E871526CC56}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -97,6 +99,18 @@ Global
 		{8F9F2781-2545-4D0F-99DD-9DD4AD9D8BAD}.Release|x64.Build.0 = Release|Any CPU
 		{8F9F2781-2545-4D0F-99DD-9DD4AD9D8BAD}.Release|x86.ActiveCfg = Release|Any CPU
 		{8F9F2781-2545-4D0F-99DD-9DD4AD9D8BAD}.Release|x86.Build.0 = Release|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Debug|x64.Build.0 = Debug|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Debug|x86.Build.0 = Debug|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Release|x64.ActiveCfg = Release|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Release|x64.Build.0 = Release|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Release|x86.ActiveCfg = Release|Any CPU
+		{D0120F83-2D81-46AD-8543-7E871526CC56}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
