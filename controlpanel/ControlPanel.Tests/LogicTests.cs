@@ -90,8 +90,9 @@ namespace ControlPanel.Tests
 			using (var zip = ZipFile.OpenRead(path!))
 			{
 				var names = zip.Entries.Select(e => e.FullName).ToList();
-				// every base entry once, plus nothing else; same-named entries were replaced, not doubled
-				Assert.Equal(new[] { "Install.bat", "Install.ps1", "README.txt", "files/reborn.dll", "files/steam_settings/configs.main.ini",
+				// every base entry once, plus nothing else; same-named entries were replaced, not doubled;
+				// the general guide (README.txt) gives way to the friend's own, as in tools/package.py
+				Assert.Equal(new[] { "Install.bat", "Install.ps1", "files/reborn.dll", "files/steam_settings/configs.main.ini",
 					"files/steam_settings/configs.user.ini", "files/reborn-key.txt", "files/reborn-player.txt", "README-Kaz.txt" }.OrderBy(n => n),
 					names.OrderBy(n => n));
 				using (var s = zip.GetEntry("README-Kaz.txt")!.Open())
@@ -118,7 +119,83 @@ namespace ControlPanel.Tests
 			Assert.True(second.ok, second.message);
 			Assert.Equal(2, ZipRecords.Load(record).Count);
 			using (var zip = ZipFile.OpenRead(second.path!))
+			{
 				Assert.Equal("Pip\r\n", Text(zip, "files/reborn-player.txt"));
+				// No server version known (an older matchmaking): the guide says so instead of a blank.
+				Assert.StartsWith("Battleborn Reborn unknown\r\n\r\n", Text(zip, "README-Pip.txt"));
+			}
+		}
+
+		// tools/package.py, given the same files, makes both the base zip (`make_zip` with the Steam
+		// loader: what `tools.vm release` uploads as reborn-player-installer.zip) and a friend zip
+		// (`make_friend_zip`, today's `--friend` zip). The panel's zip made from that base must hold the
+		// same entries with the same bytes.
+		private const string MakeBothZips = """
+			import sys
+			from pathlib import Path
+			from tools import launch, package
+			work, key = Path(sys.argv[1]), sys.argv[2]
+			win64 = work / "Win64"
+			win64.mkdir(parents=True)
+			mod, dxgi = work / "reborn.dll", work / "dxgi.dll"
+			mod.write_bytes(b"mod bytes")
+			dxgi.write_bytes(b"dxgi bytes")
+			for f in launch.LOADER_FILES:
+			    (win64 / f).write_bytes(f.encode())
+			(win64 / package.LOADER_INI).write_text("[SteamClient]\nExe=Battleborn.exe\nExeCommandLine=\n", encoding="utf-8")
+			package.make_zip(work / "base.zip", "abc1234", True, win64, mod, dxgi)
+			package.make_friend_zip(work / "friend.zip", "abc1234", "Kaz", key, win64, mod, dxgi)
+			""";
+
+		[Fact]
+		public void Friend_zip_matches_the_one_tools_package_makes()
+		{
+			using var t = new TempPanel();
+			string work = Path.Combine(t.Root, "py");
+			string key = "ABCDEFGHJKMNPQRSTVWXYZ23";
+			var start = new System.Diagnostics.ProcessStartInfo("python")
+			{
+				WorkingDirectory = RepoRoot(),
+				RedirectStandardOutput = true,
+				RedirectStandardError = true,
+				UseShellExecute = false,
+			};
+			foreach (string arg in new[] { "-c", MakeBothZips, work, key }) start.ArgumentList.Add(arg);
+			using (var python = System.Diagnostics.Process.Start(start)!)
+			{
+				string output = python.StandardOutput.ReadToEnd() + python.StandardError.ReadToEnd();
+				Assert.True(python.WaitForExit(60_000), "python did not finish");
+				Assert.True(python.ExitCode == 0, "tools/package.py could not make the zips:\n" + output);
+			}
+
+			var (ok, message, path) = FriendZip.Make(Path.Combine(work, "base.zip"), "Kaz", key, Path.Combine(t.Root, "out"), version: "abc1234");
+			Assert.True(ok, message);
+
+			static SortedDictionary<string, byte[]> Entries(string zipPath)
+			{
+				var all = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+				using var zip = ZipFile.OpenRead(zipPath);
+				foreach (ZipArchiveEntry e in zip.Entries)
+				{
+					using var s = e.Open();
+					using var m = new MemoryStream();
+					s.CopyTo(m);
+					all.Add(e.FullName, m.ToArray());
+				}
+				return all;
+			}
+
+			var expected = Entries(Path.Combine(work, "friend.zip"));
+			var made = Entries(path!);
+			Assert.Equal(expected.Keys, made.Keys);
+			foreach (string name in expected.Keys)
+				Assert.True(expected[name].AsSpan().SequenceEqual(made[name]), name + " differs from tools/package.py's");
+
+			// The Steam loader is in, so Install.ps1 makes the desktop shortcut and never asks the friend
+			// to get loader files from the host.
+			Assert.Contains("files/steamclient_loader_x64.exe", made.Keys);
+			Assert.Contains("files/ColdClientLoader.ini", made.Keys);
+			Assert.DoesNotContain("README.txt", made.Keys);
 		}
 
 		[Fact]

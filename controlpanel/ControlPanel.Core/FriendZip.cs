@@ -6,8 +6,10 @@ using System.Text.Json.Nodes;
 
 namespace ControlPanel.Core
 {
-	// One friend's zip: the player installer zip that came with the server update, plus that friend's
-	// own Steam identity, key and player name (the same files tools/package.py make_friend_zip adds).
+	// One friend's zip: the player installer zip that came with the server update (built with the Steam
+	// loader, as tools/vm.py release makes it), plus that friend's own Steam identity, key, player name
+	// and guide. The result holds the same files as tools/package.py make_friend_zip: the general guide
+	// (README.txt) is left out, and README-<name>.txt takes its place.
 	public static class FriendZip
 	{
 		public const ulong SteamIdBase = 76561197960287930UL;   // tools/launch.py STEAMID_BASE
@@ -19,6 +21,9 @@ namespace ControlPanel.Core
 
 		public static string ReadmeName(string name) => $"README-{name}.txt";
 
+		// The standard installer's general guide; a friend's zip has their own guide instead.
+		public const string BaseReadmeName = "README.txt";
+
 		// The friend's guide, as tools/package.py friend_readme makes it: docs/FRIEND-SETUP.md (built
 		// into this program) with {NAME} filled in, CRLF line ends and the version on top.
 		public static string Readme(string name, string version)
@@ -27,7 +32,8 @@ namespace ControlPanel.Core
 				?? throw new InvalidOperationException("FRIEND-SETUP.md is missing from the program");
 			using var reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false);
 			string doc = reader.ReadToEnd().Replace("\r\n", "\n").Replace("{NAME}", name);   // Python reads it with \n line ends
-			return $"Battleborn Reborn {version}\r\n\r\n" + doc.Replace("\n", "\r\n");
+			string shown = string.IsNullOrWhiteSpace(version) ? "unknown" : version;   // an older matchmaking may not say
+			return $"Battleborn Reborn {shown}\r\n\r\n" + doc.Replace("\n", "\r\n");
 		}
 
 		// Writes <outDir>\Reborn-Mod-Installer_<name>.zip through a .tmp file, so a failure never
@@ -65,6 +71,7 @@ namespace ControlPanel.Core
 					foreach (ZipArchiveEntry entry in source.Entries)
 					{
 						if (added.ContainsKey(Normal(entry.FullName))) continue;   // replaced below
+						if (Normal(entry.FullName).Equals(BaseReadmeName, StringComparison.OrdinalIgnoreCase)) continue;   // their own guide instead
 						ZipArchiveEntry copy = zip.CreateEntry(entry.FullName, CompressionLevel.Optimal);
 						copy.LastWriteTime = entry.LastWriteTime;
 						using Stream from = entry.Open();

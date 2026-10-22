@@ -23,14 +23,16 @@ game's Win64 folder; changes take effect within a second, no restart:
     python -m tools.vm user require-keys on|off          # VM: off = anyone may join
 
 Only the mod (reborn.dll, reborn.pdb, dxgi.dll, about 11 MB), the Control Panel (ControlPanel.exe,
-about 130 MB, one file) and the player installer zip (reborn-player-installer.zip, about 19 MB)
-travel, through the private repo Sintax/reborn-builds. The update puts the panel in a ControlPanel
-folder in Win64 and the zip in Win64 itself, and makes a "Reborn Control Panel" desktop shortcut
-once; close the panel before updating. The user list, the "last seen" list, the friend-zip record
-and the matchmaking token are never touched. The VM checks out the same commit from GitHub, so
-its scripts and matchmaking service match the mod; it builds the service itself with its own
-.NET. The Steam loader files already sit on the VM and never travel. Instructions:
-docs/TWO-MACHINES.md.
+about 130 MB, one file) and the player installer zip (reborn-player-installer.zip) travel, through
+the private repo Sintax/reborn-builds. That zip is the installer WITH the Steam loader, the same
+start as a `python -m tools.package --friend` zip: the panel adds one friend's name and key to it.
+So it goes only to the private builds repo and the VM; it is built in dist/private/, never under
+a public zip's name, and the loader files are never committed. The update puts the panel in a
+ControlPanel folder in Win64 and the zip in Win64 itself, and makes a "Reborn Control Panel"
+desktop shortcut once; close the panel before updating. The user list, the "last seen" list, the
+friend-zip record and the matchmaking token are never touched. The VM checks out the same commit
+from GitHub, so its scripts and matchmaking service match the mod; it builds the service itself
+with its own .NET. Instructions: docs/TWO-MACHINES.md.
 """
 from __future__ import annotations
 
@@ -56,7 +58,9 @@ PANEL_EXE = "ControlPanel.exe"                     # a release asset, and the in
 PLAYER_ZIP_ASSET = "reborn-player-installer.zip"   # the player installer under the name the panel looks for
 PANEL_PROJECT = config.REPO / "controlpanel" / "ControlPanel"
 PANEL_PUBLISH = PANEL_PROJECT / "bin" / "release-publish"                  # bin/ is gitignored
-PLAYER_ZIP = config.REPO / "dist" / "Reborn-Mod-Standard_Installer.zip"    # dist/ is gitignored
+# The player installer WITH the Steam loader (dist/ is gitignored). Private: it goes only to the
+# private builds repo, so it is kept apart from any public zip and named so it is never taken for one.
+PLAYER_ZIP = config.REPO / "dist" / "private" / "reborn-player-installer-with-loader.zip"
 SHORTCUT_NAME = "Reborn Control Panel"
 SHORTCUT_TIMEOUT_SECONDS = 30
 KEPT_MATCHMAKING_FILES = ("appsettings.json", "admin-token.txt")   # the owner's roster, and the panel's key
@@ -118,9 +122,11 @@ def publish_panel(out: Path = PANEL_PUBLISH) -> Path:
 
 
 def build_player_zip(version: str) -> Path:
-    """The standard player installer (no Steam loader, so it is safe to hand around), built from the
-    DLLs just built. The panel copies it into every friend's personal zip."""
-    return package.make_zip(PLAYER_ZIP, version, with_loader=False)
+    """The player installer with the Steam loader, built from the DLLs just built and the loader
+    files in this PC's game folder: what a `python -m tools.package --friend` zip starts from. The
+    panel adds one friend's name, key and Steam identity to it, so a friend's zip has everything to
+    play. It holds the loader, so it travels only through the private builds repo."""
+    return package.make_zip(PLAYER_ZIP, version, with_loader=True)
 
 
 def panel_files() -> list[Path]:
