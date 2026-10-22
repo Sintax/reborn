@@ -64,6 +64,33 @@ public class SeenLogTests : IDisposable
         Assert.Equal(DateTimeKind.Utc, reloaded.LastSeen("Friend")!.Value.Kind);
     }
 
+    [Fact]
+    public void Rename_moves_the_last_seen_time_to_the_new_name()
+    {
+        DateTime now = T0;
+        var seen = new SeenLog(FilePath, () => now);
+        seen.Saw(new[] { "guest", "Mike" });
+        now = T0.AddMinutes(5);
+        seen.Saw(new[] { "kaz" });
+
+        seen.Rename("GUEST", "Gus");
+        Assert.Null(seen.LastSeen("guest"));
+        Assert.Equal(T0, seen.LastSeen("Gus"));
+
+        // Onto a name that was seen too: the later time is kept.
+        seen.Rename("kaz", "Mike");
+        Assert.Null(seen.LastSeen("kaz"));
+        Assert.Equal(T0.AddMinutes(5), seen.LastSeen("Mike"));
+
+        // A change of upper/lower case only keeps the new spelling; an unknown name changes nothing.
+        seen.Rename("gus", "GUS");
+        seen.Rename("nobody", "Someone");
+        Assert.Null(seen.LastSeen("Someone"));
+
+        seen.Dispose();
+        Assert.Equal(new Dictionary<string, string> { ["GUS"] = "2026-10-22T18:00:00Z", ["Mike"] = "2026-10-22T18:05:00Z" }, Saved());
+    }
+
     [Theory]
     [InlineData("not json at all")]
     [InlineData("[1,2,3]")]

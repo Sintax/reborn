@@ -55,6 +55,9 @@ namespace gamecontroller.Singletons
 
 		public IReadOnlyList<GameInstance> Instances { get { lock (_lock) return _instances.ToList(); } }
 
+		// The game ports this run of the service started with (appsettings.json "GamePorts" at startup).
+		public IReadOnlyList<int> Ports => _ports;
+
 		public ServerRoster(IReadOnlyList<RosterSlot> slots, IServerLauncher launcher, IReadOnlyList<int> ports, string coordinatorBase,
 			RequestedGameSettings? requested = null)
 		{

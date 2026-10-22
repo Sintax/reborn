@@ -57,7 +57,8 @@ namespace gamecontroller.Controllers
 			bool requireKeys = _writer.Read(out UserFileView? view) == null ? view!.RequireKeys : _users.RequireKeys;
 			IReadOnlyList<int> ports = _settings.ReadPorts()
 				?? _config.GetSection("GamePorts").Get<List<int>>() ?? SettingsWriter.DefaultPorts;
-			return Ok(new AdminStatus(version, _roster.PublicIp, ports, _roster.Instances.Count(i => !i.Finished), requireKeys, _started.Utc));
+			return Ok(new AdminStatus(version, _roster.PublicIp, ports, _roster.Ports.ToList(), _roster.Instances.Count(i => !i.Finished),
+				requireKeys, _started.Utc));
 		}
 
 		[HttpGet("games")]
@@ -101,7 +102,11 @@ namespace gamecontroller.Controllers
 			if (Missing(body) is IActionResult bad) return bad;
 			AdminRefusal? refusal = _writer.Update(name, body!.NewName, body.CanCreateGames, out StoredUser? updated, out string? oldName);
 			if (refusal != null) return Refused(refusal);
-			if (body.NewName != null) _logger.LogInformation("Admin: renamed user {Old} to {New}", oldName, updated!.Name);
+			if (body.NewName != null)
+			{
+				_seen.Rename(oldName!, updated!.Name);   // "last seen" follows the user to the new name
+				_logger.LogInformation("Admin: renamed user {Old} to {New}", oldName, updated.Name);
+			}
 			if (body.CanCreateGames != null)
 				_logger.LogInformation("Admin: {Name} can start games: {Create}", updated!.Name, updated.CanCreateGames ? "yes" : "no");
 			return Ok(Shown(updated!));
@@ -162,12 +167,20 @@ namespace gamecontroller.Controllers
 
 		public bool Allows(HttpContext http)
 		{
-			IPAddress? from = http.Connection.RemoteIpAddress;
-			if (from == null) return false;
-			if (from.IsIPv4MappedToIPv6) from = from.MapToIPv4();
-			if (!IPAddress.IsLoopback(from)) return false;
+			// Both ends of the connection must be this machine. The arriving-on address still holds if
+			// forwarded headers were ever switched on (they would rewrite only the caller's address).
+			if (!IsLoopback(http.Connection.RemoteIpAddress) || !IsLoopback(http.Connection.LocalIpAddress)) return false;
+			// Anything that came through a proxy is refused, whatever address it claims.
+			if (http.Request.Headers.ContainsKey("X-Forwarded-For") || http.Request.Headers.ContainsKey("Forwarded")) return false;
 			if (!http.Request.Headers.TryGetValue(Header, out var values) || values.Count != 1) return false;
 			return _token.Matches(values[0]);
+		}
+
+		private static bool IsLoopback(IPAddress? address)
+		{
+			if (address == null) return false;
+			if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+			return IPAddress.IsLoopback(address);
 		}
 
 		public void OnAuthorization(AuthorizationFilterContext context)
@@ -190,8 +203,10 @@ namespace gamecontroller.Controllers
 	// When this run of the service started (for the panel's status line).
 	public sealed record ServiceStarted(DateTime Utc);
 
-	public sealed record AdminStatus(string Version, string? PublicIp, IReadOnlyList<int> GamePorts, int GamesRunning, bool RequireKeys,
-		DateTime MatchmakingStartedUtc);
+	// GamePorts: saved in appsettings.json (what the next start uses). GamePortsInUse: what this run
+	// started with. They differ after a ports change until matchmaking restarts.
+	public sealed record AdminStatus(string Version, string? PublicIp, IReadOnlyList<int> GamePorts, IReadOnlyList<int> GamePortsInUse,
+		int GamesRunning, bool RequireKeys, DateTime MatchmakingStartedUtc);
 
 	public sealed record AdminPlayer(string Name, string Hero, int Team);
 

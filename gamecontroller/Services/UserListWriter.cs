@@ -24,6 +24,7 @@ namespace gamecontroller.Services
 		public const int KeyLength = 24;
 
 		public const string Damaged = "The user list file is damaged; fix or restore it first.";
+		public const string Busy = "The user list file is busy; try again in a moment.";
 		public const string BadName = "That name can't be used. Use 1 to 24 letters, numbers, _ or -.";
 		public const string BadKey = "That key isn't valid. A key is 24 characters: capital letters and the numbers 2 to 9, without I, L, O or U.";
 		public const string NameTaken = "That name is taken.";
@@ -53,7 +54,8 @@ namespace gamecontroller.Services
 			view = null;
 			lock (WriteLock)
 			{
-				if (!TryLoad(out JsonObject? root)) return new AdminRefusal(409, Damaged);
+				AdminRefusal? refusal = Load(out JsonObject? root);
+				if (refusal != null) return refusal;
 				view = ViewOf(root!);
 				return null;
 			}
@@ -173,35 +175,37 @@ namespace gamecontroller.Services
 		{
 			lock (WriteLock)
 			{
-				if (!TryLoad(out JsonObject? root)) return new AdminRefusal(409, Damaged);
-				AdminRefusal? refusal = change(root!);
+				AdminRefusal? refusal = Load(out JsonObject? root) ?? change(root!);
 				if (refusal != null) return refusal;
 				return Save(root!) ? null : new AdminRefusal(500, NotSaved);
 			}
 		}
 
-		// False when the file is there but not a user list every reader accepts. A missing file is an
-		// empty list with keys required (as tools/vm.py load_users).
-		private bool TryLoad(out JsonObject? root)
+		// The list as stored, or why it can't be used: Busy when the file could not be opened right now
+		// (another program has it open), Damaged when it is not a user list every reader accepts. A
+		// missing file is an empty list with keys required (as tools/vm.py load_users).
+		private AdminRefusal? Load(out JsonObject? root)
 		{
 			root = null;
 			if (!File.Exists(Path))
 			{
 				root = new JsonObject { ["RequireKeys"] = true, ["Users"] = new JsonArray() };
-				return true;
+				return null;
 			}
+			byte[] bytes;
+			try { bytes = File.ReadAllBytes(Path); }
+			catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new AdminRefusal(409, Busy); }
 			try
 			{
-				byte[] bytes = File.ReadAllBytes(Path);
 				ReadOnlySpan<byte> json = bytes;
 				if (json.StartsWith(Encoding.UTF8.Preamble)) json = json[Encoding.UTF8.Preamble.Length..];
-				if (JsonNode.Parse(json) is not JsonObject obj || !IsUserList(obj)) return false;
+				if (JsonNode.Parse(json) is not JsonObject obj || !IsUserList(obj)) return new AdminRefusal(409, Damaged);
 				root = obj;
-				return true;
+				return null;
 			}
-			catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
+			catch (Exception e) when (e is JsonException or ArgumentException or InvalidOperationException)
 			{
-				return false;
+				return new AdminRefusal(409, Damaged);
 			}
 		}
 

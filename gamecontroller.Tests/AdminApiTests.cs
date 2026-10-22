@@ -92,17 +92,20 @@ public class AdminApiTests : IDisposable
 
     // --- the guard ----------------------------------------------------------------------------
 
-    static AuthorizationFilterContext Request(string? ip, string? token)
+    // A request as Kestrel would hand it over: from `ip`, arriving on the server's address `local`.
+    static AuthorizationFilterContext Request(string? ip, string? token, string? local, (string Name, string Value)? header)
     {
         var http = new DefaultHttpContext();
         if (ip != null) http.Connection.RemoteIpAddress = IPAddress.Parse(ip);
+        if (local != null) http.Connection.LocalIpAddress = IPAddress.Parse(local);
         if (token != null) http.Request.Headers["X-Admin-Token"] = token;
+        if (header != null) http.Request.Headers[header.Value.Name] = header.Value.Value;
         return new AuthorizationFilterContext(new ActionContext(http, new RouteData(), new ActionDescriptor()), new List<IFilterMetadata>());
     }
 
-    static bool Refused(AdminGuard guard, string? ip, string? token)
+    static bool Refused(AdminGuard guard, string? ip, string? token, string? local = "127.0.0.1", (string Name, string Value)? header = null)
     {
-        var ctx = Request(ip, token);
+        var ctx = Request(ip, token, local, header);
         guard.OnAuthorization(ctx);
         if (ctx.Result == null) return false;
         // 403 and nothing else: no body that could say why. (A StatusCodeResult would be turned into a
@@ -138,6 +141,63 @@ public class AdminApiTests : IDisposable
         Assert.False(Refused(guard, "127.0.0.1", good));
         Assert.False(Refused(guard, "::1", good));
         Assert.False(Refused(guard, "::ffff:127.0.0.1", good));
+    }
+
+    [Fact]
+    public void Requests_that_were_forwarded_or_arrived_on_a_public_address_are_refused()
+    {
+        var token = AdminToken.LoadOrCreate(TokenPath);
+        string good = File.ReadAllText(TokenPath).Trim();
+        var guard = new AdminGuard(token);
+
+        // If forwarded headers were ever switched on, a remote caller could pose as 127.0.0.1;
+        // the address the request arrived on still gives it away.
+        Assert.True(Refused(guard, "127.0.0.1", good, local: "192.168.1.5"));
+        Assert.True(Refused(guard, "127.0.0.1", good, local: "203.0.113.10"));
+        Assert.True(Refused(guard, "127.0.0.1", good, local: null));
+        Assert.False(Refused(guard, "::1", good, local: "::1"));
+        Assert.False(Refused(guard, "::ffff:127.0.0.1", good, local: "::ffff:127.0.0.1"));
+
+        // A request that passed through a proxy says so; it is refused whatever it claims.
+        Assert.True(Refused(guard, "127.0.0.1", good, header: ("X-Forwarded-For", "127.0.0.1")));
+        Assert.True(Refused(guard, "127.0.0.1", good, header: ("X-Forwarded-For", "")));
+        Assert.True(Refused(guard, "127.0.0.1", good, header: ("Forwarded", "for=127.0.0.1")));
+        Assert.True(Refused(guard, "127.0.0.1", good, header: ("forwarded", "for=127.0.0.1")));
+    }
+
+    [Fact]
+    public void A_token_file_that_cannot_be_read_refuses_everything_and_keeps_matchmaking_up()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(TokenPath)!);
+        File.WriteAllText(TokenPath, "OLDTOKENOLDTOKENOLDTOKENOLDTOKEN");
+        var log = new ListLogger<AdminToken>();
+        AdminToken token;
+        using (new FileStream(TokenPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            token = AdminToken.StartUp(TokenPath, log);   // must not throw
+
+        var guard = new AdminGuard(token);
+        Assert.True(Refused(guard, "127.0.0.1", "OLDTOKENOLDTOKENOLDTOKENOLDTOKEN"));
+        Assert.True(Refused(guard, "127.0.0.1", ""));
+        Assert.True(Refused(guard, "127.0.0.1", null));
+        var line = Assert.Single(log.Lines);
+        Assert.Contains(AdminToken.FileName, line);
+        Assert.DoesNotContain("OLDTOKEN", line);
+        // The file was not replaced.
+        Assert.Equal("OLDTOKENOLDTOKENOLDTOKENOLDTOKEN", File.ReadAllText(TokenPath));
+
+        // A folder where the file should be: it can't be made either.
+        string blocked = Path.Combine(_dir, "blocked", AdminToken.FileName);
+        Directory.CreateDirectory(blocked);
+        var log2 = new ListLogger<AdminToken>();
+        var none = AdminToken.StartUp(blocked, log2);
+        Assert.False(none.Matches("anything"));
+        Assert.Single(log2.Lines);
+
+        // A healthy file starts normally, silently.
+        var log3 = new ListLogger<AdminToken>();
+        var fine = AdminToken.StartUp(TokenPath, log3);
+        Assert.True(fine.Matches("OLDTOKENOLDTOKENOLDTOKENOLDTOKEN"));
+        Assert.Empty(log3.Lines);
     }
 
     [Fact]
@@ -193,12 +253,13 @@ public class AdminApiTests : IDisposable
         Assert.Equal("2026-10-22 bab2c4e", status.Version);
         Assert.Equal("203.0.113.10", status.PublicIp);
         Assert.Equal(new[] { 7777, 7778, 7779 }, status.GamePorts);
+        Assert.Equal(new[] { 7777, 7778 }, status.GamePortsInUse);
         Assert.Equal(1, status.GamesRunning);
         Assert.True(status.RequireKeys);
         Assert.Equal(T0, status.MatchmakingStartedUtc);
 
         string wire = Wire(rig.Controller.GetStatus());
-        foreach (string field in new[] { "version", "publicIp", "gamePorts", "gamesRunning", "requireKeys", "matchmakingStartedUtc" })
+        foreach (string field in new[] { "version", "publicIp", "gamePorts", "gamePortsInUse", "gamesRunning", "requireKeys", "matchmakingStartedUtc" })
             Assert.Contains("\"" + field + "\"", wire);
 
         // No deployed-version file: an empty version, not an error.
@@ -291,12 +352,16 @@ public class AdminApiTests : IDisposable
         var reader = new UserList(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["UsersFile"] = UsersPath }).Build());
         Assert.Equal("Kaz", reader.ByKey(KazKey)?.Name);
 
-        // Rename: the player must now join with that name, so ConfirmName goes off.
+        // Rename: the player must now join with that name, so ConfirmName goes off; "last seen" moves along.
+        rig.Seen.Saw(new[] { "guest" });
         var renamed = c.UpdateUser("guest", new AdminUserChange { NewName = "Mike" });
         Assert.Equal(200, Status(renamed));
         var mike = Body<AdminUser>(renamed);
         Assert.Equal("Mike", mike.Name);
         Assert.False(mike.ConfirmName);
+        Assert.Equal(T0, mike.LastSeen);
+        Assert.Equal(T0, ListUsers(c).Users.Single(u => u.Name == "Mike").LastSeen);
+        Assert.Null(rig.Seen.LastSeen("guest"));
         Assert.DoesNotContain("guest", ListUsers(c).Users.Select(u => u.Name));
         Assert.Equal(GuestKey, Body<AdminKeyReply>(c.GetKey("Mike")).Key);
 
@@ -432,6 +497,46 @@ public class AdminApiTests : IDisposable
     }
 
     [Fact]
+    public void A_busy_file_says_try_again_and_changes_nothing()
+    {
+        var rig = Make();
+        var c = rig.Controller;
+        string users = File.ReadAllText(UsersPath), settings = File.ReadAllText(SettingsPath);
+
+        using (new FileStream(UsersPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            foreach (IActionResult r in new[]
+            {
+                c.AddUser(new AdminNewUser { Name = "Kaz", Key = KazKey }),
+                c.UpdateUser("dj", new AdminUserChange { NewName = "Sintax" }),
+                c.ReplaceKey("dj", new AdminKey { Key = KazKey }),
+                c.RemoveUser("guest"),
+                c.SetRequireKeys(new AdminRequireKeys { On = false }),
+                c.GetUsers(),
+                c.GetKey("dj"),
+            })
+            {
+                Assert.Equal(409, Status(r));
+                Assert.Equal(UserListWriter.Busy, Message(r));
+            }
+            Assert.Equal(200, Status(c.GetStatus()));
+        }
+        Assert.Equal("The user list file is busy; try again in a moment.", UserListWriter.Busy);
+
+        using (new FileStream(SettingsPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var r = c.SetPorts(new AdminPorts { Ports = new List<int> { 7777 } });
+            Assert.Equal(409, Status(r));
+            Assert.Equal("The settings file is busy; try again in a moment.", Message(r));
+            Assert.Equal(200, Status(c.GetStatus()));
+        }
+
+        Assert.Equal(users, File.ReadAllText(UsersPath));
+        Assert.Equal(settings, File.ReadAllText(SettingsPath));
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+    }
+
+    [Fact]
     public void A_missing_user_file_starts_a_new_one()
     {
         var rig = Make();
@@ -485,7 +590,11 @@ public class AdminApiTests : IDisposable
         Assert.Equal(new[] { 7777, 7780 }, node["GamePorts"]!.AsArray().Select(p => (int)p!));
         Assert.True(JsonNode.DeepEquals(beforeOthers, WithoutPorts(SettingsPath)));
         Assert.Contains("// the service's own settings", File.ReadAllText(SettingsPath));
-        Assert.Equal(new[] { 7777, 7780 }, Body<AdminStatus>(c.GetStatus()).GamePorts);
+        // Saved for the next start, while the running service keeps the ports it started with.
+        var status = Body<AdminStatus>(c.GetStatus());
+        Assert.Equal(new[] { 7777, 7780 }, status.GamePorts);
+        Assert.Equal(new[] { 7777, 7778 }, status.GamePortsInUse);
+        Assert.Equal(new[] { 7777, 7778 }, rig.Roster.Ports);
         // The game on the port that went away keeps running.
         Assert.Same(running, rig.Roster.Instances.Single());
         Assert.False(running.Finished);

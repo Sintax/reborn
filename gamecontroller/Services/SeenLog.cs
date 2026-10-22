@@ -50,6 +50,24 @@ namespace gamecontroller.Services
 			}
 		}
 
+		// A user was renamed: their last-seen time moves to the new name (the later one wins if the new
+		// name was seen too). Saved on the same once-a-minute rule as Saw, and at shutdown.
+		public void Rename(string oldName, string newName)
+		{
+			if (string.IsNullOrEmpty(oldName) || string.IsNullOrEmpty(newName)) return;
+			lock (_lock)
+			{
+				if (!_seen.TryGetValue(oldName, out DateTime when)) return;
+				_seen.Remove(oldName);
+				if (_seen.TryGetValue(newName, out DateTime other) && other > when) when = other;
+				_seen.Remove(newName);   // so the file keeps the new spelling
+				_seen[newName] = when;
+				_dirty = true;
+				DateTime now = _now();
+				if (_lastSave == null || now - _lastSave.Value >= SaveEvery) Save(now);
+			}
+		}
+
 		public DateTime? LastSeen(string name)
 		{
 			lock (_lock) return _seen.TryGetValue(name, out DateTime when) ? when : null;

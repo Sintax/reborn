@@ -46,7 +46,9 @@ builder.Services.AddHostedService<RosterService>();
 // in admin-token.txt next to the service (made on the first start, then kept). Ports are saved into
 // this service's own appsettings.json for the next start.
 builder.Services.AddSingleton(new ServiceStarted(DateTime.UtcNow));
-builder.Services.AddSingleton(_ => AdminToken.LoadOrCreate(Path.Combine(AppContext.BaseDirectory, AdminToken.FileName)));
+// A token file that can't be read or made only shuts the panel out; matchmaking runs on.
+builder.Services.AddSingleton(sp => AdminToken.StartUp(Path.Combine(AppContext.BaseDirectory, AdminToken.FileName),
+    sp.GetRequiredService<ILogger<AdminToken>>()));
 builder.Services.AddSingleton<AdminGuard>();
 builder.Services.AddSingleton(_ => new UserListWriter(builder.Configuration));
 builder.Services.AddSingleton(_ => new SettingsWriter(Path.Combine(AppContext.BaseDirectory, "appsettings.json")));

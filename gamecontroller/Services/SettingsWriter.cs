@@ -17,7 +17,8 @@ namespace gamecontroller.Services
 		public static readonly IReadOnlyList<int> DefaultPorts = new[] { 7777, 7778, 7779 };   // as Program.cs
 
 		public const string Damaged = "The settings file (appsettings.json) could not be read; fix or restore it first. Nothing was changed.";
-		public const string NotSaved = "The settings file could not be saved, so nothing was changed. Try again.";
+		public const string Busy = "The settings file is busy; try again in a moment.";
+		public const string NotSaved ="The settings file could not be saved, so nothing was changed. Try again.";
 
 		// The same leniency as the service's own settings loader: comments and trailing commas are fine.
 		private static readonly JsonDocumentOptions Lenient = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
@@ -70,7 +71,7 @@ namespace gamecontroller.Services
 			{
 				string text;
 				try { text = File.ReadAllText(Path); }   // drops a UTF-8 BOM; it is written back below
-				catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new AdminRefusal(409, Damaged); }
+				catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new AdminRefusal(409, Busy); }
 				bool bom = HasBom();
 
 				string? updated = Replaced(text, value);
