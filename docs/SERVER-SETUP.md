@@ -105,12 +105,13 @@ things without editing any files. It replaces most of the `python -m tools.vm us
 commands above.
 
 **It only works on the server machine itself.** Open it over Remote Desktop, on the rented
-machine. It will not work from your own PC, because it talks to the matchmaking service that runs
-on the server.
+machine. It will not work from your own PC, because it talks to the matchmaking service (the
+program that lists games and lets players join them) that runs on the server.
 
 **To open it,** double-click the **Reborn Control Panel** icon on the server's desktop. The
 update puts the icon there the first time it installs the panel. If you can't see it, open
-`Binaries\Win64\ControlPanel\ControlPanel.exe`. **Close the panel before you run an update.**
+`ControlPanel\ControlPanel.exe` inside the game's `Binaries\Win64` folder (the folder with
+`Battleborn.exe` in it). **Close the panel before you run an update.**
 Windows cannot replace a program while it is open, and the update will tell you to close it.
 
 **The top of the window** shows:
@@ -147,10 +148,10 @@ Windows cannot replace a program while it is open, and the update will tell you 
 `Documents\Reborn Friend Zips` on the server machine, named `Reborn-Mod-Installer_<name>.zip`.
 The Users tab has an **Open zip folder** button. Copy the zip off the machine and send it to
 that friend only. It holds their personal key. The panel makes it from
-`reborn-player-installer.zip` in the `Win64` folder, which every update refreshes.
+`reborn-player-installer.zip` in the game's `Binaries\Win64` folder, which every update refreshes.
 
 Updates never touch your user list, your "last seen" list, your record of made zips, or the
-panel's access token.
+panel's private password file (the small file that lets the panel talk to matchmaking).
 
 ## Start a game by hand (no matchmaking)
 

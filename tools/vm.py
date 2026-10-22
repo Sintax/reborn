@@ -58,6 +58,7 @@ PANEL_PROJECT = config.REPO / "controlpanel" / "ControlPanel"
 PANEL_PUBLISH = PANEL_PROJECT / "bin" / "release-publish"                  # bin/ is gitignored
 PLAYER_ZIP = config.REPO / "dist" / "Reborn-Mod-Standard_Installer.zip"    # dist/ is gitignored
 SHORTCUT_NAME = "Reborn Control Panel"
+SHORTCUT_TIMEOUT_SECONDS = 30
 KEPT_MATCHMAKING_FILES = ("appsettings.json", "admin-token.txt")   # the owner's roster, and the panel's key
 PANEL_OPEN_MESSAGE = "Close the Control Panel and run the update again."
 DEPLOYED_MARK = "reborn-deployed.txt"
@@ -192,26 +193,55 @@ def install_mod(downloaded: Path, win64: Path) -> None:
         shutil.copy2(downloaded / name, win64 / name)
 
 
-def _replace_with_copy(src: Path, dest: Path) -> None:
-    """Copy beside the target, then swap it in with one rename: never a half-copied file."""
-    tmp = dest.with_name(dest.name + ".new")
-    shutil.copy2(src, tmp)
-    os.replace(tmp, dest)
+def stage_panel(downloaded: Path, win64: Path) -> list[tuple[str, Path, Path]]:
+    """First half of installing the Control Panel and the player installer zip: copy them beside
+    where they go, as <name>.new. This is the slow part (the exe is about 128 MB) and the part that
+    can fail on a full disk, so it runs before anything is stopped. The panel goes in its own
+    folder; the zip it copies for friends sits beside the game files, where the panel looks for it.
+    A release without one of them (an older release, when rolling back) leaves the installed one.
+    Returns (what it is, the .new copy, where it goes). On a failure the copies are removed again
+    and the error is a VmError."""
+    wanted = [("Control Panel", PANEL_EXE, win64 / "ControlPanel" / PANEL_EXE,
+               "This release has no Control Panel; keeping the one already installed."),
+              ("player installer zip", PLAYER_ZIP_ASSET, win64 / PLAYER_ZIP_ASSET,
+               "This release has no player installer zip; keeping the one already installed.")]
+    staged: list[tuple[str, Path, Path]] = []
+    try:
+        for label, name, dest, missing in wanted:
+            if not (downloaded / name).exists():
+                print(missing)
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(dest.name + ".new")
+            staged.append((label, tmp, dest))
+            shutil.copy2(downloaded / name, tmp)
+    except OSError as e:
+        discard_staged(staged)
+        raise VmError(f"the {label} could not be copied ({e}); nothing was changed") from None
+    return staged
+
+
+def discard_staged(staged: list[tuple[str, Path, Path]]) -> None:
+    for _, tmp, _ in staged:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def swap_panel(staged: list[tuple[str, Path, Path]]) -> None:
+    """Second half: one rename per file, so it is never half-copied. A rename that fails (say a
+    virus scanner holds the file) keeps the old file, says so, and does not fail the update."""
+    for label, tmp, dest in staged:
+        try:
+            os.replace(tmp, dest)
+        except OSError as e:
+            print(f"The {label} could not be updated: {e}; the old one is kept.")
+            discard_staged([(label, tmp, dest)])
 
 
 def install_panel(downloaded: Path, win64: Path) -> None:
-    """The Control Panel goes in its own folder; the player installer zip it copies for friends sits
-    beside the game files, where the panel looks for it. A release without one of them (an older
-    release, when rolling back) leaves the one already installed in place."""
-    if (downloaded / PANEL_EXE).exists():
-        (win64 / "ControlPanel").mkdir(parents=True, exist_ok=True)
-        _replace_with_copy(downloaded / PANEL_EXE, win64 / "ControlPanel" / PANEL_EXE)
-    else:
-        print("This release has no Control Panel; keeping the one already installed.")
-    if (downloaded / PLAYER_ZIP_ASSET).exists():
-        _replace_with_copy(downloaded / PLAYER_ZIP_ASSET, win64 / PLAYER_ZIP_ASSET)
-    else:
-        print("This release has no player installer zip; keeping the one already installed.")
+    swap_panel(stage_panel(downloaded, win64))
 
 
 def panel_running() -> bool:
@@ -250,8 +280,15 @@ def ensure_desktop_shortcut(win64: Path, desktop: Path | None = None) -> bool:
            "RB_SHORTCUT_WORKDIR": str(exe.parent)}
     if desktop is not None:
         env["RB_SHORTCUT_DIR"] = str(desktop)
-    p = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                        "-Command", SHORTCUT_SCRIPT], env=env, capture_output=True, text=True)
+    try:
+        p = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                            "-Command", SHORTCUT_SCRIPT], env=env, capture_output=True, text=True,
+                           timeout=SHORTCUT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise VmError(f"could not make the desktop shortcut: PowerShell did not answer "
+                      f"in {SHORTCUT_TIMEOUT_SECONDS} seconds") from None
+    except OSError as e:
+        raise VmError(f"could not make the desktop shortcut: PowerShell would not start ({e})") from None
     answer = p.stdout.strip().splitlines()[-1:] or [""]
     if p.returncode != 0 or answer[0] not in ("CREATED", "EXISTS"):
         raise VmError(f"could not make the desktop shortcut: {(p.stderr or p.stdout).strip()[:200]}")
@@ -338,17 +375,18 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     downloaded = download_mod(version, scratch / "mod")      # both before stopping anything,
     published = build_matchmaking(scratch / "matchmaking")  # so a failure leaves the server up
     ensure_panel_closed()   # again: the downloads take a while, and the panel may have been opened since
+    staged = stage_panel(downloaded, win64)   # the big copy, while the old server still runs
     stop_servers()
     install_mod(downloaded, win64)
     install_scripts(version, win64)
     install_matchmaking(published, win64)
-    install_panel(downloaded, win64)
+    swap_panel(staged)
     (win64 / DEPLOYED_MARK).write_text(version + "\n", encoding="utf-8")
     print(f"Installed {version} into {win64}")
     try:
         if (win64 / "ControlPanel" / PANEL_EXE).exists() and ensure_desktop_shortcut(win64):
             print(f"Made the '{SHORTCUT_NAME}' shortcut on the desktop")
-    except VmError as e:   # a missing shortcut is not worth a failed update
+    except (VmError, OSError) as e:   # a missing shortcut is not worth a failed update
         print(f"NOTE: {e}; open {win64 / 'ControlPanel' / PANEL_EXE} instead")
     for rule in firewall_rules_missing():
         print(f"WARNING: Windows Firewall rule '{rule}' is missing; run OpenFirewall.bat once")
