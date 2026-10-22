@@ -550,7 +550,21 @@ namespace ControlPanel.Tests
 			Assert.Equal("Sintax", g.StartedBy);
 			Assert.Equal("choosing a hero", g.Players[1].Hero);
 			Assert.Equal("Team 2", g.Players[1].Team);
+			Assert.Equal("Team 1", g.Players[0].Team);
 			Assert.Equal("", main.Games.EmptyText);
+
+			// Story and Operations: everyone is on one team, so no team is shown.
+			foreach (string mapMode in new[] { "Story - The Algorithm", "Operations - Attikus" })
+			{
+				t.Api.Games = new[] { new
+				{
+					publicId = "s1", name = "Co-op", mapMode, draftStyle = "", randomHero = false, port = 7778,
+					startedUtc = DateTime.UtcNow.ToString("O"), matchStarted = true, isRoster = false, startedBy = "Sintax",
+					players = new[] { new { name = "Kaz", hero = "Rath", team = 0 } },
+				} };
+				await main.RefreshAsync();
+				Assert.Equal("", Assert.Single(Assert.Single(main.Games.Games).Players).Team);
+			}
 
 			t.Api.Games = Array.Empty<object>();
 			await main.RefreshAsync();

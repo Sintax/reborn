@@ -84,7 +84,8 @@ namespace ControlPanel.Core.ViewModels
 			RunningFor = g.StartedUtc == default ? "" : Display.Duration(nowUtc - Display.Utc(g.StartedUtc));
 			StartedBy = g.StartedBy ?? "";
 			State = g.MatchStarted ? "Playing" : "Waiting for players";
-			var players = (g.Players ?? Array.Empty<PlayerInfo>()).Select(p => new PlayerRow(p)).ToList();
+			bool versus = IsVersus(g);
+			var players = (g.Players ?? Array.Empty<PlayerInfo>()).Select(p => new PlayerRow(p, versus)).ToList();
 			if (!players.SequenceEqual(Players))
 			{
 				Players.Clear();
@@ -92,11 +93,17 @@ namespace ControlPanel.Core.ViewModels
 			}
 		}
 
+		private static bool IsStory(GameInfo g) => g.MapMode.StartsWith("Story", StringComparison.Ordinal);
+		private static bool IsOperations(GameInfo g) => g.MapMode.StartsWith("Operations", StringComparison.Ordinal);
+
+		// Two teams play each other only in Versus; in Story and Operations everyone is on one team.
+		private static bool IsVersus(GameInfo g) => !IsStory(g) && !IsOperations(g);
+
 		private static string ModeText(GameInfo g)
 		{
 			string random = g.RandomHero ? ", random heroes" : "";
-			if (g.MapMode.StartsWith("Story", StringComparison.Ordinal)) return "Story" + random;
-			if (g.MapMode.StartsWith("Operations", StringComparison.Ordinal)) return "Operations" + random;
+			if (IsStory(g)) return "Story" + random;
+			if (IsOperations(g)) return "Operations" + random;
 			return "Versus, " + DraftText(g.DraftStyle) + random;
 		}
 
@@ -112,9 +119,11 @@ namespace ControlPanel.Core.ViewModels
 		};
 	}
 
-	// One player in a game: their name, hero ("choosing a hero" until picked) and team.
+	// One player in a game: their name, hero ("choosing a hero" until picked) and team. The team is
+	// shown only in Versus (counted from 1, as players see it), and only once the server knows it.
 	public sealed record PlayerRow(string Name, string Hero, string Team)
 	{
-		public PlayerRow(PlayerInfo p) : this(p.Name, p.Hero == "" ? "choosing a hero" : p.Hero, p.Team >= 0 ? $"Team {p.Team + 1}" : "") { }
+		public PlayerRow(PlayerInfo p, bool versus) : this(p.Name, p.Hero == "" ? "choosing a hero" : p.Hero,
+			versus && p.Team >= 0 ? $"Team {p.Team + 1}" : "") { }
 	}
 }
