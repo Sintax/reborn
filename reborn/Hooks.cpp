@@ -1279,7 +1279,10 @@ namespace Hooks {
             if (Globals::timeSinceGameControllerServerPoll > 5.0f) {
                 Globals::timeSinceGameControllerServerPoll = 0.0f;
 
-                std::thread t(ServerNetworking::GameControllerPoll);
+                // Built here on the game thread (it reads the player list); the thread gets a copy.
+                int connectedPlayers = 0;
+                std::string pollBody = ServerNetworking::BuildPollBody(connectedPlayers);
+                std::thread t(ServerNetworking::GameControllerPoll, std::move(pollBody), connectedPlayers);
                 t.detach();
             }
         }

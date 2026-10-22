@@ -4,12 +4,18 @@
 #include "safetyhook.hpp"
 
 #include "Globals.hpp"
+#include "PollBody.hpp"
 #include "Utils.hpp"
 #include "ServerSettings.hpp"
 #include "Engine.hpp"
 
 namespace ServerNetworking {
-    void GameControllerPoll();
+    // Game thread only: the server-poll body (player list included) and, through the argument,
+    // how many players are connected.
+    std::string BuildPollBody(int& connectedPlayers);
+
+    // Detached poll thread: posts a body built by BuildPollBody; touches no game state.
+    void GameControllerPoll(std::string body, int numConnectedPlayers);
 
     void InitListen();
 

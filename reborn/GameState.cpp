@@ -14,6 +14,7 @@
 #include <Psapi.h>
 #include <atomic>
 #include <algorithm>
+#include <cstring>
 #include <map>
 #pragma comment(lib, "psapi.lib")
 
@@ -158,12 +159,8 @@ namespace GameState {
             known = false;
             if (p->IsA(APoplarPawn::StaticClass())) {
                 UObject* def = reinterpret_cast<APoplarPawn*>(p)->PoplarPlayerClassDef;
-                if (!Gone(def)) {
-                    std::string name = def->GetName();
-                    std::string display = DisplayNameOf(name.rfind("Class_", 0) == 0 ? name.substr(6) : name);
-                    if (display.empty()) display = DisplayNameOf(Hooks::HeroTokenOf(def));
-                    if (!display.empty()) { known = true; return display; }
-                }
+                std::string display = HeroDisplayName(def);
+                if (!display.empty()) { known = true; return display; }
             }
             return HeroOf(p);
         }
@@ -280,6 +277,21 @@ namespace GameState {
             if (line.find("PendingConnectionFailure") != std::string::npos) return "pending";
             return "other";
         }
+    }
+
+    std::string HeroDisplayName(UObject* def) {
+        if (Gone(def)) return "";
+        // A pawn's class def is "Class_ModernSoldier"; a player's picked hero (name id) is
+        // "NameId_PapaShotgun" or "NameId_ModernSoldier_Poplar" (names seen in the [SPAWN] logs).
+        std::string name = def->GetName();
+        for (const char* prefix : { "Class_", "NameId_" })
+            if (name.rfind(prefix, 0) == 0) { name = name.substr(std::strlen(prefix)); break; }
+        std::string display = DisplayNameOf(name);
+        static const std::string poplar = "_Poplar";
+        if (display.empty() && name.size() > poplar.size() && name.compare(name.size() - poplar.size(), poplar.size(), poplar) == 0)
+            display = DisplayNameOf(name.substr(0, name.size() - poplar.size()));
+        if (display.empty()) display = DisplayNameOf(Hooks::HeroTokenOf(def));
+        return display;
     }
 
     void SetListening(bool listening) {

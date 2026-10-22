@@ -169,6 +169,7 @@
     <ClInclude Include="PlayerNameRules.hpp" />
     <ClInclude Include="PlayerNames.hpp" />
     <ClInclude Include="AccessRules.hpp" />
+    <ClInclude Include="PollBody.hpp" />
     <ClInclude Include="Access.hpp" />
     <ClInclude Include="UiStyle.hpp" />
     <ClInclude Include="StartGameWindow.hpp" />

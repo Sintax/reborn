@@ -1,4 +1,5 @@
 #include "Networking.hpp"
+#include "GameState.hpp"
 
 #include <algorithm>
 #include <map>
@@ -18,21 +19,39 @@ namespace ServerNetworking {
         return ss.str();
     }
 
-    void GameControllerPoll() {
-        nlohmann::json jsonBody = nlohmann::json();
-
-        int numConnectedPlayers = 0;
+    // The server-poll body, built on the game thread (Hooks.cpp) because it reads ServerPlayers and
+    // the game's objects; the poll thread only gets the finished text. Lists the players who are
+    // connected and have joined: cleaned name, hero display name ("" until picked), team (-1 if
+    // unknown). Never includes a player's Key.
+    std::string BuildPollBody(int& connectedPlayers) {
+        connectedPlayers = 0;
+        std::vector<PollPlayer> players;
         for (Globals::ServerPlayer& serverPlayer: Globals::ServerPlayers) {
-            if (serverPlayer.Connection)
-                numConnectedPlayers++;
+            if (!serverPlayer.Connection)
+                continue;
+            connectedPlayers++;
+            if (!serverPlayer.Joined || !IsLiveConnection(serverPlayer.Connection))
+                continue;
+            PollPlayer p;
+            p.name = serverPlayer.Name;
+            p.hero = GameState::HeroDisplayName(serverPlayer.Character);
+            APlayerController* pc = serverPlayer.Connection->Actor;
+            if (pc && !(pc->ObjectFlags & 0x2000000000000000ull)) {
+                APlayerReplicationInfo* pri = pc->PlayerReplicationInfo;
+                if (pri && !(pri->ObjectFlags & 0x2000000000000000ull) && pri->Team && !(pri->Team->ObjectFlags & 0x2000000000000000ull))
+                    p.team = pri->Team->TeamIndex;
+            }
+            players.push_back(std::move(p));
         }
+        // HumansHaveStarted: true once the game's pick phase is over (CharSelect::OnServerTick);
+        // the server browser shows it as MatchStarted.
+        return MakePollBody(connectedPlayers, Globals::haveHumansStarted, players);
+    }
 
-        jsonBody["ConnectedPlayers"] = numConnectedPlayers;
-        // True once the game's pick phase is over (CharSelect::OnServerTick); the server browser
-        // shows it as MatchStarted.
-        jsonBody["HumansHaveStarted"] = Globals::haveHumansStarted;
-
-        Globals::GameCoordinatorHttpClient.get()->Post("/api/games/server-poll", jsonBody.dump(), "application/json");
+    // Runs on its own thread; `body` and `numConnectedPlayers` were taken on the game thread, so
+    // nothing here reads ServerPlayers.
+    void GameControllerPoll(std::string body, int numConnectedPlayers) {
+        Globals::GameCoordinatorHttpClient.get()->Post("/api/games/server-poll", body, "application/json");
 
         nlohmann::json telemetrySnapshotPoll = nlohmann::json();
 
