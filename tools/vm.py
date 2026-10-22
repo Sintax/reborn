@@ -54,7 +54,6 @@ BUILDS_REPO = "Sintax/reborn-builds"
 MOD_FILES = ("reborn.dll", "reborn.pdb", "dxgi.dll")
 PANEL_EXE = "ControlPanel.exe"                     # a release asset, and the installed file's name
 PLAYER_ZIP_ASSET = "reborn-player-installer.zip"   # the player installer under the name the panel looks for
-PANEL_ASSETS = (PANEL_EXE, PLAYER_ZIP_ASSET)
 PANEL_PROJECT = config.REPO / "controlpanel" / "ControlPanel"
 PANEL_PUBLISH = PANEL_PROJECT / "bin" / "release-publish"                  # bin/ is gitignored
 PLAYER_ZIP = config.REPO / "dist" / "Reborn-Mod-Standard_Installer.zip"    # dist/ is gitignored
@@ -182,7 +181,7 @@ def download_mod(version: str, scratch: Path) -> Path:
     if scratch.exists():
         shutil.rmtree(scratch)
     run(["gh", "release", "download", version, "--repo", BUILDS_REPO, "--dir", str(scratch)])
-    for name in (*MOD_FILES, *PANEL_ASSETS):
+    for name in MOD_FILES:   # the panel and the zip may be missing: older releases (rollback) have none
         if not (scratch / name).exists():
             raise VmError(f"release {version} has no {name}")
     return scratch
@@ -202,10 +201,17 @@ def _replace_with_copy(src: Path, dest: Path) -> None:
 
 def install_panel(downloaded: Path, win64: Path) -> None:
     """The Control Panel goes in its own folder; the player installer zip it copies for friends sits
-    beside the game files, where the panel looks for it."""
-    (win64 / "ControlPanel").mkdir(parents=True, exist_ok=True)
-    _replace_with_copy(downloaded / PANEL_EXE, win64 / "ControlPanel" / PANEL_EXE)
-    _replace_with_copy(downloaded / PLAYER_ZIP_ASSET, win64 / PLAYER_ZIP_ASSET)
+    beside the game files, where the panel looks for it. A release without one of them (an older
+    release, when rolling back) leaves the one already installed in place."""
+    if (downloaded / PANEL_EXE).exists():
+        (win64 / "ControlPanel").mkdir(parents=True, exist_ok=True)
+        _replace_with_copy(downloaded / PANEL_EXE, win64 / "ControlPanel" / PANEL_EXE)
+    else:
+        print("This release has no Control Panel; keeping the one already installed.")
+    if (downloaded / PLAYER_ZIP_ASSET).exists():
+        _replace_with_copy(downloaded / PLAYER_ZIP_ASSET, win64 / PLAYER_ZIP_ASSET)
+    else:
+        print("This release has no player installer zip; keeping the one already installed.")
 
 
 def panel_running() -> bool:
@@ -340,7 +346,7 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     (win64 / DEPLOYED_MARK).write_text(version + "\n", encoding="utf-8")
     print(f"Installed {version} into {win64}")
     try:
-        if ensure_desktop_shortcut(win64):
+        if (win64 / "ControlPanel" / PANEL_EXE).exists() and ensure_desktop_shortcut(win64):
             print(f"Made the '{SHORTCUT_NAME}' shortcut on the desktop")
     except VmError as e:   # a missing shortcut is not worth a failed update
         print(f"NOTE: {e}; open {win64 / 'ControlPanel' / PANEL_EXE} instead")
