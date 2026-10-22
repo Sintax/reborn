@@ -32,15 +32,20 @@ namespace ServerNetworking {
             connectedPlayers++;
             if (!serverPlayer.Joined || !IsLiveConnection(serverPlayer.Connection))
                 continue;
+            // Listed only once logged in (a live controller with a live PlayerReplicationInfo): before
+            // that the player still has the placeholder name from the Welcome, and login
+            // (PlayerNames) gives them their real one. They are counted above either way.
+            APlayerController* pc = serverPlayer.Connection->Actor;
+            if (!pc || (pc->ObjectFlags & 0x2000000000000000ull))
+                continue;
+            APlayerReplicationInfo* pri = pc->PlayerReplicationInfo;
+            if (!pri || (pri->ObjectFlags & 0x2000000000000000ull))
+                continue;
             PollPlayer p;
             p.name = serverPlayer.Name;
             p.hero = GameState::HeroDisplayName(serverPlayer.Character);
-            APlayerController* pc = serverPlayer.Connection->Actor;
-            if (pc && !(pc->ObjectFlags & 0x2000000000000000ull)) {
-                APlayerReplicationInfo* pri = pc->PlayerReplicationInfo;
-                if (pri && !(pri->ObjectFlags & 0x2000000000000000ull) && pri->Team && !(pri->Team->ObjectFlags & 0x2000000000000000ull))
-                    p.team = pri->Team->TeamIndex;
-            }
+            if (pri->Team && !(pri->Team->ObjectFlags & 0x2000000000000000ull))
+                p.team = pri->Team->TeamIndex;
             players.push_back(std::move(p));
         }
         // HumansHaveStarted: true once the game's pick phase is over (CharSelect::OnServerTick);
