@@ -286,7 +286,9 @@ namespace ControlPanel.Tests
 			// so the quoted rule name and program path reach netsh as they are; & runs the add after the delete.
 			string spaced = @"C:\Program Files (x86)\Steam\steamapps\common\Battleborn\Binaries\Win64\Serverborn.exe";
 			string[] spacedArgs = Firewall.ArgsFor(new[] { 7777 }, spaced);
-			Assert.Equal("/d /s /c \"netsh " + spacedArgs[0] + " & netsh " + spacedArgs[1] + "\"", Firewall.CommandLine(new[] { 7777 }, spaced));
+			// /v:off: delayed expansion stays off, so a ! in the game's path is passed on as it is.
+			Assert.Equal("/d /s /v:off /c \"netsh " + spacedArgs[0] + " & netsh " + spacedArgs[1] + "\"", Firewall.CommandLine(new[] { 7777 }, spaced));
+			Assert.Contains(@"program=""C:\Games\Wow!\Serverborn.exe""", Firewall.CommandLine(new[] { 7777 }, @"C:\Games\Wow!\Serverborn.exe"));
 			Assert.Contains("program=\"" + spaced + "\"", Firewall.CommandLine(new[] { 7777 }, spaced));
 
 			// Characters cmd would still act on inside quotes are refused rather than run.

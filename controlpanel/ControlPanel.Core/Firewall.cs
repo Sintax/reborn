@@ -21,13 +21,14 @@ namespace ControlPanel.Core
 		// The arguments for ONE cmd.exe run that does both netsh commands, so the owner answers one
 		// Windows question and the rule can't be deleted without the add being tried right after.
 		// /s makes cmd strip only the outer quotes, so the quoted name and path reach netsh unchanged;
-		// /d skips any AutoRun command. The exit code is the add's.
+		// /d skips any AutoRun command; /v:off keeps delayed expansion off even if the registry turns it
+		// on, so a ! in the path is not eaten. The exit code is the add's.
 		// Null when the program path holds a character cmd would act on even inside quotes (% or ").
 		public static string? CommandLine(IEnumerable<int> ports, string serverExe)
 		{
 			if (serverExe.Contains('%') || serverExe.Contains('"')) return null;
 			string[] args = ArgsFor(ports, serverExe);
-			return $"/d /s /c \"netsh {args[0]} & netsh {args[1]}\"";
+			return $"/d /s /v:off /c \"netsh {args[0]} & netsh {args[1]}\"";
 		}
 	}
 }

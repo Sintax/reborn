@@ -460,7 +460,7 @@ namespace ControlPanel.Tests
 			// restart, so the running game is not cut off.
 			string run = Assert.Single(t.Runner.Elevated);
 			Assert.Equal("cmd.exe " + Firewall.CommandLine(new[] { 7777, 7778 }, t.Paths.ServerExe), run);
-			Assert.StartsWith("cmd.exe /d /s /c \"netsh advfirewall firewall delete rule", run);
+			Assert.StartsWith("cmd.exe /d /s /v:off /c \"netsh advfirewall firewall delete rule", run);
 			Assert.Contains(" & netsh advfirewall firewall add rule", run);
 			Assert.Contains("localport=7777,7778 ", run);
 			Assert.Contains(t.Paths.ServerExe, run);
