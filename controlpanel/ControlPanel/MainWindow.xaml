@@ -9,14 +9,16 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <!-- Header: the address players connect to, then how matchmaking is doing. -->
         <Grid Grid.Row="0">
+            <!-- The address and Copy always keep their room; the status side wraps in what is left. -->
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
             <StackPanel Grid.Column="0">
@@ -37,9 +39,13 @@
                     <Button Content="Copy" Command="{Binding CopyAddressCommand}" Margin="14,0,0,0" MinWidth="80"
                             VerticalAlignment="Center" ToolTip="Copy the address to send it to a friend" />
                 </StackPanel>
+                <TextBlock Text="{Binding CopyNotice}" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,4,0,0" MaxWidth="420"
+                           HorizontalAlignment="Left"
+                           Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                           Visibility="{Binding CopyNotice, Converter={StaticResource TextToVisibility}}" />
             </StackPanel>
 
-            <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top">
+            <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="24,0,0,0">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Ellipse Width="12" Height="12" Margin="0,0,8,0" VerticalAlignment="Center">
                         <Ellipse.Style>
@@ -66,7 +72,7 @@
                         </TextBlock.Style>
                     </TextBlock>
                 </StackPanel>
-                <TextBlock Text="{Binding StatusLine}" HorizontalAlignment="Right" Margin="0,4,0,0"
+                <TextBlock Text="{Binding StatusLine}" HorizontalAlignment="Right" Margin="0,4,0,0" TextWrapping="Wrap" TextAlignment="Right"
                            Visibility="{Binding StatusLine, Converter={StaticResource TextToVisibility}}" />
                 <TextBlock Text="{Binding Version, StringFormat=Version {0}}" HorizontalAlignment="Right" Style="{StaticResource NoteText}"
                            Visibility="{Binding Version, Converter={StaticResource TextToVisibility}}" />
@@ -88,7 +94,12 @@
             </DockPanel>
         </Border>
 
-        <TabControl x:Name="Tabs" Grid.Row="2" Margin="0,12,0,0" SelectionChanged="Tabs_SelectionChanged">
+        <!-- The panel itself hit a problem while updating (set by the window; cleared by the next good refresh). -->
+        <Border x:Name="ProblemBox" Grid.Row="2" Style="{StaticResource WarningBox}" Margin="0,12,0,0" Visibility="Collapsed">
+            <TextBlock x:Name="ProblemText" TextWrapping="Wrap" FontWeight="SemiBold" />
+        </Border>
+
+        <TabControl x:Name="Tabs" Grid.Row="3" Margin="0,12,0,0" SelectionChanged="Tabs_SelectionChanged">
             <TabItem Header="Live games">
                 <views:GamesView DataContext="{Binding Games}" />
             </TabItem>

@@ -77,6 +77,7 @@ namespace ControlPanel.Core.ViewModels
 			try
 			{
 				DateTime now = _clock.GetUtcNow().UtcDateTime;
+				ExpireCopyNotice(now);
 				var status = await _client.GetStatusAsync();
 				if (!status.Ok)
 				{
@@ -126,14 +127,30 @@ namespace ControlPanel.Core.ViewModels
 			}
 		}
 
+		// A short note about the Copy button ("could not be copied"). Kept apart from Banner, which every
+		// refresh rewrites; it clears on the next Copy or after CopyNoticeFor.
+		public static readonly TimeSpan CopyNoticeFor = TimeSpan.FromSeconds(15);
+		public const string CopyBusyText = "The address could not be copied (another program is using the clipboard). Try again.";
+		private DateTime _copyNoticeUtc;
+
+		private string? _copyNotice;
+		public string? CopyNotice { get => _copyNotice; private set => SetProperty(ref _copyNotice, value); }
+
 		private void CopyAddress()
 		{
 			if (_publicIp == null) return;
+			CopyNotice = null;
 			try { _clipboard.SetText($"{_publicIp}:{_port}"); }
 			catch (Exception e) when (e is System.Runtime.InteropServices.ExternalException or InvalidOperationException)
 			{
-				Banner = "The address could not be copied (another program is using the clipboard). Try again.";
+				CopyNotice = CopyBusyText;
+				_copyNoticeUtc = _clock.GetUtcNow().UtcDateTime;
 			}
+		}
+
+		private void ExpireCopyNotice(DateTime nowUtc)
+		{
+			if (CopyNotice != null && nowUtc - _copyNoticeUtc >= CopyNoticeFor) CopyNotice = null;
 		}
 
 		private async Task StartMatchmakingAsync()

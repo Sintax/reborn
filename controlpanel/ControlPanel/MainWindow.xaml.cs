@@ -28,13 +28,17 @@ namespace ControlPanel
 		}
 
 		// Never overlaps (a slow matchmaking can take longer than the interval) and never lets an
-		// error out of the timer: the next tick simply tries again.
+		// error out of the timer: it is shown in a plain line, and the next tick simply tries again.
 		private async Task RefreshAsync()
 		{
 			if (_refreshing) return;
 			_refreshing = true;
-			try { await _main.RefreshAsync(); }
-			catch (Exception) { }
+			try
+			{
+				await _main.RefreshAsync();
+				ShowProblem(null);   // a good refresh clears an earlier problem
+			}
+			catch (Exception e) { ShowProblem("The panel could not update: " + e.Message); }
 			finally { _refreshing = false; }
 		}
 
@@ -43,7 +47,13 @@ namespace ControlPanel
 			// Lists inside the pages raise this too; only the tabs themselves count.
 			if (!ReferenceEquals(e.OriginalSource, Tabs) || !LogsTab.IsSelected) return;
 			try { _main.Logs.RefreshCommand.Execute(null); }
-			catch (Exception) { }
+			catch (Exception ex) { ShowProblem("The panel could not read the log: " + ex.Message); }
+		}
+
+		private void ShowProblem(string? text)
+		{
+			ProblemText.Text = text ?? "";
+			ProblemBox.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
 		}
 	}
 }

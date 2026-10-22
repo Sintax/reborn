@@ -56,37 +56,40 @@
 
         <TextBlock Grid.Row="2" Text="{Binding Message}" Style="{StaticResource MessageText}" FontWeight="SemiBold" />
 
-        <!-- Everyone who can join: a plain table (no row selection, so the buttons stay readable). -->
+        <!-- Everyone who can join: a plain table (no row selection, so the buttons stay readable).
+             Header and rows share their column widths (SharedSizeGroup), so a wider row, such as one
+             with "Confirm name", widens that column for all. In a narrow window the table scrolls
+             sideways rather than cutting off the buttons. -->
         <Border Grid.Row="3" Margin="0,12,0,0" Style="{StaticResource Card}" Padding="4">
-            <DockPanel>
-                <Grid DockPanel.Dock="Top" Margin="0,4,0,6">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="2*" MinWidth="160" />
-                        <ColumnDefinition Width="130" />
-                        <ColumnDefinition Width="100" />
-                        <ColumnDefinition Width="100" />
-                        <ColumnDefinition Width="100" />
-                        <ColumnDefinition Width="Auto" MinWidth="340" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Name" Style="{StaticResource HeaderCell}" />
-                    <TextBlock Grid.Column="1" Text="Can create games" Style="{StaticResource HeaderCell}" />
-                    <TextBlock Grid.Column="2" Text="Key made" Style="{StaticResource HeaderCell}" />
-                    <TextBlock Grid.Column="3" Text="Zip made" Style="{StaticResource HeaderCell}" />
-                    <TextBlock Grid.Column="4" Text="Last seen" Style="{StaticResource HeaderCell}" />
-                </Grid>
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                <StackPanel Grid.IsSharedSizeScope="True">
+                    <Grid Margin="0,4,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" MinWidth="170" SharedSizeGroup="UserName" />
+                            <ColumnDefinition Width="Auto" MinWidth="130" SharedSizeGroup="UserCreate" />
+                            <ColumnDefinition Width="Auto" MinWidth="100" SharedSizeGroup="UserKey" />
+                            <ColumnDefinition Width="Auto" MinWidth="100" SharedSizeGroup="UserZip" />
+                            <ColumnDefinition Width="Auto" MinWidth="100" SharedSizeGroup="UserSeen" />
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="UserActions" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Name" Style="{StaticResource HeaderCell}" />
+                        <TextBlock Grid.Column="1" Text="Can create games" Style="{StaticResource HeaderCell}" />
+                        <TextBlock Grid.Column="2" Text="Key made" Style="{StaticResource HeaderCell}" />
+                        <TextBlock Grid.Column="3" Text="Zip made" Style="{StaticResource HeaderCell}" />
+                        <TextBlock Grid.Column="4" Text="Last seen" Style="{StaticResource HeaderCell}" />
+                    </Grid>
                     <ItemsControl ItemsSource="{Binding Users}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" Padding="0,6">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="2*" MinWidth="160" />
-                                            <ColumnDefinition Width="130" />
-                                            <ColumnDefinition Width="100" />
-                                            <ColumnDefinition Width="100" />
-                                            <ColumnDefinition Width="100" />
-                                            <ColumnDefinition Width="Auto" MinWidth="340" />
+                                            <ColumnDefinition Width="Auto" MinWidth="170" SharedSizeGroup="UserName" />
+                                            <ColumnDefinition Width="Auto" MinWidth="130" SharedSizeGroup="UserCreate" />
+                                            <ColumnDefinition Width="Auto" MinWidth="100" SharedSizeGroup="UserKey" />
+                                            <ColumnDefinition Width="Auto" MinWidth="100" SharedSizeGroup="UserZip" />
+                                            <ColumnDefinition Width="Auto" MinWidth="100" SharedSizeGroup="UserSeen" />
+                                            <ColumnDefinition Width="Auto" SharedSizeGroup="UserActions" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Name}" Style="{StaticResource Cell}" FontWeight="SemiBold" Margin="8,0,0,0" />
@@ -119,8 +122,8 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </ScrollViewer>
-            </DockPanel>
+                </StackPanel>
+            </ScrollViewer>
         </Border>
 
         <!-- Where the zips go. -->

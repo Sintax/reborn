@@ -82,7 +82,23 @@ namespace ControlPanel.Tests
 	public sealed class FakeClipboard : IClipboard
 	{
 		public string? Text { get; private set; }
-		public void SetText(string text) => Text = text;
+
+		// When set, SetText fails as Windows does when another program holds the clipboard.
+		public bool Busy { get; set; }
+
+		public void SetText(string text)
+		{
+			if (Busy) throw new System.Runtime.InteropServices.ExternalException("OpenClipboard failed");
+			Text = text;
+		}
+	}
+
+	// A clock the test moves by hand.
+	public sealed class ManualClock : TimeProvider
+	{
+		public DateTimeOffset Now { get; set; } = new(2026, 10, 22, 12, 0, 0, TimeSpan.Zero);
+		public override DateTimeOffset GetUtcNow() => Now;
+		public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
 	}
 
 	public sealed class FakeRunner : IProcessRunner
@@ -191,7 +207,7 @@ namespace ControlPanel.Tests
 
 		public AdminClient Client() => new(new HttpClient(Api), Paths.ReadToken, Paths.AdminBaseUri);
 
-		public MainViewModel Main() => new(Client(), Paths, Clipboard, Runner, Dialogs, Memory);
+		public MainViewModel Main(TimeProvider? clock = null) => new(Client(), Paths, Clipboard, Runner, Dialogs, Memory, clock);
 
 		public void Dispose()
 		{

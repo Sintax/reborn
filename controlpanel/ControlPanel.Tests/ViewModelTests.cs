@@ -425,6 +425,38 @@ namespace ControlPanel.Tests
 		}
 
 		[Fact]
+		public async Task Clipboard_busy_notice_survives_a_refresh_and_clears_later()
+		{
+			using var t = new TempPanel();
+			var clock = new ManualClock();
+			MainViewModel main = t.Main(clock);
+			await main.RefreshAsync();
+
+			t.Clipboard.Busy = true;
+			main.CopyAddressCommand.Execute(null);
+			Assert.Equal(MainViewModel.CopyBusyText, main.CopyNotice);
+			Assert.Null(main.Banner);   // not in the banner, which every refresh rewrites
+
+			// The next refresh (5 s later) keeps it.
+			clock.Now += TimeSpan.FromSeconds(5);
+			await main.RefreshAsync();
+			Assert.Equal(MainViewModel.CopyBusyText, main.CopyNotice);
+
+			// About 15 s on, a refresh clears it.
+			clock.Now += TimeSpan.FromSeconds(11);
+			await main.RefreshAsync();
+			Assert.Null(main.CopyNotice);
+
+			// A Copy that works clears it at once.
+			main.CopyAddressCommand.Execute(null);
+			Assert.NotNull(main.CopyNotice);
+			t.Clipboard.Busy = false;
+			main.CopyAddressCommand.Execute(null);
+			Assert.Null(main.CopyNotice);
+			Assert.Equal("203.0.113.10:5000", t.Clipboard.Text);
+		}
+
+		[Fact]
 		public async Task Games_show_mode_port_age_and_players()
 		{
 			using var t = new TempPanel();

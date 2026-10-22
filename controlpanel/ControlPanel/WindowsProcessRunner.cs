@@ -17,6 +17,8 @@ namespace ControlPanel
 		{
 			try
 			{
+				// With shell execute, null does not mean failure: Windows may hand the start to a process
+				// that is already running and give no handle back. A real failure throws instead.
 				using Process? p = Process.Start(new ProcessStartInfo
 				{
 					FileName = exe,
@@ -25,7 +27,7 @@ namespace ControlPanel
 					UseShellExecute = true,
 					WindowStyle = ProcessWindowStyle.Minimized,
 				});
-				return p != null;
+				return true;
 			}
 			catch (Exception)
 			{
