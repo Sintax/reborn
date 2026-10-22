@@ -104,18 +104,25 @@
                                         <TextBlock Grid.Column="2" Text="{Binding KeyMadeText}" Style="{StaticResource Cell}" />
                                         <TextBlock Grid.Column="3" Text="{Binding ZipMadeText}" Style="{StaticResource Cell}" />
                                         <TextBlock Grid.Column="4" Text="{Binding LastSeenText}" Style="{StaticResource Cell}" />
-                                        <StackPanel Grid.Column="5" Orientation="Horizontal" Margin="8,0" VerticalAlignment="Center">
-                                            <Button Content="Make zip" Command="{Binding MakeZipCommand}" Margin="0,0,6,0"
-                                                    AutomationProperties.Name="{Binding Name, StringFormat=Make zip: {0}}"
-                                                    ToolTip="Make the zip to send this player (the game files plus their name and key)" />
-                                            <Button Content="{Binding RenameLabel}" Command="{Binding RenameCommand}" Margin="0,0,6,0"
-                                                    AutomationProperties.Name="{Binding Name, StringFormat=Rename: {0}}" />
-                                            <Button Content="New key" Command="{Binding NewKeyCommand}" Margin="0,0,6,0"
-                                                    AutomationProperties.Name="{Binding Name, StringFormat=New key: {0}}"
-                                                    ToolTip="Replace their key. Their old zip stops working." />
-                                            <Button Content="Remove" Command="{Binding RevokeCommand}"
-                                                    AutomationProperties.Name="{Binding Name, StringFormat=Remove: {0}}"
-                                                    ToolTip="Remove this player. Their key stops working at once." />
+                                        <StackPanel Grid.Column="5" Margin="8,0" VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal">
+                                                <!-- Off on a "confirm name" row: the stored name is only a label until confirmed. -->
+                                                <Button Content="Make zip" Command="{Binding MakeZipCommand}" Margin="0,0,6,0"
+                                                        AutomationProperties.Name="{Binding Name, StringFormat=Make zip: {0}}"
+                                                        AutomationProperties.HelpText="{Binding MakeZipNote}"
+                                                        ToolTipService.ShowOnDisabled="True"
+                                                        ToolTip="Make the zip to send this player (the game files plus their name and key). On a 'confirm name' row, confirm their name first." />
+                                                <Button Content="{Binding RenameLabel}" Command="{Binding RenameCommand}" Margin="0,0,6,0"
+                                                        AutomationProperties.Name="{Binding Name, StringFormat=Rename: {0}}" />
+                                                <Button Content="New key" Command="{Binding NewKeyCommand}" Margin="0,0,6,0"
+                                                        AutomationProperties.Name="{Binding Name, StringFormat=New key: {0}}"
+                                                        ToolTip="Replace their key. Their old zip stops working." />
+                                                <Button Content="Remove" Command="{Binding RevokeCommand}"
+                                                        AutomationProperties.Name="{Binding Name, StringFormat=Remove: {0}}"
+                                                        ToolTip="Remove this player. Their key stops working at once." />
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding MakeZipNote}" Style="{StaticResource NoteText}" Margin="0,4,0,0"
+                                                       Visibility="{Binding MakeZipNote, Converter={StaticResource TextToVisibility}}" />
                                         </StackPanel>
                                     </Grid>
                                 </Border>

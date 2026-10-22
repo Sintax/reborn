@@ -167,9 +167,7 @@ namespace ControlPanel.Core.ViewModels
 		internal async Task RenameAsync(UserRow row)
 		{
 			string old = row.Name;
-			string question = row.ConfirmName
-				? $"Which name does the player with the key \"{old}\" play as? Type it exactly as they type it in the game."
-				: $"New name for {old}:";
+			string question = row.ConfirmName ? ConfirmNameQuestion(old) : RenameQuestion(old);
 			string? typed = _dialogs.AskText(question, old)?.Trim();
 			if (string.IsNullOrEmpty(typed) || (typed == old && !row.ConfirmName)) return;
 			if (!Keys.ValidName(typed))
@@ -185,10 +183,24 @@ namespace ControlPanel.Core.ViewModels
 			}
 			ZipRecords.Forget(_paths.ZipRecordFile, old);   // a zip made before carries the old name
 			Message = row.ConfirmName
-				? $"Saved. From now on this key only works with the name {typed}."
-				: $"{old} is now {typed}. Their zip still has the old name, so make them a new zip.";
+				? $"Saved. From now on this key only works with the name {typed}. You can make their zip now."
+				: $"{old} is now {typed}. Press Make zip and send them the new zip: they can't join until they install it.";
 			await ReloadAsync();
 		}
+
+		// What the rename box says before anything is saved (the change takes effect at once).
+		internal static string RenameQuestion(string old) =>
+			$"New name for {old}:\n\n"
+			+ $"This takes effect at once. {old} then needs a new zip with the new name, and can't join until they install it. "
+			+ "If they're in a game now, they'll be dropped.";
+
+		// A key brought over from the old key files: the label is not their in-game name. Typing their
+		// real name changes nothing for them; a wrong one locks them out, so say that, and only as an "if".
+		internal static string ConfirmNameQuestion(string label) =>
+			$"Which name does the player with the key \"{label}\" play as? Type it exactly as it appears in the game, "
+			+ "with the same capital letters.\n\n"
+			+ "From then on their key only works with that name. If it doesn't match, they'll be dropped from any game "
+			+ "they're in and can't join until you fix it.";
 
 		internal async Task NewKeyAsync(UserRow row)
 		{
@@ -223,6 +235,12 @@ namespace ControlPanel.Core.ViewModels
 		internal async Task MakeZipAsync(UserRow row)
 		{
 			string name = row.Name;
+			if (row.ConfirmName)
+			{
+				// The stored name is only a label: a zip would make it their in-game name and Steam identity.
+				Message = $"{UserRow.ConfirmFirstNote}: press Confirm name on {name}'s row, so the zip has the name they play as.";
+				return;
+			}
 			var key = await _client.GetKeyAsync(name);
 			if (!key.Ok)
 			{
@@ -260,8 +278,10 @@ namespace ControlPanel.Core.ViewModels
 			RenameCommand = new AsyncRelayCommand(() => owner.RenameAsync(this));
 			NewKeyCommand = new AsyncRelayCommand(() => owner.NewKeyAsync(this));
 			RevokeCommand = new AsyncRelayCommand(() => owner.RevokeAsync(this));
-			MakeZipCommand = new AsyncRelayCommand(() => owner.MakeZipAsync(this));
+			MakeZipCommand = new AsyncRelayCommand(() => owner.MakeZipAsync(this), () => !ConfirmName);
 		}
+
+		public const string ConfirmFirstNote = "Confirm their name first";
 
 		private string _name = "";
 		public string Name { get => _name; private set => SetProperty(ref _name, value); }
@@ -281,9 +301,15 @@ namespace ControlPanel.Core.ViewModels
 				{
 					OnPropertyChanged(nameof(NameNote));
 					OnPropertyChanged(nameof(RenameLabel));
+					OnPropertyChanged(nameof(MakeZipNote));
+					MakeZipCommand.NotifyCanExecuteChanged();
 				}
 			}
 		}
+
+		// Why Make zip is off on such a row ("" when it is on): until the owner confirms the name, the
+		// stored name is only a label, and a zip would make it the player's in-game name.
+		public string MakeZipNote => ConfirmName ? ConfirmFirstNote : "";
 
 		// "confirm name" next to the name of such a user, else "".
 		public string NameNote => ConfirmName ? "confirm name" : "";

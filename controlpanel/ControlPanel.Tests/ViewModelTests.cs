@@ -229,6 +229,84 @@ namespace ControlPanel.Tests
 		}
 
 		[Fact]
+		public async Task Make_zip_waits_until_a_confirm_name_row_is_confirmed()
+		{
+			using var t = new TempPanel();
+			using (var zip = System.IO.Compression.ZipFile.Open(t.Paths.PlayerInstallerZip, System.IO.Compression.ZipArchiveMode.Create))
+			{
+				zip.CreateEntry("Install.bat");
+				zip.CreateEntry("files/reborn.dll");
+			}
+			MainViewModel main = t.Main();
+			await main.RefreshAsync();
+			UserRow dj = main.Users.Users.Single(u => u.Name == "dj");      // a key brought over from the old key files
+			UserRow kaz = main.Users.Users.Single(u => u.Name == "Kaz");
+
+			// "dj" is only a label: a zip would make it their in-game name. So no zip until it is confirmed.
+			Assert.False(dj.MakeZipCommand.CanExecute(null));
+			Assert.Equal("Confirm their name first", dj.MakeZipNote);
+			Assert.True(kaz.MakeZipCommand.CanExecute(null));
+			Assert.Equal("", kaz.MakeZipNote);
+
+			// Even if it is run anyway: no key is fetched and no zip is made.
+			await dj.MakeZipCommand.ExecuteAsync(null);
+			Assert.DoesNotContain(t.Api.Requests, r => r.Path.EndsWith("/key"));
+			Assert.False(File.Exists(Path.Combine(t.Paths.ZipOutputDir, "Reborn-Mod-Installer_dj.zip")));
+			Assert.Contains("Confirm their name first", main.Users.Message);
+
+			// Once the name is confirmed, Make zip works.
+			t.Api.Users = new
+			{
+				requireKeys = true,
+				users = new object[] { new { name = "dj", canCreateGames = true, confirmName = false, added = (string?)null, lastSeen = (string?)null } },
+			};
+			await main.RefreshAsync();
+			Assert.True(dj.MakeZipCommand.CanExecute(null));
+			Assert.Equal("", dj.MakeZipNote);
+		}
+
+		[Fact]
+		public async Task Rename_and_confirm_name_say_what_happens_before_saving()
+		{
+			using var t = new TempPanel();
+			MainViewModel main = t.Main();
+			await main.RefreshAsync();
+			UserRow kaz = main.Users.Users.Single(u => u.Name == "Kaz");
+			UserRow dj = main.Users.Users.Single(u => u.Name == "dj");
+
+			// Rename: the question says it needs a new zip and drops them from a game now. Cancel = nothing.
+			t.Dialogs.TextAnswer = null;
+			await kaz.RenameCommand.ExecuteAsync(null);
+			string rename = Assert.Single(t.Dialogs.Questions);
+			Assert.Contains("Kaz", rename);
+			Assert.Contains("new zip", rename);
+			Assert.Contains("in a game now, they'll be dropped", rename);
+			Assert.Empty(t.Api.Writes);
+
+			// Confirm name: type it exactly as it appears in the game. Being dropped is only for a name that
+			// doesn't match; the right name changes nothing for them.
+			t.Dialogs.Questions.Clear();
+			await dj.RenameCommand.ExecuteAsync(null);
+			string confirm = Assert.Single(t.Dialogs.Questions);
+			Assert.Contains("exactly as it appears in the game", confirm);
+			Assert.Contains("If it doesn't match", confirm);
+			Assert.DoesNotContain("new zip", confirm);
+			Assert.Empty(t.Api.Writes);
+
+			// Confirming the name the label already has: saved, and nobody is told they were dropped.
+			t.Dialogs.TextAnswer = "dj";
+			await dj.RenameCommand.ExecuteAsync(null);
+			Assert.Contains("\"newName\":\"dj\"", t.Api.Writes.Last().Body);
+			Assert.DoesNotContain("dropped", main.Users.Message);
+			Assert.DoesNotContain("new zip", main.Users.Message);
+
+			// A real rename: the message says to send the new zip.
+			t.Dialogs.TextAnswer = "Kazzy";
+			await kaz.RenameCommand.ExecuteAsync(null);
+			Assert.Contains("new zip", main.Users.Message);
+		}
+
+		[Fact]
 		public async Task Removing_a_busy_port_warns()
 		{
 			using var t = new TempPanel();
