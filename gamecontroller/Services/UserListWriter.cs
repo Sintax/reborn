@@ -32,6 +32,7 @@ namespace gamecontroller.Services
 		public const string NoSuchUser = "There is no user with that name.";
 		public const string LastCreator = "At least one user must be able to start games.";
 		public const string NotSaved = "The user list could not be saved, so nothing was changed. Try again.";
+		public const string NoListYet = "There is no user list yet, so anyone can join. Add a player first: from then on, only players on the list can join.";
 
 		private static readonly object WriteLock = new();
 		private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
@@ -156,11 +157,23 @@ namespace gamecontroller.Services
 			return refusal;
 		}
 
-		public AdminRefusal? SetRequireKeys(bool on) => ChangeRoot(root =>
+		// With no file the game server lets anyone join. The switch does not start a list on its own:
+		// "on" with nobody on the list would shut everyone out. Adding the first player starts it.
+		public AdminRefusal? SetRequireKeys(bool on)
 		{
-			root["RequireKeys"] = on;
-			return null;
-		});
+			lock (WriteLock)
+			{
+				if (!File.Exists(Path)) return new AdminRefusal(409, NoListYet);
+				return ChangeRoot(root =>
+				{
+					root["RequireKeys"] = on;
+					return null;
+				});
+			}
+		}
+
+		// False when there is no user list file: then anyone can join (the game server's rule).
+		public bool FileExists() => File.Exists(Path);
 
 		// The user named `name` (any case), or null.
 		public static StoredUser? FindIn(UserFileView view, string name) =>

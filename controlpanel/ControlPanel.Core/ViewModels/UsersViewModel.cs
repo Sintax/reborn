@@ -50,11 +50,32 @@ namespace ControlPanel.Core.ViewModels
 
 		// --- the switch ---
 
-		// Bind the check box one way and use ToggleRequireKeysCommand: turning keys off asks first.
+		// Bind the check box one way and use ToggleRequireKeysCommand: turning keys off or on asks first.
 		private bool _requireKeys = true;
 		public bool RequireKeys { get => _requireKeys; private set => SetProperty(ref _requireKeys, value); }
 
 		public IAsyncRelayCommand ToggleRequireKeysCommand { get; }
+
+		public const string KeysOnQuestion = "Require keys to join? Players without a key will be dropped from games. "
+			+ "From then on, only players on the list can join, each with the key in their zip.";
+
+		public const string NoListText = "There is no user list yet, so anyone can join. The first player you add starts the list. "
+			+ "From then on, only players on the list can join.";
+
+		// False when the server has no user list file: then anyone can join, and the switch is off and
+		// can't be used until the first player is added. (An older matchmaking does not say: true.)
+		private bool _hasUserList = true;
+		public bool HasUserList
+		{
+			get => _hasUserList;
+			private set
+			{
+				if (SetProperty(ref _hasUserList, value)) OnPropertyChanged(nameof(NoListNote));
+			}
+		}
+
+		// Shown on the page while there is no user list ("" once there is one).
+		public string NoListNote => HasUserList ? "" : NoListText;
 
 		// --- zips ---
 
@@ -81,7 +102,8 @@ namespace ControlPanel.Core.ViewModels
 		// Rows are updated in place (matched by name) so the window keeps its selection.
 		public void Update(UserListInfo info)
 		{
-			RequireKeys = info.RequireKeys;
+			HasUserList = info.UserListExists ?? true;
+			RequireKeys = HasUserList && info.RequireKeys;
 			Dictionary<string, DateTime> zips = ZipRecords.Load(_paths.ZipRecordFile);
 			DateTime now = _clock.GetUtcNow().UtcDateTime;
 			var wanted = info.Users.Select(u => u.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -116,6 +138,7 @@ namespace ControlPanel.Core.ViewModels
 				Message = "Press Generate Key first.";
 				return;
 			}
+			if (!HasUserList && !_dialogs.Confirm(FirstAddQuestion(name, NewCanCreate))) return;
 			var added = await _client.AddUserAsync(name, PreviewKey, NewCanCreate);
 			if (!added.Ok)
 			{
@@ -129,10 +152,26 @@ namespace ControlPanel.Core.ViewModels
 			await ReloadAsync();
 		}
 
+		// Adding the first player starts the user list: from then on, everyone else is shut out.
+		internal static string FirstAddQuestion(string name, bool canCreateGames) =>
+			$"Start the user list with {name}? From now on, only players on the list can join, each with the key in their zip. "
+			+ "Anyone else in a game now will be dropped."
+			+ (canCreateGames ? "" : $"\n\n{name} can't start games, so nobody on the list could start one. "
+				+ "Add yourself first, with Can create games ticked.");
+
 		private async Task ToggleRequireKeysAsync()
 		{
+			if (!HasUserList)
+			{
+				Message = NoListText;
+				OnPropertyChanged(nameof(RequireKeys));   // puts the check box back
+				return;
+			}
 			bool turnOn = !RequireKeys;
-			if (!turnOn && !_dialogs.Confirm("Let players join without a key? Then a player only needs a name, and anyone who finds this server can join."))
+			string question = turnOn
+				? KeysOnQuestion
+				: "Let players join without a key? Then a player only needs a name, and anyone who finds this server can join.";
+			if (!_dialogs.Confirm(question))
 			{
 				OnPropertyChanged(nameof(RequireKeys));   // puts the check box back
 				return;

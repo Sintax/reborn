@@ -48,10 +48,14 @@
 
         <!-- The switch for the whole server. -->
         <StackPanel Grid.Row="1" Margin="0,12,0,0">
-            <CheckBox Content="Require keys to join" IsChecked="{Binding RequireKeys, Mode=OneWay}"
+            <!-- Off and unusable while there is no user list: then anyone can join (the note says so). -->
+            <CheckBox Content="Require keys to join" IsChecked="{Binding RequireKeys, Mode=OneWay}" IsEnabled="{Binding HasUserList}"
                       Command="{Binding ToggleRequireKeysCommand}" FontWeight="SemiBold" />
             <TextBlock Style="{StaticResource NoteText}" Margin="28,2,0,0"
                        Text="On: a player needs their name and their key (from their zip) to join. Off: a name is enough. Starting a game always needs &quot;Can create games&quot;." />
+            <TextBlock Text="{Binding NoListNote}" Style="{StaticResource NoteText}" Margin="28,4,0,0" FontWeight="SemiBold"
+                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
+                       Visibility="{Binding NoListNote, Converter={StaticResource TextToVisibility}}" />
         </StackPanel>
 
         <TextBlock Grid.Row="2" Text="{Binding Message}" Style="{StaticResource MessageText}" FontWeight="SemiBold" />

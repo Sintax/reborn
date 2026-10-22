@@ -229,6 +229,89 @@ namespace ControlPanel.Tests
 		}
 
 		[Fact]
+		public async Task With_no_user_list_the_page_says_anyone_can_join_and_the_first_add_warns()
+		{
+			using var t = new TempPanel();
+			t.Api.Users = new { requireKeys = false, userListExists = false, users = Array.Empty<object>() };
+			MainViewModel main = t.Main();
+			await main.RefreshAsync();
+			UsersViewModel users = main.Users;
+
+			Assert.False(users.HasUserList);
+			Assert.False(users.RequireKeys);                      // the switch does not claim keys are required
+			Assert.Contains("anyone can join", users.NoListNote);
+
+			// The switch does nothing on its own while there is no list.
+			t.Dialogs.ConfirmAnswer = true;
+			await users.ToggleRequireKeysCommand.ExecuteAsync(null);
+			Assert.Empty(t.Api.Writes);
+			Assert.Contains("anyone can join", users.Message);
+
+			// The first Add asks first: from now on only listed players can join.
+			users.NewName = "Sintax";
+			users.NewCanCreate = true;
+			users.GenerateKeyCommand.Execute(null);
+			t.Dialogs.Questions.Clear();
+			t.Dialogs.ConfirmAnswer = false;
+			await users.SaveCommand.ExecuteAsync(null);
+			string question = Assert.Single(t.Dialogs.Questions);
+			Assert.Contains("only players on the list can join", question);
+			Assert.Empty(t.Api.Writes);
+			Assert.NotNull(users.PreviewKey);                     // the form is kept
+
+			// Without "Can create games", the question also says nobody could start a game.
+			users.NewCanCreate = false;
+			await users.SaveCommand.ExecuteAsync(null);
+			Assert.Contains("Can create games", t.Dialogs.Questions.Last());
+
+			users.NewCanCreate = true;
+			t.Dialogs.ConfirmAnswer = true;
+			await users.SaveCommand.ExecuteAsync(null);
+			Assert.Equal("POST", Assert.Single(t.Api.Writes).Method);
+
+			// Once the list exists, adding asks nothing more.
+			t.Api.Users = new
+			{
+				requireKeys = true,
+				userListExists = true,
+				users = new object[] { new { name = "Sintax", canCreateGames = true, confirmName = false, added = (string?)null, lastSeen = (string?)null } },
+			};
+			await main.RefreshAsync();
+			Assert.True(users.HasUserList);
+			Assert.True(users.RequireKeys);
+			Assert.Equal("", users.NoListNote);
+			int asked = t.Dialogs.Questions.Count;
+			users.NewName = "Kaz";
+			users.GenerateKeyCommand.Execute(null);
+			await users.SaveCommand.ExecuteAsync(null);
+			Assert.Equal(asked, t.Dialogs.Questions.Count);
+			Assert.Equal(2, t.Api.Writes.Count());
+		}
+
+		[Fact]
+		public async Task Turning_keys_on_asks_first()
+		{
+			using var t = new TempPanel();
+			t.Api.Users = new { requireKeys = false, users = Array.Empty<object>() };   // an older matchmaking: no userListExists
+			MainViewModel main = t.Main();
+			await main.RefreshAsync();
+			UsersViewModel users = main.Users;
+			Assert.True(users.HasUserList);
+			Assert.False(users.RequireKeys);
+
+			t.Dialogs.ConfirmAnswer = false;
+			await users.ToggleRequireKeysCommand.ExecuteAsync(null);
+			Assert.Contains("Players without a key will be dropped from games.", Assert.Single(t.Dialogs.Questions));
+			Assert.Empty(t.Api.Writes);
+			Assert.False(users.RequireKeys);
+
+			t.Dialogs.ConfirmAnswer = true;
+			await users.ToggleRequireKeysCommand.ExecuteAsync(null);
+			Assert.Contains("\"on\":true", Assert.Single(t.Api.Writes).Body);
+			Assert.True(users.RequireKeys);
+		}
+
+		[Fact]
 		public async Task Make_zip_waits_until_a_confirm_name_row_is_confirmed()
 		{
 			using var t = new TempPanel();

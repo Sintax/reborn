@@ -29,8 +29,10 @@ namespace ControlPanel.Core
 	}
 
 	// The shapes gamecontroller/Controllers/Admin.cs sends (camelCase JSON).
+	// UserListExists (here and in UserListInfo): false when the server has no user list file, so anyone
+	// can join; null from a matchmaking too old to say, which is taken as "there is a list".
 	public sealed record ServerStatus(string Version, string? PublicIp, IReadOnlyList<int> GamePorts, IReadOnlyList<int> GamePortsInUse,
-		int GamesRunning, bool RequireKeys, DateTime MatchmakingStartedUtc);
+		int GamesRunning, bool RequireKeys, DateTime MatchmakingStartedUtc, bool? UserListExists = null);
 
 	public sealed record PlayerInfo(string Name, string Hero, int Team);
 
@@ -39,7 +41,7 @@ namespace ControlPanel.Core
 
 	public sealed record UserInfo(string Name, bool CanCreateGames, bool ConfirmName, DateTime? Added, DateTime? LastSeen);
 
-	public sealed record UserListInfo(bool RequireKeys, IReadOnlyList<UserInfo> Users);
+	public sealed record UserListInfo(bool RequireKeys, IReadOnlyList<UserInfo> Users, bool? UserListExists = null);
 
 	// The local admin API of matchmaking (http://127.0.0.1:<CoordinatorPort>/api/admin/). Every call
 	// sends the token from admin-token.txt and returns a result; nothing here throws to the UI.

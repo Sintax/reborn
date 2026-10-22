@@ -54,11 +54,12 @@ namespace gamecontroller.Controllers
 			}
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
 
-			bool requireKeys = _writer.Read(out UserFileView? view) == null ? view!.RequireKeys : _users.RequireKeys;
+			bool listExists = _writer.FileExists();
+			bool requireKeys = listExists && (_writer.Read(out UserFileView? view) == null ? view!.RequireKeys : _users.RequireKeys);
 			IReadOnlyList<int> ports = _settings.ReadPorts()
 				?? _config.GetSection("GamePorts").Get<List<int>>() ?? SettingsWriter.DefaultPorts;
 			return Ok(new AdminStatus(version, _roster.PublicIp, ports, _roster.Ports.ToList(), _roster.Instances.Count(i => !i.Finished),
-				requireKeys, _started.Utc));
+				requireKeys, _started.Utc, listExists));
 		}
 
 		[HttpGet("games")]
@@ -70,9 +71,11 @@ namespace gamecontroller.Controllers
 		[HttpGet("users")]
 		public IActionResult GetUsers()
 		{
+			bool listExists = _writer.FileExists();
 			AdminRefusal? refusal = _writer.Read(out UserFileView? view);
 			if (refusal != null) return Refused(refusal);
-			return Ok(new AdminUsers(view!.RequireKeys, view.Users.Select(Shown).ToList()));
+			// No file: the game server lets anyone join, so keys are not required, whatever the default says.
+			return Ok(new AdminUsers(listExists && view!.RequireKeys, view!.Users.Select(Shown).ToList(), listExists));
 		}
 
 		[HttpGet("users/{name}/key")]
@@ -204,9 +207,10 @@ namespace gamecontroller.Controllers
 	public sealed record ServiceStarted(DateTime Utc);
 
 	// GamePorts: saved in appsettings.json (what the next start uses). GamePortsInUse: what this run
-	// started with. They differ after a ports change until matchmaking restarts.
+	// started with. They differ after a ports change until matchmaking restarts. UserListExists: false
+	// when there is no user list file, so anyone can join (RequireKeys is then false too).
 	public sealed record AdminStatus(string Version, string? PublicIp, IReadOnlyList<int> GamePorts, IReadOnlyList<int> GamePortsInUse,
-		int GamesRunning, bool RequireKeys, DateTime MatchmakingStartedUtc);
+		int GamesRunning, bool RequireKeys, DateTime MatchmakingStartedUtc, bool UserListExists);
 
 	public sealed record AdminPlayer(string Name, string Hero, int Team);
 
@@ -215,7 +219,9 @@ namespace gamecontroller.Controllers
 
 	public sealed record AdminUser(string Name, bool CanCreateGames, bool ConfirmName, DateTime? Added, DateTime? LastSeen);
 
-	public sealed record AdminUsers(bool RequireKeys, IReadOnlyList<AdminUser> Users);
+	// UserListExists: false when there is no user list file yet, so anyone can join; the first user
+	// added starts the list.
+	public sealed record AdminUsers(bool RequireKeys, IReadOnlyList<AdminUser> Users, bool UserListExists);
 
 	public sealed record AdminKeyReply(string Key);
 

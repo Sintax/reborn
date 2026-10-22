@@ -259,7 +259,8 @@ public class AdminApiTests : IDisposable
         Assert.Equal(T0, status.MatchmakingStartedUtc);
 
         string wire = Wire(rig.Controller.GetStatus());
-        foreach (string field in new[] { "version", "publicIp", "gamePorts", "gamePortsInUse", "gamesRunning", "requireKeys", "matchmakingStartedUtc" })
+        Assert.True(status.UserListExists);
+        foreach (string field in new[] { "version", "publicIp", "gamePorts", "gamePortsInUse", "gamesRunning", "requireKeys", "matchmakingStartedUtc", "userListExists" })
             Assert.Contains("\"" + field + "\"", wire);
 
         // No deployed-version file: an empty version, not an error.
@@ -309,6 +310,7 @@ public class AdminApiTests : IDisposable
         var users = Body<AdminUsers>(result);
 
         Assert.True(users.RequireKeys);
+        Assert.True(users.UserListExists);
         Assert.Equal(new[] { "dj", "guest" }, users.Users.Select(u => u.Name));
         var dj = users.Users[0];
         Assert.True(dj.CanCreateGames);
@@ -541,13 +543,35 @@ public class AdminApiTests : IDisposable
     {
         var rig = Make();
         File.Delete(UsersPath);
-        var users = ListUsers(rig.Controller);
-        Assert.True(users.RequireKeys);
-        Assert.Empty(users.Users);
 
+        // No file: the game server lets anyone join, so the API must not say keys are required.
+        var users = ListUsers(rig.Controller);
+        Assert.False(users.UserListExists);
+        Assert.False(users.RequireKeys);
+        Assert.Empty(users.Users);
+        var status = Body<AdminStatus>(rig.Controller.GetStatus());
+        Assert.False(status.UserListExists);
+        Assert.False(status.RequireKeys);
+        Assert.Contains("\"userListExists\":false", Wire(rig.Controller.GetUsers()));
+        Assert.Contains("\"userListExists\":false", Wire(rig.Controller.GetStatus()));
+
+        // The keys switch can't start a list on its own: "on" with nobody on it would shut everyone out.
+        foreach (bool on in new[] { true, false })
+        {
+            var r = rig.Controller.SetRequireKeys(new AdminRequireKeys { On = on });
+            Assert.Equal(409, Status(r));
+            Assert.Equal(UserListWriter.NoListYet, Message(r));
+            Assert.False(File.Exists(UsersPath));
+        }
+
+        // The first player added starts the list, with keys required from then on.
         Assert.Equal(201, Status(rig.Controller.AddUser(new AdminNewUser { Name = "dj", Key = DjKey, CanCreateGames = true })));
         Assert.True(File.Exists(UsersPath));
-        Assert.Equal("dj", Assert.Single(ListUsers(rig.Controller).Users).Name);
+        users = ListUsers(rig.Controller);
+        Assert.Equal("dj", Assert.Single(users.Users).Name);
+        Assert.True(users.UserListExists);
+        Assert.True(users.RequireKeys);
+        Assert.True(Body<AdminStatus>(rig.Controller.GetStatus()).UserListExists);
     }
 
     [Fact]
