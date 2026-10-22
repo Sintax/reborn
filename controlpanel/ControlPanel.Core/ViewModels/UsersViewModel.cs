@@ -121,7 +121,28 @@ namespace ControlPanel.Core.ViewModels
 				else if (Users.IndexOf(row) != i) Users.Move(Users.IndexOf(row), i);
 				row.Apply(u, zips.TryGetValue(u.Name, out DateTime zip) ? zip : null, now, _clock.LocalTimeZone);
 			}
+
+			var seen = (info.SeenNotListed ?? Array.Empty<SeenName>())
+				.Select(s => new SeenRow(s.Name, Display.Ago(s.LastSeen, now, _clock.LocalTimeZone)))
+				.ToList();
+			if (!seen.SequenceEqual(SeenNotListed))
+			{
+				SeenNotListed.Clear();
+				foreach (SeenRow s in seen) SeenNotListed.Add(s);
+			}
+			OnPropertyChanged(nameof(SeenNotListedEmptyText));
 		}
+
+		// --- seen recently but not on the list ---
+
+		// Names that joined a game lately but match nobody on the list, newest first. The owner picks
+		// the real name of a "confirm name" key from here. Names only, never keys.
+		public ObservableCollection<SeenRow> SeenNotListed { get; } = new();
+
+		public const string NobodySeenText = "Nobody yet.";
+
+		// Shown in place of the list when it is empty ("" when it has names).
+		public string SeenNotListedEmptyText => SeenNotListed.Count == 0 ? NobodySeenText : "";
 
 		// --- actions ---
 
@@ -307,6 +328,9 @@ namespace ControlPanel.Core.ViewModels
 			_runner.OpenFolder(_paths.ZipOutputDir);
 		}
 	}
+
+	// One name seen in a game lately that is not on the list: the name and "5 min ago".
+	public sealed record SeenRow(string Name, string LastSeenText);
 
 	// One user in the list. Columns (spec): name, can create games, key made, zip made, last seen.
 	public sealed class UserRow : ObservableObject

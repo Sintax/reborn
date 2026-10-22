@@ -289,6 +289,45 @@ namespace ControlPanel.Tests
 		}
 
 		[Fact]
+		public async Task Users_page_lists_names_seen_recently_that_are_not_on_the_list()
+		{
+			using var t = new TempPanel();
+			var clock = new ManualClock();   // 2026-10-22 12:00 UTC
+			MainViewModel main = t.Main(clock);
+			await main.RefreshAsync();
+			UsersViewModel users = main.Users;
+
+			// An older matchmaking does not send the list: nothing shown, nothing thrown.
+			Assert.Empty(users.SeenNotListed);
+			Assert.Equal(UsersViewModel.NobodySeenText, users.SeenNotListedEmptyText);
+
+			t.Api.Users = new
+			{
+				requireKeys = true,
+				userListExists = true,
+				users = new object[] { new { name = "kaz", canCreateGames = true, confirmName = true, added = (string?)null, lastSeen = (string?)null } },
+				seenNotListed = new object?[]
+				{
+					new { name = "KazTheGreat", lastSeen = "2026-10-22T11:55:00Z" },
+					null,
+					new { name = (string?)null, lastSeen = "2026-10-22T11:00:00Z" },
+					new { name = "Wanderer", lastSeen = "2026-10-20T08:00:00Z" },
+				},
+			};
+			await main.RefreshAsync();
+
+			// In the order matchmaking sends (newest first); broken entries dropped.
+			Assert.Equal(new[] { "KazTheGreat", "Wanderer" }, users.SeenNotListed.Select(s => s.Name));
+			Assert.Equal("5 min ago", users.SeenNotListed[0].LastSeenText);
+			Assert.Equal("", users.SeenNotListedEmptyText);
+
+			// The list leaves the page once they're all on the list.
+			t.Api.Users = new { requireKeys = true, userListExists = true, users = Array.Empty<object>(), seenNotListed = Array.Empty<object>() };
+			await main.RefreshAsync();
+			Assert.Empty(users.SeenNotListed);
+		}
+
+		[Fact]
 		public async Task Turning_keys_on_asks_first()
 		{
 			using var t = new TempPanel();

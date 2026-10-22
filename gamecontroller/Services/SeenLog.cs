@@ -73,6 +73,12 @@ namespace gamecontroller.Services
 			lock (_lock) return _seen.TryGetValue(name, out DateTime when) ? when : null;
 		}
 
+		// Every name seen, with when, as a copy (names only: this log never holds keys).
+		public IReadOnlyList<(string Name, DateTime When)> All()
+		{
+			lock (_lock) return _seen.Select(kv => (kv.Key, kv.Value)).ToList();
+		}
+
 		// Shutdown: whatever is not yet in the file goes there now.
 		public void Dispose()
 		{

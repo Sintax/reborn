@@ -41,7 +41,12 @@ namespace ControlPanel.Core
 
 	public sealed record UserInfo(string Name, bool CanCreateGames, bool ConfirmName, DateTime? Added, DateTime? LastSeen);
 
-	public sealed record UserListInfo(bool RequireKeys, IReadOnlyList<UserInfo> Users, bool? UserListExists = null);
+	// SeenNotListed: names seen in games lately that match no user, newest first (names only). An older
+	// matchmaking leaves it out: an empty list.
+	public sealed record UserListInfo(bool RequireKeys, IReadOnlyList<UserInfo> Users, bool? UserListExists = null,
+		IReadOnlyList<SeenName>? SeenNotListed = null);
+
+	public sealed record SeenName(string Name, DateTime? LastSeen);
 
 	// The local admin API of matchmaking (http://127.0.0.1:<CoordinatorPort>/api/admin/). Every call
 	// sends the token from admin-token.txt and returns a result; nothing here throws to the UI.
@@ -136,6 +141,7 @@ namespace ControlPanel.Core
 		private static UserListInfo? Checked(UserListInfo list) => list.Users == null ? null : list with
 		{
 			Users = list.Users.Where(u => u != null && u.Name != null).ToList(),
+			SeenNotListed = (list.SeenNotListed ?? Array.Empty<SeenName>()).Where(s => s != null && !string.IsNullOrEmpty(s.Name)).ToList(),
 		};
 
 		private static UserInfo? Checked(UserInfo u) => u.Name == null ? null : u;

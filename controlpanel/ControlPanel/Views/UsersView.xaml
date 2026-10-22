@@ -21,6 +21,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Adding a player: name, may they start games, a key. -->
@@ -137,8 +138,39 @@
             </ScrollViewer>
         </Border>
 
+        <!-- Names that joined a game lately but match nobody on the list, newest first (names only).
+             The owner reads a "confirm name" player's real name from here. -->
+        <Border Grid.Row="4" Margin="0,12,0,0" Style="{StaticResource Card}">
+            <StackPanel>
+                <TextBlock Text="Seen recently but not on the list" Style="{StaticResource SectionTitle}" />
+                <TextBlock Style="{StaticResource NoteText}" Margin="0,0,0,6"
+                           Text="Players who joined a game lately with a name nobody on the list has, newest first. To confirm a name, type it exactly as shown here." />
+                <TextBlock Text="{Binding SeenNotListedEmptyText}" Style="{StaticResource NoteText}"
+                           Visibility="{Binding SeenNotListedEmptyText, Converter={StaticResource TextToVisibility}}" />
+                <ScrollViewer MaxHeight="96" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding SeenNotListed}" AutomationProperties.Name="Seen recently but not on the list">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,20,2">
+                                    <TextBox Text="{Binding Name, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                                             Padding="0" MinWidth="0" FontWeight="SemiBold" VerticalAlignment="Center"
+                                             AutomationProperties.Name="{Binding Name}" ToolTip="Select and copy the name" />
+                                    <TextBlock Text="{Binding LastSeenText}" Style="{StaticResource NoteText}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
+
         <!-- Where the zips go. -->
-        <DockPanel Grid.Row="4" Margin="0,10,0,0">
+        <DockPanel Grid.Row="5" Margin="0,10,0,0">
             <Button DockPanel.Dock="Right" Content="Open zip folder" Command="{Binding OpenZipFolderCommand}" Margin="12,0,0,0" />
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="{Binding ZipFolder, StringFormat=Zips are saved in {0}}" Style="{StaticResource NoteText}" />

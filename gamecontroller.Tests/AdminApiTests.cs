@@ -331,6 +331,35 @@ public class AdminApiTests : IDisposable
     }
 
     [Fact]
+    public void Users_list_names_seen_recently_that_are_not_on_the_list()
+    {
+        // 25 names in the "last seen" file, one a user ("DJ" is dj in another case), oldest first.
+        var seen = new Dictionary<string, string> { ["DJ"] = T0.AddMinutes(30).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") };
+        for (int i = 0; i < 25; i++) seen["Visitor" + i] = T0.AddMinutes(i).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'");
+        File.WriteAllText(Path.Combine(_dir, SeenLog.FileName), JsonSerializer.Serialize(new { Seen = seen }));
+        var rig = Make();
+
+        var result = rig.Controller.GetUsers();
+        var users = Body<AdminUsers>(result);
+
+        // Newest first, at most 20, users left out (any case).
+        Assert.Equal(20, users.SeenNotListed.Count);
+        Assert.Equal(Enumerable.Range(5, 20).Reverse().Select(i => "Visitor" + i), users.SeenNotListed.Select(s => s.Name));
+        Assert.Equal(T0.AddMinutes(24), users.SeenNotListed[0].LastSeen);
+        Assert.DoesNotContain(users.SeenNotListed, s => s.Name.Equals("dj", StringComparison.OrdinalIgnoreCase));
+
+        string wire = Wire(result);
+        Assert.Contains("\"seenNotListed\":[{\"name\":\"Visitor24\",\"lastSeen\":", wire);
+        Assert.DoesNotContain(DjKey, wire);
+        Assert.DoesNotContain(GuestKey, wire);
+
+        // Once a seen name is added as a user, it leaves this list.
+        Assert.Equal(201, Status(rig.Controller.AddUser(new AdminNewUser { Name = "visitor24", Key = KazKey })));
+        Assert.DoesNotContain(ListUsers(rig.Controller).SeenNotListed, s => s.Name == "Visitor24");
+        Assert.Equal("Visitor4", ListUsers(rig.Controller).SeenNotListed.Last().Name);
+    }
+
+    [Fact]
     public void Add_rename_flag_replace_key_and_revoke_a_user()
     {
         var rig = Make();

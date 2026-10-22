@@ -75,7 +75,22 @@ namespace gamecontroller.Controllers
 			AdminRefusal? refusal = _writer.Read(out UserFileView? view);
 			if (refusal != null) return Refused(refusal);
 			// No file: the game server lets anyone join, so keys are not required, whatever the default says.
-			return Ok(new AdminUsers(listExists && view!.RequireKeys, view!.Users.Select(Shown).ToList(), listExists));
+			return Ok(new AdminUsers(listExists && view!.RequireKeys, view!.Users.Select(Shown).ToList(), listExists, SeenNotListed(view)));
+		}
+
+		public const int SeenNotListedMax = 20;
+
+		// Names that joined a game lately but match no user (any case), newest first: what the owner
+		// needs to confirm the real name of a key brought over from the old key files. Names only.
+		private List<AdminSeenName> SeenNotListed(UserFileView view)
+		{
+			var listed = view.Users.Select(u => u.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+			return _seen.All()
+				.Where(s => !listed.Contains(s.Name))
+				.OrderByDescending(s => s.When)
+				.Take(SeenNotListedMax)
+				.Select(s => new AdminSeenName(s.Name, s.When))
+				.ToList();
 		}
 
 		[HttpGet("users/{name}/key")]
@@ -220,8 +235,11 @@ namespace gamecontroller.Controllers
 	public sealed record AdminUser(string Name, bool CanCreateGames, bool ConfirmName, DateTime? Added, DateTime? LastSeen);
 
 	// UserListExists: false when there is no user list file yet, so anyone can join; the first user
-	// added starts the list.
-	public sealed record AdminUsers(bool RequireKeys, IReadOnlyList<AdminUser> Users, bool UserListExists);
+	// added starts the list. SeenNotListed: names seen in games lately that match no user, newest first.
+	public sealed record AdminUsers(bool RequireKeys, IReadOnlyList<AdminUser> Users, bool UserListExists,
+		IReadOnlyList<AdminSeenName> SeenNotListed);
+
+	public sealed record AdminSeenName(string Name, DateTime LastSeen);
 
 	public sealed record AdminKeyReply(string Key);
 
