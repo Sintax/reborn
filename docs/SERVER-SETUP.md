@@ -98,6 +98,60 @@ name with `user rename <old> <new>`; after that the player's `reborn-player.txt`
 The timeouts are `"RequestedGame": { "NoJoinSeconds": 180, "EmptySeconds": 60 }` in the matchmaking
 `appsettings.json`. `matchmaking.log` records which player started each game.
 
+## Control Panel
+
+The Control Panel is a window that shows you what your server is doing and lets you change
+things without editing any files. It replaces most of the `python -m tools.vm user ...`
+commands above.
+
+**It only works on the server machine itself.** Open it over Remote Desktop, on the rented
+machine. It will not work from your own PC, because it talks to the matchmaking service that runs
+on the server.
+
+**To open it,** double-click the **Reborn Control Panel** icon on the server's desktop. The
+update puts the icon there the first time it installs the panel. If you can't see it, open
+`Binaries\Win64\ControlPanel\ControlPanel.exe`. **Close the panel before you run an update.**
+Windows cannot replace a program while it is open, and the update will tell you to close it.
+
+**The top of the window** shows:
+
+- the server's address. Press **Copy** to put it on the clipboard and send it to a friend;
+- a green light when matchmaking is running, and a red one when it is not. When it is not,
+  press **Start matchmaking** in the yellow bar;
+- how many games are running, and a memory estimate for them.
+
+**The tabs:**
+
+- **Live games.** Every game running now, and who is playing which hero.
+- **Users.** Everyone who may join.
+  - To add someone, type their name, press **Generate Key**, and press **Save**. Tick
+    **Can create games** if they may start games.
+  - On a person's row, **Make zip** builds their personal download. It has the game files and
+    their key in it. **New key** gives them a fresh key. **Remove** takes them off the list.
+  - The row also shows when you made their zip and when they were last seen.
+  - The panel will not let you remove the last person who can start games. That would lock
+    you out.
+- **Ports.** The ports your games use. Each game running at the same time needs its own port.
+  - Add or remove ports, then press **Save**. The change is used the next time matchmaking
+    starts. Press **Restart matchmaking** to use it now. That stops every game that is running.
+  - **Save** asks Windows for permission once, to open the same ports in Windows Firewall.
+    Say yes. This is the normal Windows "Do you want to allow this app to make changes?" box
+    (it is called UAC).
+  - **The hosting company's firewall is separate.** The panel cannot open it. Open the same
+    ports on the company's website, as in the one-time setup above.
+  - The tab also tells you how much memory your ports need. Each game takes about 1.3 GB.
+- **Logs.** The end of the matchmaking log, newest at the bottom. **Refresh** reads it again.
+  **Open game logs folder** opens the folder with the game servers' own logs.
+
+**Where friend zips are saved.** **Make zip** saves the file in
+`Documents\Reborn Friend Zips` on the server machine, named `Reborn-Mod-Installer_<name>.zip`.
+The Users tab has an **Open zip folder** button. Copy the zip off the machine and send it to
+that friend only. It holds their personal key. The panel makes it from
+`reborn-player-installer.zip` in the `Win64` folder, which every update refreshes.
+
+Updates never touch your user list, your "last seen" list, your record of made zips, or the
+panel's access token.
+
 ## Start a game by hand (no matchmaking)
 
 1. Double-click **`StartServer.bat`**.

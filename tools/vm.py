@@ -22,10 +22,15 @@ game's Win64 folder; changes take effect within a second, no restart:
     python -m tools.vm user revoke mike                  # VM: remove them
     python -m tools.vm user require-keys on|off          # VM: off = anyone may join
 
-Only the mod (reborn.dll, reborn.pdb, dxgi.dll, about 11 MB) travels, through the private
-repo Sintax/reborn-builds. The VM checks out the same commit from GitHub, so its scripts and
-matchmaking service match the mod; it builds the service itself with its own .NET. The Steam
-loader files already sit on the VM and never travel. Instructions: docs/TWO-MACHINES.md.
+Only the mod (reborn.dll, reborn.pdb, dxgi.dll, about 11 MB), the Control Panel (ControlPanel.exe,
+about 130 MB, one file) and the player installer zip (reborn-player-installer.zip, about 19 MB)
+travel, through the private repo Sintax/reborn-builds. The update puts the panel in a ControlPanel
+folder in Win64 and the zip in Win64 itself, and makes a "Reborn Control Panel" desktop shortcut
+once; close the panel before updating. The user list, the "last seen" list, the friend-zip record
+and the matchmaking token are never touched. The VM checks out the same commit from GitHub, so
+its scripts and matchmaking service match the mod; it builds the service itself with its own
+.NET. The Steam loader files already sit on the VM and never travel. Instructions:
+docs/TWO-MACHINES.md.
 """
 from __future__ import annotations
 
@@ -37,15 +42,25 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config
+from . import config, package
 
 BUILDS_REPO = "Sintax/reborn-builds"
 MOD_FILES = ("reborn.dll", "reborn.pdb", "dxgi.dll")
+PANEL_EXE = "ControlPanel.exe"                     # a release asset, and the installed file's name
+PLAYER_ZIP_ASSET = "reborn-player-installer.zip"   # the player installer under the name the panel looks for
+PANEL_ASSETS = (PANEL_EXE, PLAYER_ZIP_ASSET)
+PANEL_PROJECT = config.REPO / "controlpanel" / "ControlPanel"
+PANEL_PUBLISH = PANEL_PROJECT / "bin" / "release-publish"                  # bin/ is gitignored
+PLAYER_ZIP = config.REPO / "dist" / "Reborn-Mod-Standard_Installer.zip"    # dist/ is gitignored
+SHORTCUT_NAME = "Reborn Control Panel"
+KEPT_MATCHMAKING_FILES = ("appsettings.json", "admin-token.txt")   # the owner's roster, and the panel's key
+PANEL_OPEN_MESSAGE = "Close the Control Panel and run the update again."
 DEPLOYED_MARK = "reborn-deployed.txt"
 GAMES_URL = "http://localhost:5000/api/games"
 KEY_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789"   # no 0/O/1/I/L: friends may type it
@@ -73,7 +88,6 @@ def git(*args: str, check: bool = True) -> str:
 # --- laptop ---------------------------------------------------------------------------------
 
 def mod_files() -> list[Path]:
-    from . import package
     files = [config.MOD_DLL, config.MOD_DLL.with_suffix(".pdb"), package.DXGI_DLL]
     for f in files:
         if not f.exists():
@@ -89,20 +103,56 @@ def check_pushed() -> str:
     return git("rev-parse", "--short", "HEAD")
 
 
+def publish_panel(out: Path = PANEL_PUBLISH) -> Path:
+    """The Control Panel as one self-contained exe (no .NET needed on the VM). The native WPF files
+    are packed inside it: published without that, the exe alone crashes when it starts."""
+    if out.exists():
+        shutil.rmtree(out)
+    run(["dotnet", "publish", str(PANEL_PROJECT), "-c", "Release", "-r", "win-x64", "--self-contained",
+         "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true",
+         "-o", str(out), "--nologo", "-v", "q"])
+    exe = out / PANEL_EXE
+    if not exe.exists():
+        raise VmError(f"the Control Panel build made no {PANEL_EXE}")
+    return exe
+
+
+def build_player_zip(version: str) -> Path:
+    """The standard player installer (no Steam loader, so it is safe to hand around), built from the
+    DLLs just built. The panel copies it into every friend's personal zip."""
+    return package.make_zip(PLAYER_ZIP, version, with_loader=False)
+
+
+def panel_files() -> list[Path]:
+    exe = PANEL_PUBLISH / PANEL_EXE
+    if not exe.exists():
+        raise VmError(f"{exe} is missing; build first (drop --no-build)")
+    if not PLAYER_ZIP.exists():
+        raise VmError(f"{PLAYER_ZIP} is missing; run the release again without --no-build to make it")
+    return [exe, PLAYER_ZIP]
+
+
 def release(build: bool) -> str:
     version = check_pushed()
     if build:
-        from . import package
         package.build_all()
-    files = [str(f) for f in mod_files()]
+        publish_panel()
+        build_player_zip(version)   # after the mod build: the zip holds those DLLs
+    mod = [str(f) for f in mod_files()]
+    panel_exe, player_zip = panel_files()   # all checked before anything is uploaded
     notes = f"{git('rev-parse', '--abbrev-ref', 'HEAD')}: {git('log', '-1', '--format=%s')}"
     exists = subprocess.run(["gh", "release", "view", version, "--repo", BUILDS_REPO],
                             capture_output=True, text=True).returncode == 0
-    if exists:
-        run(["gh", "release", "upload", version, *files, "--repo", BUILDS_REPO, "--clobber"])
-    else:
-        run(["gh", "release", "create", version, *files, "--repo", BUILDS_REPO,
-             "--title", version, "--notes", notes, "--latest"])
+    with tempfile.TemporaryDirectory() as stage:
+        # the asset takes the file's name, and the built zip has a different one
+        zip_asset = Path(stage) / PLAYER_ZIP_ASSET
+        shutil.copyfile(player_zip, zip_asset)
+        files = [*mod, str(panel_exe), str(zip_asset)]
+        if exists:
+            run(["gh", "release", "upload", version, *files, "--repo", BUILDS_REPO, "--clobber"])
+        else:
+            run(["gh", "release", "create", version, *files, "--repo", BUILDS_REPO,
+                 "--title", version, "--notes", notes, "--latest"])
     return version
 
 
@@ -132,7 +182,7 @@ def download_mod(version: str, scratch: Path) -> Path:
     if scratch.exists():
         shutil.rmtree(scratch)
     run(["gh", "release", "download", version, "--repo", BUILDS_REPO, "--dir", str(scratch)])
-    for name in MOD_FILES:
+    for name in (*MOD_FILES, *PANEL_ASSETS):
         if not (scratch / name).exists():
             raise VmError(f"release {version} has no {name}")
     return scratch
@@ -143,8 +193,67 @@ def install_mod(downloaded: Path, win64: Path) -> None:
         shutil.copy2(downloaded / name, win64 / name)
 
 
+def _replace_with_copy(src: Path, dest: Path) -> None:
+    """Copy beside the target, then swap it in with one rename: never a half-copied file."""
+    tmp = dest.with_name(dest.name + ".new")
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dest)
+
+
+def install_panel(downloaded: Path, win64: Path) -> None:
+    """The Control Panel goes in its own folder; the player installer zip it copies for friends sits
+    beside the game files, where the panel looks for it."""
+    (win64 / "ControlPanel").mkdir(parents=True, exist_ok=True)
+    _replace_with_copy(downloaded / PANEL_EXE, win64 / "ControlPanel" / PANEL_EXE)
+    _replace_with_copy(downloaded / PLAYER_ZIP_ASSET, win64 / PLAYER_ZIP_ASSET)
+
+
+def panel_running() -> bool:
+    """A running exe is locked: it cannot be replaced until the owner closes the panel."""
+    out = run(["tasklist", "/fi", f"imagename eq {PANEL_EXE}", "/nh"], check=False)
+    return PANEL_EXE.lower() in out.lower()
+
+
+def ensure_panel_closed() -> None:
+    if panel_running():
+        raise VmError(PANEL_OPEN_MESSAGE)
+
+
+SHORTCUT_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$dir = $env:RB_SHORTCUT_DIR
+if (-not $dir) { $dir = [Environment]::GetFolderPath('Desktop') }
+$link = Join-Path $dir ($env:RB_SHORTCUT_NAME + '.lnk')
+if (Test-Path -LiteralPath $link) { 'EXISTS'; exit 0 }
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut($link)
+$s.TargetPath = $env:RB_SHORTCUT_TARGET
+$s.WorkingDirectory = $env:RB_SHORTCUT_WORKDIR
+$s.Description = 'Battleborn Reborn Control Panel'
+$s.Save()
+'CREATED'
+"""
+
+
+def ensure_desktop_shortcut(win64: Path, desktop: Path | None = None) -> bool:
+    """Make the 'Reborn Control Panel' shortcut on the desktop of whoever runs this, if it is not
+    there yet (one the owner moved or renamed is never touched, one they deleted comes back).
+    True when made, False when it was already there. Values go in through the environment so no
+    path needs quoting. `desktop` is for tests."""
+    exe = win64 / "ControlPanel" / PANEL_EXE
+    env = {**os.environ, "RB_SHORTCUT_NAME": SHORTCUT_NAME, "RB_SHORTCUT_TARGET": str(exe),
+           "RB_SHORTCUT_WORKDIR": str(exe.parent)}
+    if desktop is not None:
+        env["RB_SHORTCUT_DIR"] = str(desktop)
+    p = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                        "-Command", SHORTCUT_SCRIPT], env=env, capture_output=True, text=True)
+    answer = p.stdout.strip().splitlines()[-1:] or [""]
+    if p.returncode != 0 or answer[0] not in ("CREATED", "EXISTS"):
+        raise VmError(f"could not make the desktop shortcut: {(p.stderr or p.stdout).strip()[:200]}")
+    return answer[0] == "CREATED"
+
+
 def install_scripts(version: str, win64: Path) -> None:
-    from . import package, serverkit
+    from . import serverkit
     for name in serverkit.SCRIPTS:
         (win64 / name).write_bytes(serverkit.script(name, version).encode("utf-8"))
     (win64 / "CollectLogs.bat").write_bytes(serverkit.crlf(package.COLLECT_LOGS_BAT).encode("utf-8"))
@@ -158,14 +267,15 @@ def build_matchmaking(scratch: Path) -> Path:
 
 
 def install_matchmaking(published: Path, win64: Path) -> None:
-    """The owner's appsettings.json (which games run) is kept; a first install gets the repo's."""
+    """The owner's appsettings.json (which games run) and the panel's admin-token.txt are kept, byte
+    for byte; a first install gets the repo's settings and matchmaking makes its own token."""
     dest = win64 / "matchmaking"
-    kept = (dest / "appsettings.json").read_bytes() if (dest / "appsettings.json").exists() else None
+    kept = {name: (dest / name).read_bytes() for name in KEPT_MATCHMAKING_FILES if (dest / name).exists()}
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(published, dest)
-    if kept is not None:
-        (dest / "appsettings.json").write_bytes(kept)
+    for name, data in kept.items():
+        (dest / name).write_bytes(data)
 
 
 def start_matchmaking(win64: Path) -> None:
@@ -209,6 +319,7 @@ def firewall_rules_missing() -> list[str]:
 def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> int:
     if not (win64 / "Battleborn.exe").exists():
         raise VmError(f"Battleborn.exe is not in {win64}; set BB_GAME_DIR to the game folder")
+    ensure_panel_closed()   # first of all: an open panel locks its exe, and nothing must be half-done
     version = version or latest_version()
     if not checked_out:
         checkout(version)
@@ -220,12 +331,19 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     scratch = Path(os.environ.get("TEMP", str(config.REPO))) / "reborn-vm-update"
     downloaded = download_mod(version, scratch / "mod")      # both before stopping anything,
     published = build_matchmaking(scratch / "matchmaking")  # so a failure leaves the server up
+    ensure_panel_closed()   # again: the downloads take a while, and the panel may have been opened since
     stop_servers()
     install_mod(downloaded, win64)
     install_scripts(version, win64)
     install_matchmaking(published, win64)
+    install_panel(downloaded, win64)
     (win64 / DEPLOYED_MARK).write_text(version + "\n", encoding="utf-8")
     print(f"Installed {version} into {win64}")
+    try:
+        if ensure_desktop_shortcut(win64):
+            print(f"Made the '{SHORTCUT_NAME}' shortcut on the desktop")
+    except VmError as e:   # a missing shortcut is not worth a failed update
+        print(f"NOTE: {e}; open {win64 / 'ControlPanel' / PANEL_EXE} instead")
     for rule in firewall_rules_missing():
         print(f"WARNING: Windows Firewall rule '{rule}' is missing; run OpenFirewall.bat once")
     if not start:
