@@ -34,9 +34,30 @@ namespace ControlPanel.Core.ViewModels
 			_control = control;
 			AddPortCommand = new RelayCommand(AddPort);
 			RemovePortCommand = new RelayCommand<int>(RemovePort);
-			SaveCommand = new AsyncRelayCommand(SaveAsync);
-			RestartCommand = new AsyncRelayCommand(RestartAsync);
+			SaveCommand = new AsyncRelayCommand(() => WhileBusy(SaveAsync), () => !Busy);
+			RestartCommand = new AsyncRelayCommand(() => WhileBusy(RestartAsync), () => !Busy);
 			Ports.CollectionChanged += (_, _) => Recompute();
+		}
+
+		// True while Save or Restart is running; neither can start then.
+		private bool _busy;
+		public bool Busy
+		{
+			get => _busy;
+			private set
+			{
+				if (!SetProperty(ref _busy, value)) return;
+				SaveCommand.NotifyCanExecuteChanged();
+				RestartCommand.NotifyCanExecuteChanged();
+			}
+		}
+
+		private async Task WhileBusy(Func<Task> work)
+		{
+			if (Busy) return;   // also when called without asking CanExecute first
+			Busy = true;
+			try { await work(); }
+			finally { Busy = false; }
 		}
 
 		// The list being edited (the saved list until the owner changes it).
@@ -170,19 +191,34 @@ namespace ControlPanel.Core.ViewModels
 
 			// Ports still in use stay open until the restart, so a running game is not cut off.
 			List<int> open = list.Union(_inUse).OrderBy(p => p).ToList();
-			bool firewall = await ApplyFirewallAsync(open);
+			FirewallResult firewall = await ApplyFirewallAsync(open);
 			string restart = RestartNote == null ? "" : " " + RestartNeeded;
-			Message = firewall
-				? $"Saved. Windows Firewall lets players in on UDP {string.Join(", ", open)}.{restart}"
-				: $"Saved, but Windows Firewall was not changed (the administrator question was refused or failed). Press Save again to retry.{restart}";
+			Message = firewall switch
+			{
+				FirewallResult.Changed => $"Saved. Windows Firewall lets players in on UDP {string.Join(", ", open)}.{restart}",
+				FirewallResult.Refused => $"Saved, but Windows Firewall was not changed. Press Save again and answer Yes to let players in on these ports.{restart}",
+				FirewallResult.UnusablePath => $"Saved, but Windows Firewall was not changed: the game folder's path has a % or \" in it, which the firewall command can't take. Add the rule for these ports by hand.{restart}",
+				_ => $"Saved, but the Windows Firewall update failed, so players may not reach the games. Press Save again to retry.{restart}",
+			};
 		}
 
-		// Two runs as administrator: remove the old rule (fails harmlessly if there is none), add the new one.
-		private async Task<bool> ApplyFirewallAsync(IEnumerable<int> ports)
+		private enum FirewallResult { Changed, Refused, Failed, UnusablePath }
+
+		// One run as administrator (one Windows question) that removes the old rule and adds the new
+		// one, so the rule is never left deleted because a second question was refused.
+		private async Task<FirewallResult> ApplyFirewallAsync(IEnumerable<int> ports)
 		{
-			string[] args = Firewall.ArgsFor(ports, _paths.ServerExe);
-			if (await _runner.RunElevated("netsh", args[0]) == -1) return false;   // the owner said no
-			return await _runner.RunElevated("netsh", args[1]) == 0;
+			string? command = Firewall.CommandLine(ports, _paths.ServerExe);
+			if (command == null) return FirewallResult.UnusablePath;
+			int exit;
+			try { exit = await _runner.RunElevated("cmd.exe", command); }
+			catch (Exception) { return FirewallResult.Failed; }   // the runner promises not to throw; just in case
+			return exit switch
+			{
+				0 => FirewallResult.Changed,
+				-1 => FirewallResult.Refused,   // the owner said no: nothing ran
+				_ => FirewallResult.Failed,
+			};
 		}
 
 		private async Task RestartAsync()
@@ -195,10 +231,15 @@ namespace ControlPanel.Core.ViewModels
 					: "Restart matchmaking now? Games come back in a minute or two.";
 			if (!_dialogs.Confirm(question)) return;
 
-			bool narrowed = true;
+			FirewallResult narrowed = FirewallResult.Changed;
 			bool narrow = _inUse.Except(_saved).Any();   // ports no longer used can be closed now
 			var (ok, message) = await _control.RestartAsync(narrow ? async () => narrowed = await ApplyFirewallAsync(_saved) : null);
-			Message = narrowed ? message : message + " Windows Firewall still lets players in on the removed ports; press Save to retry.";
+			Message = narrowed switch
+			{
+				FirewallResult.Changed => message,
+				FirewallResult.Failed => message + " The Windows Firewall update failed; press Save to try again.",
+				_ => message + " Windows Firewall was not changed, so it still lets players in on the removed ports.",
+			};
 			if (ok) _games = Array.Empty<GameInfo>();
 		}
 

@@ -34,7 +34,7 @@ namespace ControlPanel.Tests
 			Assert.True(main.StartMatchmakingCommand.CanExecute(null));
 
 			// Start: launches matchmaking from its folder, and makes Serverborn.exe first (as StartMatchmaking.bat).
-			main.StartMatchmakingCommand.Execute(null);
+			await main.StartMatchmakingCommand.ExecuteAsync(null);
 			Assert.Equal(new[] { t.Paths.MatchmakingExe }, t.Runner.Started);
 			Assert.True(File.Exists(t.Paths.ServerExe));
 			Assert.Contains("Starting matchmaking", main.Banner);
@@ -63,7 +63,7 @@ namespace ControlPanel.Tests
 			// Already running but not answering: no second copy is started.
 			t.Runner.Running.Add("gamecontroller");
 			t.Runner.Started.Clear();
-			main.StartMatchmakingCommand.Execute(null);
+			await main.StartMatchmakingCommand.ExecuteAsync(null);
 			Assert.Empty(t.Runner.Started);
 		}
 
@@ -255,11 +255,16 @@ namespace ControlPanel.Tests
 			FakeApi.Sent put = t.Api.Writes.Single();
 			Assert.Equal("/api/admin/ports", put.Path);
 			Assert.Equal("{\"ports\":[7777]}", put.Body);
-			// The firewall keeps the busy port open until the restart, so the running game is not cut off.
-			Assert.Equal(2, t.Runner.Elevated.Count);
-			Assert.StartsWith("netsh advfirewall firewall delete rule", t.Runner.Elevated[0]);
-			Assert.Contains("localport=7777,7778 ", t.Runner.Elevated[1]);
-			Assert.Contains(t.Paths.ServerExe, t.Runner.Elevated[1]);
+			// One run as administrator does both the delete and the add (one Windows question, and no
+			// chance of the rule being deleted but not added back). The busy port stays open until the
+			// restart, so the running game is not cut off.
+			string run = Assert.Single(t.Runner.Elevated);
+			Assert.Equal("cmd.exe " + Firewall.CommandLine(new[] { 7777, 7778 }, t.Paths.ServerExe), run);
+			Assert.StartsWith("cmd.exe /d /s /c \"netsh advfirewall firewall delete rule", run);
+			Assert.Contains(" & netsh advfirewall firewall add rule", run);
+			Assert.Contains("localport=7777,7778 ", run);
+			Assert.Contains(t.Paths.ServerExe, run);
+			Assert.StartsWith("Saved. Windows Firewall lets players in", ports.Message);
 
 			// Matchmaking now reports the saved list; the panel says a restart is needed.
 			t.Api.Status = new { version = "1.0.7", publicIp = "203.0.113.10", gamePorts = new[] { 7777 }, gamePortsInUse = new[] { 7777, 7778 },
@@ -277,7 +282,98 @@ namespace ControlPanel.Tests
 			await ports.RestartCommand.ExecuteAsync(null);
 			Assert.Equal(new[] { "gamecontroller", "Serverborn" }, t.Runner.Stopped);
 			Assert.Contains(t.Paths.MatchmakingExe, t.Runner.Started);
-			Assert.Contains("localport=7777 ", t.Runner.Elevated.Last());       // the old port is closed now
+			Assert.Contains("localport=7777 ", Assert.Single(t.Runner.Elevated));   // the old port is closed now
+		}
+
+		[Fact]
+		public async Task Save_and_restart_cannot_run_at_the_same_time()
+		{
+			using var t = new TempPanel();
+			MainViewModel main = t.Main();
+			await main.RefreshAsync();
+			PortsViewModel ports = main.Ports;
+			Assert.True(ports.SaveCommand.CanExecute(null));
+			Assert.True(ports.RestartCommand.CanExecute(null));
+
+			// Save waits on the Windows question...
+			t.Runner.ElevatedGate = new TaskCompletionSource<int>();
+			Task saving = ports.SaveCommand.ExecuteAsync(null);
+			Assert.False(saving.IsCompleted);
+			Assert.True(ports.Busy);
+			Assert.False(ports.SaveCommand.CanExecute(null));
+			Assert.False(ports.RestartCommand.CanExecute(null));
+
+			// ...so a restart pressed meanwhile does nothing, not even ask.
+			t.Dialogs.ConfirmAnswer = true;
+			await ports.RestartCommand.ExecuteAsync(null);
+			Assert.Empty(t.Dialogs.Questions);
+			Assert.Empty(t.Runner.Stopped);
+
+			t.Runner.ElevatedGate.SetResult(0);
+			await saving;
+			Assert.False(ports.Busy);
+			Assert.True(ports.SaveCommand.CanExecute(null));
+			Assert.True(ports.RestartCommand.CanExecute(null));
+
+			// And the other way round: a save pressed during a restart does nothing. (The restart closes
+			// a dropped port in the firewall while matchmaking is stopped, and waits on that question.)
+			t.Api.Status = new { version = "1.0.7", publicIp = "203.0.113.10", gamePorts = new[] { 7777 }, gamePortsInUse = new[] { 7777, 7778 },
+				gamesRunning = 0, requireKeys = true, matchmakingStartedUtc = "2026-10-22T11:22:35.06Z" };
+			await main.RefreshAsync();
+			t.Runner.ElevatedGate = new TaskCompletionSource<int>();
+			int writes = t.Api.Writes.Count();
+			Task restarting = ports.RestartCommand.ExecuteAsync(null);
+			Assert.False(restarting.IsCompleted);
+			Assert.True(ports.Busy);
+			Assert.False(ports.SaveCommand.CanExecute(null));
+			await ports.SaveCommand.ExecuteAsync(null);
+			Assert.Equal(writes, t.Api.Writes.Count());
+
+			t.Runner.ElevatedGate.SetResult(0);
+			await restarting;
+			Assert.False(ports.Busy);
+			Assert.Contains(t.Paths.MatchmakingExe, t.Runner.Started);
+		}
+
+		[Fact]
+		public async Task Firewall_messages_say_what_really_happened()
+		{
+			using var t = new TempPanel();
+			MainViewModel main = t.Main();
+			await main.RefreshAsync();
+			PortsViewModel ports = main.Ports;
+
+			t.Runner.ElevatedExitCode = -1;            // the owner said no to Windows
+			await ports.SaveCommand.ExecuteAsync(null);
+			Assert.Contains("Windows Firewall was not changed.", ports.Message);
+
+			t.Runner.ElevatedExitCode = 1;             // netsh failed
+			await ports.SaveCommand.ExecuteAsync(null);
+			Assert.Contains("Windows Firewall update failed", ports.Message);
+			Assert.Contains("Save again", ports.Message);
+			Assert.DoesNotContain("was not changed", ports.Message);
+
+			t.Runner.ElevatedExitCode = 0;
+			await ports.SaveCommand.ExecuteAsync(null);
+			Assert.StartsWith("Saved. Windows Firewall lets players in on UDP 7777, 7778.", ports.Message);
+			Assert.Equal(3, t.Runner.Elevated.Count);  // one Windows question per save
+		}
+
+		[Fact]
+		public async Task Refresh_with_an_older_matchmaking_answer_does_not_throw()
+		{
+			using var t = new TempPanel();
+			t.Api.Status = new { version = "1.0.6", publicIp = "203.0.113.10", gamePorts = new[] { 7777, 7778 }, gamesRunning = 1, requireKeys = true };
+			t.Api.Games = new object[] { new { publicId = "g1", port = 7777, mapMode = (string?)null, players = (object?)null } };
+			t.Api.Users = new { requireKeys = true, users = (object?)null };
+			MainViewModel main = t.Main();
+			await main.RefreshAsync();
+			Assert.True(main.MatchmakingUp);
+			Assert.Equal(new[] { 7777, 7778 }, main.Ports.Ports);
+			Assert.Null(main.Ports.RestartNote);
+			GameRow g = Assert.Single(main.Games.Games);
+			Assert.Empty(g.Players);
+			Assert.Equal(AdminClient.UnreadableMessage, main.Users.Message);
 		}
 
 		[Fact]

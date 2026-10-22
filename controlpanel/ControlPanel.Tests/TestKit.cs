@@ -94,22 +94,40 @@ namespace ControlPanel.Tests
 		public HashSet<string> Running { get; } = new(StringComparer.OrdinalIgnoreCase);
 		public int ElevatedExitCode { get; set; }
 
+		// When set, RunElevated waits for this instead of answering at once.
+		public TaskCompletionSource<int>? ElevatedGate { get; set; }
+
+		// Breaks the "never throws" promise, as a buggy window project might.
+		public bool Throws { get; set; }
+
+		private void MaybeThrow()
+		{
+			if (Throws) throw new System.ComponentModel.Win32Exception(5, "Access is denied");
+		}
+
 		public bool Start(string exe, string args, string workingDir)
 		{
+			MaybeThrow();
 			Started.Add(exe);
 			return true;
 		}
 
 		public Task<int> RunElevated(string exe, string args)
 		{
+			MaybeThrow();
 			Elevated.Add(exe + " " + args);
-			return Task.FromResult(ElevatedExitCode);
+			return ElevatedGate?.Task ?? Task.FromResult(ElevatedExitCode);
 		}
 
-		public bool IsRunning(string processName) => Running.Contains(processName);
+		public bool IsRunning(string processName)
+		{
+			MaybeThrow();
+			return Running.Contains(processName);
+		}
 
 		public void StopAll(string processName)
 		{
+			MaybeThrow();
 			Stopped.Add(processName);
 			Running.Remove(processName);
 		}

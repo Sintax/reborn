@@ -66,6 +66,9 @@ namespace ControlPanel.Core.ViewModels
 
 		public IRelayCommand OpenZipFolderCommand { get; }
 
+		// The server's version (from matchmaking), put on top of the guide in each friend zip.
+		internal string ServerVersion { get; set; } = "";
+
 		// --- loading ---
 
 		public async Task ReloadAsync()
@@ -229,7 +232,7 @@ namespace ControlPanel.Core.ViewModels
 			DateTime now = _clock.GetUtcNow().UtcDateTime;
 			// Off the window's thread: the installer zip can be large.
 			var (ok, message, path) = await Task.Run(() =>
-				FriendZip.Make(_paths.PlayerInstallerZip, name, key.Value!, _paths.ZipOutputDir, _paths.ZipRecordFile, now));
+				FriendZip.Make(_paths.PlayerInstallerZip, name, key.Value!, _paths.ZipOutputDir, _paths.ZipRecordFile, now, ServerVersion));
 			Message = message;
 			if (!ok) return;
 			LastZipPath = path;

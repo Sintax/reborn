@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using ControlPanel.Core;
+using ControlPanel.Core.ViewModels;
 
 namespace ControlPanel.Tests
 {
@@ -75,19 +76,31 @@ namespace ControlPanel.Tests
 			// python -c "from tools import package; print(package.friend_steamid('Kaz'))"
 			Assert.Equal(76561197960325377UL, FriendZip.SteamId("Kaz"));
 
-			var (ok, message, path) = FriendZip.Make(baseZip, "Kaz", key, outDir, record, new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc));
+			var (ok, message, path) = FriendZip.Make(baseZip, "Kaz", key, outDir, record, new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc), "1.0.7");
 			Assert.True(ok, message);
 			Assert.Equal(Path.Combine(outDir, "Reborn-Mod-Installer_Kaz.zip"), path);
 			Assert.DoesNotContain(key, message);
 			Assert.Empty(Directory.GetFiles(outDir, "*.tmp"));
+
+			// The friend's guide, made as tools/package.py friend_readme does: docs/FRIEND-SETUP.md with
+			// {NAME} filled in, CRLF line ends, a "Battleborn Reborn <version>" line on top, UTF-8 without BOM.
+			string guideText = File.ReadAllText(Path.Combine(RepoRoot(), "docs", "FRIEND-SETUP.md")).Replace("\r\n", "\n");
+			byte[] guide = new UTF8Encoding(false).GetBytes("Battleborn Reborn 1.0.7\r\n\r\n" + guideText.Replace("{NAME}", "Kaz").Replace("\n", "\r\n"));
 
 			using (var zip = ZipFile.OpenRead(path!))
 			{
 				var names = zip.Entries.Select(e => e.FullName).ToList();
 				// every base entry once, plus nothing else; same-named entries were replaced, not doubled
 				Assert.Equal(new[] { "Install.bat", "Install.ps1", "README.txt", "files/reborn.dll", "files/steam_settings/configs.main.ini",
-					"files/steam_settings/configs.user.ini", "files/reborn-key.txt", "files/reborn-player.txt" }.OrderBy(n => n),
+					"files/steam_settings/configs.user.ini", "files/reborn-key.txt", "files/reborn-player.txt", "README-Kaz.txt" }.OrderBy(n => n),
 					names.OrderBy(n => n));
+				using (var s = zip.GetEntry("README-Kaz.txt")!.Open())
+				using (var m = new MemoryStream())
+				{
+					s.CopyTo(m);
+					Assert.Equal(guide, m.ToArray());
+				}
+				Assert.Contains("# Battleborn Reborn: setup for Kaz\r\n", Text(zip, "README-Kaz.txt"));
 				Assert.Equal("[user::general]\r\naccount_name=Kaz\r\naccount_steamid=76561197960325377\r\nlanguage=english\r\n",
 					Text(zip, "files/steam_settings/configs.user.ini"));
 				Assert.Equal(key + "\r\n", Text(zip, "files/reborn-key.txt"));
@@ -191,6 +204,17 @@ namespace ControlPanel.Tests
 			Assert.Equal(add.Replace("%~dp0Serverborn.exe", exe).Replace("localport=7777-7779", "localport=7777,7778,7780")["netsh ".Length..], args[1]);
 			Assert.Equal("advfirewall firewall add rule name=\"Battleborn Reborn server\" dir=in action=allow profile=any program=\""
 				+ exe + "\" protocol=UDP localport=7777,7778,7780 edge=no", args[1]);
+
+			// Both in one run as administrator (one Windows question): cmd /s strips only the outer quotes,
+			// so the quoted rule name and program path reach netsh as they are; & runs the add after the delete.
+			string spaced = @"C:\Program Files (x86)\Steam\steamapps\common\Battleborn\Binaries\Win64\Serverborn.exe";
+			string[] spacedArgs = Firewall.ArgsFor(new[] { 7777 }, spaced);
+			Assert.Equal("/d /s /c \"netsh " + spacedArgs[0] + " & netsh " + spacedArgs[1] + "\"", Firewall.CommandLine(new[] { 7777 }, spaced));
+			Assert.Contains("program=\"" + spaced + "\"", Firewall.CommandLine(new[] { 7777 }, spaced));
+
+			// Characters cmd would still act on inside quotes are refused rather than run.
+			Assert.Null(Firewall.CommandLine(new[] { 7777 }, @"C:\Games\100%\Serverborn.exe"));
+			Assert.Null(Firewall.CommandLine(new[] { 7777 }, "C:\\Games\\a\"b\\Serverborn.exe"));
 		}
 
 		[Fact]
@@ -240,6 +264,86 @@ namespace ControlPanel.Tests
 			t.Api.Answer = null;
 			await client.GetKeyAsync("a/b c");
 			Assert.Equal("/api/admin/users/a%2Fb%20c/key", t.Api.Requests.Last().Path);
+		}
+
+		[Fact]
+		public async Task Answers_from_another_matchmaking_version_do_not_throw()
+		{
+			using var t = new TempPanel();
+			AdminClient client = t.Client();
+
+			// A matchmaking from before gamePortsInUse: the ports in use are taken to be the saved ones.
+			t.Api.Status = new { version = (string?)null, publicIp = "203.0.113.10", gamePorts = new[] { 7777 }, gamesRunning = 0, requireKeys = true };
+			var status = await client.GetStatusAsync();
+			Assert.True(status.Ok, status.Message);
+			Assert.Equal(new[] { 7777 }, status.Value!.GamePortsInUse);
+			Assert.Equal("", status.Value.Version);
+
+			// No port list at all: unreadable, not a crash.
+			t.Api.Status = new { version = "1.0.7", publicIp = "203.0.113.10" };
+			status = await client.GetStatusAsync();
+			Assert.False(status.Ok);
+			Assert.Equal(AdminClient.UnreadableMessage, status.Message);
+
+			// Missing strings and lists inside games are filled in; a null game is dropped.
+			t.Api.Games = new object?[]
+			{
+				new { publicId = "g1", port = 7777 },
+				null,
+				new { publicId = "g2", name = "x", mapMode = (string?)null, players = new object?[] { new { team = 0 }, null } },
+			};
+			var games = await client.GetGamesAsync();
+			Assert.True(games.Ok, games.Message);
+			Assert.Equal(2, games.Value!.Count);
+			Assert.All(games.Value, g =>
+			{
+				Assert.NotNull(g.Name);
+				Assert.NotNull(g.MapMode);
+				Assert.NotNull(g.DraftStyle);
+				Assert.NotNull(g.Players);
+			});
+			PlayerInfo p = Assert.Single(games.Value[1].Players!);
+			Assert.Equal("", p.Name);
+			Assert.Equal("", p.Hero);
+
+			t.Api.Games = new { notAList = true };
+			Assert.Equal(AdminClient.UnreadableMessage, (await client.GetGamesAsync()).Message);
+
+			// No user list: unreadable. A user without a name is dropped.
+			t.Api.Users = new { requireKeys = true };
+			Assert.Equal(AdminClient.UnreadableMessage, (await client.GetUsersAsync()).Message);
+			t.Api.Users = new { requireKeys = true, users = new object?[] { new { name = "Kaz" }, new { canCreateGames = true }, null } };
+			var users = await client.GetUsersAsync();
+			Assert.True(users.Ok, users.Message);
+			Assert.Equal("Kaz", Assert.Single(users.Value!.Users).Name);
+		}
+
+		[Fact]
+		public async Task A_failing_process_runner_gives_a_message_not_an_exception()
+		{
+			using var t = new TempPanel();
+			t.Runner.Throws = true;
+			var control = new MatchmakingControl(t.Paths, t.Runner);
+
+			var (ok, message) = await control.StartAsync();
+			Assert.False(ok);
+			Assert.StartsWith("Could not start matchmaking: ", message);
+			Assert.Contains("Access is denied", message);
+
+			(ok, message) = await control.RestartAsync();
+			Assert.False(ok);
+			Assert.StartsWith("Could not stop matchmaking: ", message);
+
+			// Through the window's buttons too.
+			MainViewModel main = t.Main();
+			await main.StartMatchmakingCommand.ExecuteAsync(null);
+			Assert.StartsWith("Could not start matchmaking: ", main.Banner);
+			await main.RefreshAsync();
+			t.Dialogs.ConfirmAnswer = true;
+			await main.Ports.RestartCommand.ExecuteAsync(null);
+			Assert.StartsWith("Could not stop matchmaking: ", main.Ports.Message);
+			await main.Ports.SaveCommand.ExecuteAsync(null);    // the firewall step throws
+			Assert.Contains("firewall", main.Ports.Message, StringComparison.OrdinalIgnoreCase);
 		}
 
 		[Fact]

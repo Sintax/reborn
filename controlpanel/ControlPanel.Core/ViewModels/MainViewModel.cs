@@ -33,7 +33,7 @@ namespace ControlPanel.Core.ViewModels
 			Ports = new PortsViewModel(client, paths, runner, dialogs, memory, _control);
 			Logs = new LogsViewModel(paths, runner);
 			CopyAddressCommand = new RelayCommand(CopyAddress, () => _publicIp != null);
-			StartMatchmakingCommand = new RelayCommand(StartMatchmaking, () => !MatchmakingUp);
+			StartMatchmakingCommand = new AsyncRelayCommand(StartMatchmakingAsync, () => !MatchmakingUp);
 		}
 
 		public GamesViewModel Games { get; }
@@ -68,7 +68,7 @@ namespace ControlPanel.Core.ViewModels
 		public string StatusLine { get => _statusLine; private set => SetProperty(ref _statusLine, value); }
 
 		public IRelayCommand CopyAddressCommand { get; }
-		public IRelayCommand StartMatchmakingCommand { get; }
+		public IAsyncRelayCommand StartMatchmakingCommand { get; }
 
 		public async Task RefreshAsync()
 		{
@@ -98,11 +98,14 @@ namespace ControlPanel.Core.ViewModels
 				_startAskedUtc = null;
 				Banner = null;
 				Version = s.Version == "" ? "unknown" : s.Version;
+				Users.ServerVersion = s.Version;
 				_publicIp = string.IsNullOrEmpty(s.PublicIp) ? null : s.PublicIp;
 				ServerAddress = _publicIp == null ? "Finding this server's address..." : $"{_publicIp}:{_port}";
 				CopyAddressCommand.NotifyCanExecuteChanged();
-				DateTime started = TimeZoneInfo.ConvertTimeFromUtc(Display.Utc(s.MatchmakingStartedUtc), _clock.LocalTimeZone);
-				StatusLine = $"{(s.GamesRunning == 1 ? "1 game" : s.GamesRunning + " games")} running. Matchmaking started {started:yyyy-MM-dd HH:mm}.";
+				string running = s.GamesRunning == 1 ? "1 game" : s.GamesRunning + " games";
+				StatusLine = s.MatchmakingStartedUtc == default   // an older matchmaking that does not say
+					? $"{running} running."
+					: $"{running} running. Matchmaking started {TimeZoneInfo.ConvertTimeFromUtc(Display.Utc(s.MatchmakingStartedUtc), _clock.LocalTimeZone):yyyy-MM-dd HH:mm}.";
 				Ports.Update(s);
 
 				var games = await _client.GetGamesAsync();
@@ -133,9 +136,9 @@ namespace ControlPanel.Core.ViewModels
 			}
 		}
 
-		private void StartMatchmaking()
+		private async Task StartMatchmakingAsync()
 		{
-			var (ok, message) = _control.Start();
+			var (ok, message) = await _control.StartAsync();
 			if (ok) _startAskedUtc = _clock.GetUtcNow().UtcDateTime;
 			Banner = message;
 		}

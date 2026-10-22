@@ -17,11 +17,25 @@ namespace ControlPanel.Core
 
 		public static string FileName(string name) => $"Reborn-Mod-Installer_{name}.zip";
 
+		public static string ReadmeName(string name) => $"README-{name}.txt";
+
+		// The friend's guide, as tools/package.py friend_readme makes it: docs/FRIEND-SETUP.md (built
+		// into this program) with {NAME} filled in, CRLF line ends and the version on top.
+		public static string Readme(string name, string version)
+		{
+			using Stream stream = typeof(FriendZip).Assembly.GetManifestResourceStream("FRIEND-SETUP.md")
+				?? throw new InvalidOperationException("FRIEND-SETUP.md is missing from the program");
+			using var reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false);
+			string doc = reader.ReadToEnd().Replace("\r\n", "\n").Replace("{NAME}", name);   // Python reads it with \n line ends
+			return $"Battleborn Reborn {version}\r\n\r\n" + doc.Replace("\n", "\r\n");
+		}
+
 		// Writes <outDir>\Reborn-Mod-Installer_<name>.zip through a .tmp file, so a failure never
-		// leaves a half-written zip, then records the date in recordFile (when given). The message
-		// is plain text for the owner and never contains the key.
+		// leaves a half-written zip, then records the date in recordFile (when given). version goes on
+		// top of the guide (the server's version, as matchmaking reports it). The message is plain
+		// text for the owner and never contains the key.
 		public static (bool ok, string message, string? path) Make(string baseZip, string name, string key, string outDir,
-			string? recordFile = null, DateTime? nowUtc = null)
+			string? recordFile = null, DateTime? nowUtc = null, string version = "")
 		{
 			if (!Keys.ValidName(name)) return (false, Keys.BadName, null);
 			if (!Keys.ValidKey(key)) return (false, "That user's key isn't valid. Give them a new key first.", null);
@@ -34,6 +48,7 @@ namespace ControlPanel.Core
 					$"[user::general]\r\naccount_name={name}\r\naccount_steamid={SteamId(name)}\r\nlanguage=english\r\n",
 				["files/reborn-key.txt"] = key + "\r\n",
 				["files/reborn-player.txt"] = name + "\r\n",
+				[ReadmeName(name)] = Readme(name, version),
 			};
 
 			string path = Path.Combine(outDir, FileName(name));

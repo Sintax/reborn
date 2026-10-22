@@ -81,7 +81,7 @@ namespace ControlPanel.Core.ViewModels
 			Map = g.MapMode;
 			Mode = ModeText(g);
 			Port = g.Port;
-			RunningFor = Display.Duration(nowUtc - Display.Utc(g.StartedUtc));
+			RunningFor = g.StartedUtc == default ? "" : Display.Duration(nowUtc - Display.Utc(g.StartedUtc));
 			StartedBy = g.StartedBy ?? "";
 			State = g.MatchStarted ? "Playing" : "Waiting for players";
 			var players = (g.Players ?? Array.Empty<PlayerInfo>()).Select(p => new PlayerRow(p)).ToList();

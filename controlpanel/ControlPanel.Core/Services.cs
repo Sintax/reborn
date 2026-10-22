@@ -8,6 +8,8 @@ namespace ControlPanel.Core
 		void SetText(string text);
 	}
 
+	// Every method must never throw: report failure through the return value (false, -1) instead.
+	// (The panel also catches anything that slips through and shows it as a plain message.)
 	public interface IProcessRunner
 	{
 		// Starts a program (minimized, in workingDir) without waiting. False if it could not start.
@@ -23,7 +25,7 @@ namespace ControlPanel.Core
 		// Stops every process by this name (no ".exe"), as taskkill /f does.
 		void StopAll(string processName);
 
-		// Opens a folder in File Explorer.
+		// Opens a folder in File Explorer (does nothing if it can't).
 		void OpenFolder(string path);
 	}
 

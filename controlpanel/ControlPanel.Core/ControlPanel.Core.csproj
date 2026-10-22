@@ -13,4 +13,9 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 
+  <!-- The friend's guide in each friend zip (README-<name>.txt), as tools/package.py uses it. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\docs\FRIEND-SETUP.md" LogicalName="FRIEND-SETUP.md" Link="FRIEND-SETUP.md" />
+  </ItemGroup>
+
 </Project>
