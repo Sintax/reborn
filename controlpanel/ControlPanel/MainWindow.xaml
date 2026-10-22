@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:ControlPanel.Views"
         Title="Battleborn Reborn Control Panel"
-        Width="1100" Height="700" MinWidth="760" MinHeight="480"
+        Width="1100" Height="860" MinWidth="760" MinHeight="480"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="20,12,20,16">
         <Grid.RowDefinitions>
