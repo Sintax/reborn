@@ -116,7 +116,8 @@ Windows cannot replace a program while it is open, and the update will tell you 
 
 **The top of the window** shows:
 
-- the server's address. Press **Copy** to put it on the clipboard and send it to a friend;
+- the server's address, with a **Copy** button. Friends don't need it: their zip already knows
+  where the server is;
 - a green light when matchmaking is running, and a red one when it is not. When it is not,
   press **Start matchmaking** in the yellow bar;
 - how many games are running, and a memory estimate for them.
@@ -132,6 +133,20 @@ Windows cannot replace a program while it is open, and the update will tell you 
   - The row also shows when you made their zip and when they were last seen.
   - The panel will not let you remove the last person who can start games. That would lock
     you out.
+  - **Rename** changes a person's name at once. They then need a new zip with the new name.
+    Until they install it, they can't join. If they are in a game, they are dropped.
+  - **Confirm name** shows instead of Rename for people brought over from the old key files.
+    Their row says "confirm name". The name stored for them is only a label. Type the name they
+    play with, exactly as it appears in the game. If it doesn't match, they are dropped and can't
+    join until you fix it. **Make zip** stays off on their row until you confirm the name.
+  - **Seen recently but not on the list** shows names that joined a game lately but match
+    nobody on the list, newest first. Look here for a person's real name before you confirm it.
+  - **Require keys to join** is the switch for the whole server. On: a player needs the key in
+    their zip. Off: a name is enough, and anyone who finds the server can join. The panel asks
+    before you change it. Turning it on drops players without a key from their games.
+  - **No user list yet?** Then anyone can join, and the Users tab says so. The first person you
+    add starts the list. From then on, only people on the list can join. So add yourself first,
+    with **Can create games** ticked.
 - **Ports.** The ports your games use. Each game running at the same time needs its own port.
   - Add or remove ports, then press **Save**. The change is used the next time matchmaking
     starts. Press **Restart matchmaking** to use it now. That stops every game that is running.
@@ -147,7 +162,8 @@ Windows cannot replace a program while it is open, and the update will tell you 
 **Where friend zips are saved.** **Make zip** saves the file in
 `Documents\Reborn Friend Zips` on the server machine, named `Reborn-Mod-Installer_<name>.zip`.
 The Users tab has an **Open zip folder** button. Copy the zip off the machine and send it to
-that friend only. It holds their personal key. The panel makes it from
+that friend only. It holds their personal key and the Steam loader, so never post it anywhere
+public. The panel makes it from
 `reborn-player-installer.zip` in the game's `Binaries\Win64` folder, which every update refreshes.
 
 Updates never touch your user list, your "last seen" list, your record of made zips, or the
