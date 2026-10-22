@@ -1,3 +1,4 @@
+using gamecontroller.Controllers;
 using gamecontroller.Models;
 using gamecontroller.Services;
 using gamecontroller.Singletons;
@@ -41,8 +42,20 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddHostedService<RosterService>();
 
+// The local admin API for the Control Panel (Controllers/Admin.cs): same machine only, with the token
+// in admin-token.txt next to the service (made on the first start, then kept). Ports are saved into
+// this service's own appsettings.json for the next start.
+builder.Services.AddSingleton(new ServiceStarted(DateTime.UtcNow));
+builder.Services.AddSingleton(_ => AdminToken.LoadOrCreate(Path.Combine(AppContext.BaseDirectory, AdminToken.FileName)));
+builder.Services.AddSingleton<AdminGuard>();
+builder.Services.AddSingleton(_ => new UserListWriter(builder.Configuration));
+builder.Services.AddSingleton(_ => new SettingsWriter(Path.Combine(AppContext.BaseDirectory, "appsettings.json")));
+
 var app = builder.Build();
 started = true;
+
+// Make the admin token file now, not on the panel's first call (it is never logged).
+app.Services.GetRequiredService<AdminToken>();
 
 // First start after the switch from StartKeys: the keys become users. Never overwrites a user list.
 UserList.Migrate(app.Configuration, UserList.PathFor(app.Configuration), app.Services.GetRequiredService<ILoggerFactory>().CreateLogger<UserList>());
