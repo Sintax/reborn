@@ -106,8 +106,14 @@ bool Sha256Raw(std::string_view bytes, unsigned char out[32]) {
     return ok;
 }
 
+// Replaces `to` if it exists.
 bool Rename(const fs::path& from, const fs::path& to) {
     return MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
+// Fails if `to` exists, so it can never overwrite a file that was not backed up.
+bool RenameNoReplace(const fs::path& from, const fs::path& to) {
+    return MoveFileExW(from.c_str(), to.c_str(), 0) != 0;
 }
 
 void RemoveQuietly(const fs::path& p) {
@@ -129,6 +135,13 @@ fs::path WithSuffix(const fs::path& dir, const std::string& name, const char* su
 
 constexpr const char* kNothingChanged = "The update could not be installed. Nothing was changed.";
 constexpr const char* kDamaged = "The update download was damaged. Nothing was changed. Please try again later.";
+constexpr const char* kInUse = "The update could not be installed because a game file is in use. "
+                               "Nothing was changed. Please try again after restarting the game.";
+constexpr const char* kNotPutBack = "The update could not be installed, and the old files could not all be put back. "
+                                    "Please reinstall Battleborn Reborn.";
+
+// Notes longer than this are refused (they are shown in a small in-game box).
+constexpr size_t kMaxNotesBytes = 4096;
 
 }  // namespace
 
@@ -152,7 +165,10 @@ std::optional<Manifest> ParseManifest(std::string_view text) {
         int64_t b = build->get<int64_t>();
         if (b < 1 || b > INT32_MAX) return std::nullopt;
         m.build = int(b);
+        // The version text must be exactly what tools/version.py makes for this build ("1.0.N").
+        if (m.version != "1.0." + std::to_string(m.build)) return std::nullopt;
         m.notes = notes->get<std::string>();
+        if (m.notes.size() > kMaxNotesBytes) return std::nullopt;
 
         std::set<std::string> seen;
         for (const json& f : *files) {
@@ -230,6 +246,17 @@ bool ShouldOffer(const Manifest& m, int currentBuild) {
 
 InstallOutcome InstallFiles(const fs::path& win64, const Manifest& m,
                             const std::map<std::string, std::string>& bytesByName) {
+    // Every path is built before any file moves, so the swap and undo below never allocate.
+    struct Slot {
+        fs::path cur, old, neu;
+        const std::string* bytes = nullptr;
+        bool movedOld = false;    // cur -> old done
+        bool placedNew = false;   // neu -> cur done
+    };
+    std::vector<Slot> slots;
+    auto removeNew = [&slots] {
+        for (const Slot& s : slots) RemoveQuietly(s.neu);
+    };
     try {
         // 1. Check everything before touching the folder.
         if (m.files.empty()) return {false, kNothingChanged};
@@ -240,62 +267,66 @@ InstallOutcome InstallFiles(const fs::path& win64, const Manifest& m,
             if (it == bytesByName.end()) return {false, kDamaged};
             if (it->second.size() != f.size || Sha256Hex(it->second) != f.sha256) return {false, kDamaged};
         }
+        slots.reserve(m.files.size());
+        for (const FileEntry& f : m.files) {
+            Slot s;
+            s.cur = win64 / f.name;
+            s.old = WithSuffix(win64, f.name, ".old");
+            s.neu = WithSuffix(win64, f.name, ".new");
+            s.bytes = &bytesByName.at(f.name);
+            slots.push_back(std::move(s));
+        }
 
         // 2. Write every <name>.new.
-        auto removeNew = [&] {
-            for (const FileEntry& f : m.files) RemoveQuietly(WithSuffix(win64, f.name, ".new"));
-        };
-        for (const FileEntry& f : m.files) {
-            if (!WriteFileBytes(WithSuffix(win64, f.name, ".new"), bytesByName.at(f.name))) {
+        for (const Slot& s : slots) {
+            if (!WriteFileBytes(s.neu, *s.bytes)) {
                 removeNew();
                 return {false, kNothingChanged};
             }
         }
-
-        // 3. Swap each file: <name> -> <name>.old, <name>.new -> <name>.
-        struct Step { const FileEntry* file; bool movedOld; bool placedNew; };
-        std::vector<Step> steps;
-        steps.reserve(m.files.size());   // no allocation once files start moving
-        bool failed = false;
-        for (const FileEntry& f : m.files) {
-            fs::path cur = win64 / f.name;
-            Step s{&f, false, false};
-            std::error_code ec;
-            if (fs::exists(cur, ec)) {
-                if (!Rename(cur, WithSuffix(win64, f.name, ".old"))) { failed = true; steps.push_back(s); break; }
-                s.movedOld = true;
-            }
-            if (!Rename(WithSuffix(win64, f.name, ".new"), cur)) { failed = true; steps.push_back(s); break; }
-            s.placedNew = true;
-            steps.push_back(s);
-        }
-        if (!failed) return {true, ""};
-
-        // 4. Put back what was already swapped, newest first.
-        bool restored = true;
-        for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
-            fs::path cur = win64 / it->file->name;
-            if (it->movedOld) {
-                if (!Rename(WithSuffix(win64, it->file->name, ".old"), cur)) restored = false;
-            } else if (it->placedNew) {
-                std::error_code ec;
-                if (!fs::remove(cur, ec)) restored = false;
-            }
-        }
-        removeNew();
-        if (!restored)
-            return {false, "The update could not be installed, and the old files could not all be put back. "
-                           "Please reinstall Battleborn Reborn."};
-        return {false, "The update could not be installed because a game file is in use. "
-                       "Nothing was changed. Please try again after restarting the game."};
     } catch (...) {
+        try { removeNew(); } catch (...) {}
         return {false, kNothingChanged};
+    }
+
+    // 3. Swap each file: <name> -> <name>.old, then <name>.new -> <name>. A file whose existence
+    // cannot be checked counts as a failure, and the second rename never replaces anything.
+    bool failed = false;
+    for (Slot& s : slots) {
+        std::error_code ec;
+        bool exists = fs::exists(s.cur, ec);
+        if (ec) { failed = true; break; }
+        if (exists) {
+            if (!Rename(s.cur, s.old)) { failed = true; break; }
+            s.movedOld = true;
+        }
+        if (!RenameNoReplace(s.neu, s.cur)) { failed = true; break; }
+        s.placedNew = true;
+    }
+    if (!failed) return {true, ""};
+
+    // 4. Put back what was already swapped, newest first.
+    bool restored = true;
+    for (auto it = slots.rbegin(); it != slots.rend(); ++it) {
+        if (it->movedOld) {
+            if (!Rename(it->old, it->cur)) restored = false;   // replaces the new file, if placed
+        } else if (it->placedNew) {
+            std::error_code ec;
+            if (!fs::remove(it->cur, ec)) restored = false;
+        }
+    }
+    removeNew();
+    try {
+        return {false, restored ? kInUse : kNotPutBack};
+    } catch (...) {
+        return {false, std::string()};   // out of memory building the message; still a failure
     }
 }
 
 void CleanupOld(const fs::path& win64) {
     try {
-        for (const char* name : {"reborn.dll.old", "dxgi.dll.old", "reborn.dll.bad"}) RemoveQuietly(win64 / name);
+        for (const char* name : {"reborn.dll.old", "dxgi.dll.old", "reborn.dll.bad", "reborn.dll.new", "dxgi.dll.new"})
+            RemoveQuietly(win64 / name);
     } catch (...) {
     }
 }

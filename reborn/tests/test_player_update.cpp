@@ -2,6 +2,8 @@
 #include "../PlayerUpdate.hpp"
 
 #include <windows.h>
+#include <sddl.h>
+#pragma comment(lib, "advapi32")
 
 #include <cstdio>
 #include <filesystem>
@@ -133,6 +135,23 @@ static void manifest_rejects_bad_fields() {
     CHECK(ParseManifest(R"({"version":"1.0.2","build":2,"notes":"","files":[)" + Entry("reborn.dll") + "]}").has_value());
 }
 
+static void manifest_version_matches_build_and_notes_are_short() {
+    using PlayerUpdate::ParseManifest;
+    auto with = [](const std::string& version, int build, const std::string& notes) {
+        return R"({"version":")" + version + R"(","build":)" + std::to_string(build) + R"(,"notes":")" + notes +
+               R"(","files":[)" + Entry("reborn.dll") + "]}";
+    };
+    CHECK(ParseManifest(with("1.0.2", 2, "")).has_value());
+    CHECK(ParseManifest(with("1.0.17", 17, "")).has_value());
+    CHECK(!ParseManifest(with("1.0.3", 2, "")).has_value());    // version and build disagree
+    CHECK(!ParseManifest(with("1.0.02", 2, "")).has_value());
+    CHECK(!ParseManifest(with("2.0.2", 2, "")).has_value());
+    CHECK(!ParseManifest(with("1.0.2 ", 2, "")).has_value());
+    CHECK(!ParseManifest(with("dev", 2, "")).has_value());
+    CHECK(ParseManifest(with("1.0.2", 2, std::string(4096, 'n'))).has_value());
+    CHECK(!ParseManifest(with("1.0.2", 2, std::string(4097, 'n'))).has_value());
+}
+
 static void signature_round_trip() {
     using PlayerUpdate::VerifySignature;
     std::string msg = kTestMessage;
@@ -242,7 +261,61 @@ static void rename_failure_rolls_back() {
     CloseHandle(h);
 
     CHECK(!r.ok);
-    CHECK(!r.message.empty());
+    CHECK(r.message.find("in use") != std::string::npos);
+    CHECK(ReadAll(dir / "reborn.dll") == "old reborn bytes");
+    CHECK(ReadAll(dir / "dxgi.dll") == "old dxgi bytes");
+    CHECK(NoLeftovers(dir));
+}
+
+static void second_rename_failure_rolls_back() {
+    fs::path dir = FreshFolder("rollback_second");
+    // dxgi.dll moves to dxgi.dll.old fine, but dxgi.dll.new cannot be renamed into place.
+    WriteAll(dir / "dxgi.dll.new", "");
+    HANDLE h = CreateFileW((dir / "dxgi.dll.new").c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    CHECK(h != INVALID_HANDLE_VALUE);
+
+    std::string reborn = "new reborn bytes", dxgi = "new dxgi bytes";
+    auto r = PlayerUpdate::InstallFiles(dir, NewManifest(reborn, dxgi), {{"reborn.dll", reborn}, {"dxgi.dll", dxgi}});
+    CloseHandle(h);
+
+    CHECK(!r.ok);
+    CHECK(r.message.find("in use") != std::string::npos);
+    CHECK(ReadAll(dir / "reborn.dll") == "old reborn bytes");
+    CHECK(ReadAll(dir / "dxgi.dll") == "old dxgi bytes");
+    CHECK(!fs::exists(dir / "reborn.dll.old"));
+    CHECK(!fs::exists(dir / "dxgi.dll.old"));
+    CHECK(!fs::exists(dir / "reborn.dll.new"));
+    // dxgi.dll.new could not be deleted while it was held open; the next start's CleanupOld removes it.
+    PlayerUpdate::CleanupOld(dir);
+    CHECK(NoLeftovers(dir));
+}
+
+static bool SetDacl(const fs::path& p, const wchar_t* sddl) {
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sd, nullptr)) return false;
+    BOOL ok = SetFileSecurityW(p.c_str(), DACL_SECURITY_INFORMATION, sd);
+    LocalFree(sd);
+    return ok != 0;
+}
+
+static void unreadable_file_is_a_failure_not_missing() {
+    fs::path dir = FreshFolder("unreadable");
+    // Nobody may read reborn.dll's attributes (or list the folder, which would grant that), so checking
+    // whether reborn.dll exists fails with an error. That must stop the install, not count as "missing"
+    // and let reborn.dll.new overwrite a file that was never backed up.
+    CHECK(SetDacl(dir / "reborn.dll", L"D:P(D;;0x80;;;WD)(A;;FA;;;WD)"));
+    CHECK(SetDacl(dir, L"D:P(D;;0x1;;;WD)(A;OICI;FA;;;WD)"));
+    std::error_code probe;
+    fs::exists(dir / "reborn.dll", probe);
+    CHECK(probe);   // the setup really makes the existence check fail
+
+    std::string reborn = "new reborn bytes", dxgi = "new dxgi bytes";
+    auto r = PlayerUpdate::InstallFiles(dir, NewManifest(reborn, dxgi), {{"reborn.dll", reborn}, {"dxgi.dll", dxgi}});
+
+    CHECK(SetDacl(dir, L"D:P(A;OICI;FA;;;WD)"));
+    CHECK(SetDacl(dir / "reborn.dll", L"D:P(A;;FA;;;WD)"));
+    CHECK(!r.ok);
     CHECK(ReadAll(dir / "reborn.dll") == "old reborn bytes");
     CHECK(ReadAll(dir / "dxgi.dll") == "old dxgi bytes");
     CHECK(NoLeftovers(dir));
@@ -250,11 +323,14 @@ static void rename_failure_rolls_back() {
 
 static void cleanup_removes_old_files() {
     fs::path dir = FreshFolder("cleanup");
-    for (const char* n : {"reborn.dll.old", "dxgi.dll.old", "reborn.dll.bad"}) WriteAll(dir / n, "x");
+    for (const char* n : {"reborn.dll.old", "dxgi.dll.old", "reborn.dll.bad", "reborn.dll.new", "dxgi.dll.new"})
+        WriteAll(dir / n, "x");
     PlayerUpdate::CleanupOld(dir);
     CHECK(!fs::exists(dir / "reborn.dll.old"));
     CHECK(!fs::exists(dir / "dxgi.dll.old"));
     CHECK(!fs::exists(dir / "reborn.dll.bad"));
+    CHECK(!fs::exists(dir / "reborn.dll.new"));
+    CHECK(!fs::exists(dir / "dxgi.dll.new"));
     CHECK(ReadAll(dir / "reborn.dll") == "old reborn bytes");
     CHECK(ReadAll(dir / "dxgi.dll") == "old dxgi bytes");
     PlayerUpdate::CleanupOld(dir);                       // nothing there: still fine
@@ -271,6 +347,9 @@ int main() {
     bad_hash_changes_nothing();
     install_swaps_both_files();
     rename_failure_rolls_back();
+    second_rename_failure_rolls_back();
+    unreadable_file_is_a_failure_not_missing();
+    manifest_version_matches_build_and_notes_are_short();
     cleanup_removes_old_files();
 
     std::error_code ec;

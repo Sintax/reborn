@@ -33,7 +33,8 @@ constexpr uint64_t kMaxFileSize = 64ull * 1024 * 1024;
 // Parses manifest.json: {"version","build","notes","files":[{"name","sha256","size"}]}.
 // Returns nothing for anything that is not exactly that shape (missing or wrong-typed fields,
 // a name other than reborn.dll/dxgi.dll, a repeated name, size 0 or over 64 MiB, a sha256 that
-// is not 64 lowercase hex characters, no files, build below 1).
+// is not 64 lowercase hex characters, no files, build below 1, a version other than exactly
+// "1.0.<build>", notes over 4096 bytes).
 std::optional<Manifest> ParseManifest(std::string_view json);
 
 // True only when sigB64 (r||s, 64 bytes, base64) is a valid ECDSA P-256 / SHA-256 signature of
@@ -53,12 +54,14 @@ struct InstallOutcome {
 
 // Installs the manifest's files into win64 from bytesByName. Every file's size and hash is
 // checked before anything is written. Then each file is written as <name>.new, and for each
-// file <name> -> <name>.old and <name>.new -> <name>. Any failure puts back what was already
-// swapped and deletes the .new files, so the old version stays installed.
+// file <name> -> <name>.old and <name>.new -> <name> (the second rename never replaces a file).
+// Any failure, including not being able to tell whether <name> exists, puts back what was already
+// swapped and deletes the .new files, so the old version stays installed. Never throws.
 InstallOutcome InstallFiles(const std::filesystem::path& win64, const Manifest& m,
                             const std::map<std::string, std::string>& bytesByName);
 
-// Deletes reborn.dll.old, dxgi.dll.old and reborn.dll.bad if present. Never throws.
+// Deletes reborn.dll.old, dxgi.dll.old, reborn.dll.bad, reborn.dll.new and dxgi.dll.new if
+// present. Never throws.
 void CleanupOld(const std::filesystem::path& win64);
 
 }  // namespace PlayerUpdate
