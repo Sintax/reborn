@@ -143,6 +143,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Constants.hpp" />
+    <ClInclude Include="Version.hpp" />
+    <ClInclude Include="UpdateKey.hpp" />
     <ClInclude Include="Engine.hpp" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="GameCoordinator.hpp" />

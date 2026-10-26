@@ -2,7 +2,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config
+from . import config, version
 
 VSWHERE = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe")
 
@@ -44,8 +44,10 @@ def msbuild_command(configuration: str = "Release") -> list[str]:
             "/m", "/nologo", "/v:minimal"]
 
 
-def build_mod() -> BuildResult:
-    p = subprocess.run(msbuild_command(), capture_output=True, text=True)
+def build_mod(build: int = 0) -> BuildResult:
+    """Compile reborn.dll. build 0 is a developer build; a release passes its number."""
+    version.write_header(build)
+    p =subprocess.run(msbuild_command(), capture_output=True, text=True)
     out = p.stdout + p.stderr
     ok = p.returncode == 0 and config.MOD_DLL.exists()
     return BuildResult(ok, out, config.MOD_DLL if ok else None)

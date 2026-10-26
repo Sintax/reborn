@@ -380,3 +380,4 @@ docs/notes/
 docs/TWO-MACHINES.md
 debugloop/
 reborn/LocalSettings.hpp
+reborn/BuildVersion.hpp
