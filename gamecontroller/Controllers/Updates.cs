@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 
@@ -40,10 +41,17 @@ namespace gamecontroller.Controllers
 			{
 				string manifest = Path.Combine(dir, ManifestFile), signature = Path.Combine(dir, SignatureFile);
 				if (!System.IO.File.Exists(manifest) || !System.IO.File.Exists(signature)) return null;
-				return (System.IO.File.ReadAllText(manifest), System.IO.File.ReadAllText(signature));
+				return (Text(System.IO.File.ReadAllBytes(manifest)), Text(System.IO.File.ReadAllBytes(signature)));
 			}
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
 		}
+
+		// The bytes as text without touching them: a byte-order mark stays in the text (GetString keeps it)
+		// and nothing is guessed from it, so what goes out encodes back to exactly what was stored.
+		private static string Text(byte[] bytes) => new UTF8Encoding(false).GetString(bytes);
+
+		// Updates change, and a stale copy could hide a newer one (or keep an old signed one around).
+		private void NoStore() => Response.Headers.CacheControl = "no-store";
 
 		// The file names the manifest lists. A manifest that cannot be read as JSON lists nothing.
 		private static HashSet<string> Listed(string manifest)
@@ -65,6 +73,7 @@ namespace gamecontroller.Controllers
 		[HttpGet("player")]
 		public IActionResult GetPlayer()
 		{
+			NoStore();
 			var signed = ReadSigned();
 			if (signed == null) return NoUpdate();
 			return Ok(new { manifest = signed.Value.Manifest, signature = signed.Value.Signature });
@@ -73,6 +82,7 @@ namespace gamecontroller.Controllers
 		[HttpGet("player/files/{name}")]
 		public IActionResult GetPlayerFile(string name)
 		{
+			NoStore();
 			// Match against the list and carry on with the list's own spelling, never the caller's.
 			string? file = Served.FirstOrDefault(s => string.Equals(s, name, StringComparison.Ordinal));
 			if (file == null) return NoUpdate();

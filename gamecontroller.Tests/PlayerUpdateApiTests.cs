@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using gamecontroller.Controllers;
 using Microsoft.AspNetCore.Http;
@@ -70,6 +71,37 @@ public class PlayerUpdateApiTests : IDisposable
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
         Assert.Equal(Manifest, doc.RootElement.GetProperty("manifest").GetString());
         Assert.Equal(Signature, doc.RootElement.GetProperty("signature").GetString());
+    }
+
+    [Fact]
+    public void Text_comes_back_byte_for_byte_with_bom_crlf_and_non_ascii()
+    {
+        byte[] bom = { 0xEF, 0xBB, 0xBF };
+        byte[] manifestBytes = bom.Concat(new UTF8Encoding(false).GetBytes(
+            "{\r\n \"version\":\"1.0.7\",\"notes\":\"Fixed the lobby \u2013 caf\u00e9, \u65e5\u672c\u8a9e, \u00fcber\",\r\n \"files\":[]}\r\n")).ToArray();
+        byte[] sigBytes = bom.Concat(new UTF8Encoding(false).GetBytes("c2ln\r\n")).ToArray();
+        var c = Make(manifest: null, signature: null);
+        File.WriteAllBytes(Path.Combine(UpdateDir, "manifest.json"), manifestBytes);
+        File.WriteAllBytes(Path.Combine(UpdateDir, "manifest.json.sig"), sigBytes);
+
+        var ok = Assert.IsType<OkObjectResult>(c.GetPlayer());
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
+        Assert.Equal(manifestBytes, new UTF8Encoding(false).GetBytes(doc.RootElement.GetProperty("manifest").GetString()!));
+        Assert.Equal(sigBytes, new UTF8Encoding(false).GetBytes(doc.RootElement.GetProperty("signature").GetString()!));
+    }
+
+    [Fact]
+    public void Every_response_says_no_store()
+    {
+        var c = Make();
+        c.GetPlayer();
+        Assert.Equal("no-store", c.Response.Headers.CacheControl.ToString());
+        c.Response.Headers.Clear();
+        c.GetPlayerFile("reborn.dll");
+        Assert.Equal("no-store", c.Response.Headers.CacheControl.ToString());
+        c.Response.Headers.Clear();
+        c.GetPlayerFile("reborn.pdb");
+        Assert.Equal("no-store", c.Response.Headers.CacheControl.ToString());
     }
 
     [Fact]
