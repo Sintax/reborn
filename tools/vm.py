@@ -163,6 +163,10 @@ def release(build: bool) -> str:
     notes = f"{git('rev-parse', '--abbrev-ref', 'HEAD')}: {git('log', '-1', '--format=%s')}"
     exists = subprocess.run(["gh", "release", "view", version, "--repo", BUILDS_REPO],
                             capture_output=True, text=True).returncode == 0
+    # Once `python -m tools.release` has made numbered releases, the newest of those must stay
+    # "latest": the Control Panel and a plain `tools.vm update` look there for update.json and the
+    # player update, and this kind of release has neither.
+    latest = not numbered_releases_exist()
     with tempfile.TemporaryDirectory() as stage:
         # the asset takes the file's name, and the built zip has a different one
         zip_asset = Path(stage) / PLAYER_ZIP_ASSET
@@ -172,8 +176,20 @@ def release(build: bool) -> str:
             run(["gh", "release", "upload", version, *files, "--repo", BUILDS_REPO, "--clobber"])
         else:
             run(["gh", "release", "create", version, *files, "--repo", BUILDS_REPO,
-                 "--title", version, "--notes", notes, "--latest"])
+                 "--title", version, "--notes", notes, "--latest" if latest else "--latest=false"])
+    if not latest and not exists:
+        print("Numbered releases exist; this one is not marked latest. "
+              f"Install it on the VM with: python -m tools.vm update --version {version}")
     return version
+
+
+def numbered_releases_exist() -> bool:
+    out = run(["gh", "release", "list", "--repo", BUILDS_REPO, "--limit", "1000", "--json", "tagName"])
+    try:
+        tags = [r["tagName"] for r in json.loads(out or "[]")]
+    except (ValueError, KeyError, TypeError):
+        raise VmError(f"could not understand the list of releases in {BUILDS_REPO}") from None
+    return any(release_numbers.parse(t) > 0 for t in tags)
 
 
 # --- VM -------------------------------------------------------------------------------------
@@ -181,6 +197,27 @@ def release(build: bool) -> str:
 def latest_version() -> str:
     out = run(["gh", "release", "view", "--repo", BUILDS_REPO, "--json", "tagName"])
     return json.loads(out)["tagName"]
+
+
+def release_assets(version: str) -> set[str]:
+    out = run(["gh", "release", "view", version, "--repo", BUILDS_REPO, "--json", "assets"])
+    try:
+        return {a["name"] for a in json.loads(out)["assets"]}
+    except (ValueError, KeyError, TypeError):
+        raise VmError(f"could not understand the file list of release {version}") from None
+
+
+def check_latest_keeps_player_update(version: str, win64: Path) -> None:
+    """A plain `update` (no --version) must never quietly take away the player update that
+    matchmaking already offers: installing matchmaking empties its folder, and a release without
+    player-update.zip has nothing to put back. Naming the release with --version does it on purpose."""
+    if not (win64 / "matchmaking" / PLAYER_UPDATE_DIR).exists():
+        return
+    if PLAYER_UPDATE_ZIP not in release_assets(version):
+        raise VmError(f"the newest release ({version}) has no player update, so installing it would stop "
+                      "players' games being offered the new mod. Nothing was changed. Install a numbered "
+                      "release (python -m tools.vm update --version 1.0.N), or, to install this one anyway, "
+                      f"python -m tools.vm update --version {version}")
 
 
 def release_commit(version: str) -> str:
@@ -446,7 +483,9 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     if not (win64 / "Battleborn.exe").exists():
         raise VmError(f"Battleborn.exe is not in {win64}; set BB_GAME_DIR to the game folder")
     ensure_panel_closed()   # first of all: an open panel locks its exe, and nothing must be half-done
-    version = version or latest_version()
+    if not version:
+        version = latest_version()
+        check_latest_keeps_player_update(version, win64)
     if not checked_out:
         checkout(release_commit(version))
         # Carry on with the code of the version just checked out, not the code that started.

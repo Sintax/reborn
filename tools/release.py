@@ -74,8 +74,8 @@ def check_notes(notes: str | None) -> str:
     if not notes:
         raise ReleaseError('say what changed: --notes "..." (players and the server owner see it)')
     if len(notes.encode("utf-8")) > MAX_NOTES_BYTES:
-        raise ReleaseError(f"the notes are too long; keep them under {MAX_NOTES_BYTES} characters "
-                           "(the game shows them in a small box)")
+        raise ReleaseError(f"the notes are too long: at most {MAX_NOTES_BYTES} bytes, which is "
+                           "about 4000 letters; fewer with accents (the game shows them in a small box)")
     return notes
 
 
@@ -129,6 +129,14 @@ def publish_updater(out: Path = UPDATER_PUBLISH) -> Path:
     if p.returncode != 0 or not exe.exists():
         raise ReleaseError(f"the updater build failed:\n{p.stdout}{p.stderr}")
     return exe
+
+
+def check_numbered(dll: Path, ver: str) -> None:
+    """The DLL just built must carry its release number (Version.hpp's text, a C string), so a
+    developer build can never ship under a release number."""
+    if ver.encode("ascii") + b"\0" not in dll.read_bytes():
+        raise ReleaseError(f"the mod that was just built does not say it is {ver}; it may be a developer "
+                           "build. Nothing was uploaded.")
 
 
 def sha256(path: Path) -> str:
@@ -223,11 +231,12 @@ def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
         vm.check_pushed()
         commit = vm.git("rev-parse", "HEAD")
         check_key(key_path)
+        existing_tags()   # gh signed in and the builds repo reachable: found now, not after the tests
 
         say("Step 2 of 7: running every test. This takes a few minutes.")
         run_suites()
 
-        build = version.next_build(existing_tags())
+        build = version.next_build(existing_tags())   # asked again: the tests took minutes
         ver = version.version_string(build)
         say(f"Step 3 of 7: building release {ver}.")
         if OUT.exists():
@@ -236,6 +245,7 @@ def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
         assets.mkdir(parents=True)
         package.build_all(build=build)   # the mod and dxgi, numbered
         mod = {f.name: f for f in vm.mod_files()}
+        check_numbered(mod["reborn.dll"], ver)
         matchmaking = serverkit.publish_coordinator(MATCHMAKING_PUBLISH, self_contained=True)
         panel_exe = vm.publish_panel()
         updater_exe = publish_updater()
@@ -274,6 +284,7 @@ def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
         say(f"RELEASE OK {ver}")
         say("The Control Panel on the server will offer it under Updates "
             "(or on the VM: python -m tools.vm update).")
+        say(f"Build again (tools.build) before testing locally; the DLL on disk is release {ver}.")
         return ver
     finally:
         version.write_header(0)   # back to a developer build, whatever happened
@@ -287,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         release(a.notes)
         return 0
-    except RuntimeError as e:   # ReleaseError, VmError, and a failed build
+    except (RuntimeError, OSError) as e:   # ReleaseError, VmError, a failed build, a locked or full disk
         print(f"PROBLEM: {e}")
         return 1
 
