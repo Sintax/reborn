@@ -2287,6 +2287,7 @@ namespace Hooks {
     }
 
     void EngineExitHook(void* a1) {
+        PlayerUpdateUi::WaitForInstallBeforeExit();   // never quit halfway through swapping the mod's files
         if (Diagnostics::TickCount() != 0) {
             EngineExit.call<void>(a1);
             return;

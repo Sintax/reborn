@@ -10,6 +10,7 @@
 #include "Version.hpp"
 #include "imgui/imgui.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
@@ -29,6 +30,8 @@ namespace PlayerUpdateUi {
 
         std::atomic<bool> g_started{ false };
         std::atomic<bool> g_atMenu{ false };
+        std::atomic<bool> g_rolledBack{ false };   // dxgi put the previous mod back at this start
+        std::atomic<bool> g_installing{ false };   // InstallFiles is running (the exit waits for it)
 
         void SetStage(Stage s, const std::string& failure = "") {
             std::lock_guard<std::mutex> l(g_lock);
@@ -36,27 +39,35 @@ namespace PlayerUpdateUi {
             g_failure = failure;
         }
 
-        httplib::Client NewClient(int readTimeoutSeconds) {
+        // Fetch sets the read timeout for each request.
+        httplib::Client NewClient() {
             httplib::Client c(GameCoordinator::Endpoint());
             c.set_connection_timeout(3);
-            c.set_read_timeout(readTimeoutSeconds);
             return c;
         }
 
-        enum class Got { Ok, Failed, TooBig };
+        enum class Got { Ok, Failed, TooBig, TooSlow };
 
-        // GET path into body, refusing an answer over limit bytes or any status but 200.
-        Got Fetch(httplib::Client& c, const std::string& path, size_t limit, std::string& body, std::string& why) {
+        // GET path into body, refusing an answer over limit bytes, any status but 200, and anything
+        // still arriving once the deadline (started at startMs, kDownloadLimitMs long) has passed.
+        Got Fetch(httplib::Client& c, const std::string& path, size_t limit, ULONGLONG startMs, ULONGLONG maxReadSeconds,
+                  std::string& body, std::string& why) {
             body.clear();
-            bool tooBig = false;
+            ULONGLONG left = RemainingMs(startMs, GetTickCount64());
+            if (left == 0) { why = "out of time"; return Got::TooSlow; }
+            // A stalled connection must not outlast the deadline either.
+            c.set_read_timeout((time_t)std::min<ULONGLONG>(maxReadSeconds, (left + 999) / 1000), 0);
+            bool tooBig = false, tooSlow = false;
             int status = 0;
             httplib::Result res = c.Get(path,
                 [&](const httplib::Response& r) { status = r.status; return r.status == 200; },
                 [&](const char* data, size_t n) {
+                    if (RemainingMs(startMs, GetTickCount64()) == 0) { tooSlow = true; return false; }
                     if (n > limit - body.size()) { tooBig = true; return false; }
                     body.append(data, n);
                     return true;
                 });
+            if (tooSlow || (!res && RemainingMs(startMs, GetTickCount64()) == 0)) { why = "out of time"; return Got::TooSlow; }
             if (tooBig) { why = "the answer was over " + std::to_string(limit) + " bytes"; return Got::TooBig; }
             if (status != 0 && status != 200) { why = "HTTP " + std::to_string(status); return Got::Failed; }
             if (!res) { why = httplib::to_string(res.error()); return Got::Failed; }
@@ -67,9 +78,10 @@ namespace PlayerUpdateUi {
         // Background thread: one look at the server's player update. Anything wrong is one log line.
         void Check() {
             try {
-                httplib::Client c = NewClient(10);
+                const ULONGLONG start = GetTickCount64();
+                httplib::Client c = NewClient();
                 std::string body, why;
-                if (Fetch(c, "/api/updates/player", kMaxManifestResponse, body, why) != Got::Ok) {
+                if (Fetch(c, "/api/updates/player", kMaxManifestResponse, start, 10, body, why) != Got::Ok) {
                     std::printf("[UPDATE] no player update from %s (%s)\n", GameCoordinator::Endpoint().c_str(), why.c_str());
                     return;
                 }
@@ -104,15 +116,22 @@ namespace PlayerUpdateUi {
             }
         }
 
+        // Keeps the game's exit waiting while InstallFiles runs (see WaitForInstallBeforeExit).
+        struct InstallingFlag {
+            InstallingFlag() { g_installing = true; }
+            ~InstallingFlag() { g_installing = false; }
+        };
+
         // Background thread: download every file, then let PlayerUpdate check and swap them.
-        void Download(PlayerUpdate::Manifest m) {
+        // startMs is when the player pressed Download; all the files share one 5-minute deadline.
+        void Download(PlayerUpdate::Manifest m, ULONGLONG startMs) {
             std::string reason;
             try {
-                httplib::Client c = NewClient(60);
+                httplib::Client c = NewClient();
                 std::map<std::string, std::string> bytes;
                 for (const PlayerUpdate::FileEntry& f : m.files) {
                     std::string body, why;
-                    Got got = Fetch(c, "/api/updates/player/files/" + f.name, (size_t)f.size, body, why);
+                    Got got = Fetch(c, "/api/updates/player/files/" + f.name, (size_t)f.size, startMs, 60, body, why);
                     if (got != Got::Ok) {
                         std::printf("[UPDATE] downloading %s failed (%s)\n", f.name.c_str(), why.c_str());
                         reason = got == Got::TooBig ? "the download was damaged" : "the download did not finish";
@@ -121,7 +140,11 @@ namespace PlayerUpdateUi {
                     bytes[f.name] = std::move(body);
                 }
                 if (reason.empty()) {
-                    PlayerUpdate::InstallOutcome out = PlayerUpdate::InstallFiles(StartKey::Win64Dir(), m, bytes);
+                    PlayerUpdate::InstallOutcome out;
+                    {
+                        InstallingFlag installing;
+                        out = PlayerUpdate::InstallFiles(StartKey::Win64Dir(), m, bytes);
+                    }
                     if (out.ok) {
                         std::printf("[UPDATE] installed Reborn %s; the game uses it from the next start\n", m.version.c_str());
                         SetStage(Stage::Ready);
@@ -141,13 +164,34 @@ namespace PlayerUpdateUi {
     void StartCheckOnce() {
         if (g_started.exchange(true)) return;
         const auto& opt = LaunchOptions::Get();
-        std::string why = WhyNoCheck(Globals::amServer, opt.autopilot, opt.noUpdate, Version::Build);
+        std::string why = WhyNoCheck(Globals::amServer, opt.autopilot, opt.noUpdate, Version::Build, g_rolledBack);
         if (!why.empty()) {
             std::printf("[UPDATE] not checking for a player update (%s)\n", why.c_str());
             return;
         }
         std::printf("[UPDATE] checking %s for a player update\n", GameCoordinator::Endpoint().c_str());
-        std::thread(Check).detach();
+        try {
+            std::thread(Check).detach();
+        } catch (...) {
+            // The check is silent by design: no notice, just the log line.
+            std::printf("[UPDATE] could not start the update check\n");
+        }
+    }
+
+    void WaitForInstallBeforeExit() {
+        // InstallFiles swaps reborn.dll first and dxgi.dll second, each by two renames
+        // (<name> -> <name>.old, then <name>.new -> <name>). If the game quits in between, the
+        // install thread dies mid-swap. The worst moment is after dxgi.dll -> dxgi.dll.old and
+        // before dxgi.dll.new -> dxgi.dll: the next start finds no dxgi.dll, Windows loads its own,
+        // the mod never loads, and nothing can repair it (the rollback lives in our dxgi.dll).
+        // So the exit waits for the install to finish (well under a second), at most 10 s.
+        if (!g_installing) return;
+        std::printf("[UPDATE] waiting for the update to finish installing before the game closes\n");
+        std::fflush(stdout);
+        const ULONGLONG start = GetTickCount64();
+        while (g_installing && GetTickCount64() - start < kExitWaitMs) Sleep(50);
+        std::printf("[UPDATE] %s\n", g_installing ? "gave up waiting for the install after 10 s" : "install finished; closing");
+        std::fflush(stdout);
     }
 
     void Tick() {
@@ -174,7 +218,12 @@ namespace PlayerUpdateUi {
                 holdKeys = false;
         }
 
-        if (!g_atMenu) return;   // never over a match or a loading screen
+        // When the current stage was first drawn (for the offer's key delay). Hidden counts as not
+        // drawn, so coming back to the menu starts the delay again.
+        static Stage shownStage = Stage::None;
+        static double shownAt = 0.0;
+
+        if (!g_atMenu) { shownStage = Stage::None; return; }   // never over a match or a loading screen
 
         Stage stage;
         std::string text, notes;
@@ -185,7 +234,10 @@ namespace PlayerUpdateUi {
             else if (stage == Stage::Ready) text = kReadyText;
             else if (stage == Stage::Failed) text = g_failure;
         }
-        if (stage == Stage::None) return;
+        if (stage == Stage::None) { shownStage = Stage::None; return; }
+
+        if (stage != shownStage) { shownStage = stage; shownAt = ImGui::GetTime(); }
+        const bool keysAccepted = stage != Stage::Offer || OfferKeysAccepted(ImGui::GetTime() - shownAt);
 
         UiStyle::NextWindow();
         ImGui::SetNextWindowFocus();
@@ -196,7 +248,7 @@ namespace PlayerUpdateUi {
 
         // Enter presses the first button and Escape the last; while the notice is up the game
         // does not also get those keys.
-        const bool focused = ImGui::IsWindowFocused();
+        const bool focused = ImGui::IsWindowFocused() && keysAccepted;
         const bool enter = focused && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false));
         const bool escape = focused && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
         if (stage != Stage::Downloading) ImGui::SetNextFrameWantCaptureKeyboard(true);
@@ -217,7 +269,12 @@ namespace PlayerUpdateUi {
                     g_stage = Stage::Downloading;
                 }
                 std::printf("[UPDATE] the player chose Download\n");
-                std::thread(Download, std::move(m)).detach();
+                try {
+                    std::thread(Download, std::move(m), GetTickCount64()).detach();
+                } catch (...) {
+                    std::printf("[UPDATE] could not start the download\n");
+                    SetStage(Stage::Failed, FailureText("the download could not be started"));
+                }
             }
             else if (notNow) {
                 std::printf("[UPDATE] the player chose Not now\n");
@@ -239,8 +296,10 @@ namespace PlayerUpdateUi {
         if (Globals::amServer) return;   // only players install updates
         const std::filesystem::path win64 = StartKey::Win64Dir();
         std::error_code ec;
-        if (std::filesystem::exists(win64 / "reborn.dll.bad", ec))
+        if (std::filesystem::exists(win64 / "reborn.dll.bad", ec)) {
+            g_rolledBack = true;   // StartCheckOnce skips this launch's check (WhyNoCheck)
             std::printf("[UPDATE] the last update did not start, so the previous version was put back\n");
+        }
         PlayerUpdate::CleanupOld(win64);
     }
 }

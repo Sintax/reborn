@@ -32,14 +32,39 @@ inline std::string InstallFailureReason(std::string_view installMessage) {
     return "the new files could not be saved";
 }
 
-// Why this launch does not check for an update, or "" when it should check.
-inline std::string WhyNoCheck(bool isServer, bool autopilot, bool noUpdate, int build) {
+// Why this launch does not check for an update, or "" when it should check. rolledBack: dxgi put
+// the previous mod back at this start (reborn.dll.bad was there), so the update that would not
+// load is not offered again straight away.
+inline std::string WhyNoCheck(bool isServer, bool autopilot, bool noUpdate, int build, bool rolledBack) {
     if (isServer) return "this is a game server";
     if (autopilot) return "autopilot test player";
     if (noUpdate) return "-rbnoupdate";
     if (build <= 0) return "developer build";
+    if (rolledBack) return "the last update did not start and was taken back";
     return "";
 }
+
+// Enter and Escape only answer the offer once it has been up this long, so a key the player
+// meant for the game's own menu cannot start a download.
+constexpr double kOfferKeyDelaySeconds = 0.5;
+inline bool OfferKeysAccepted(double secondsShown) { return secondsShown >= kOfferKeyDelaySeconds; }
+
+// The whole download (the update list or all the files) gives up after this long.
+constexpr unsigned long long kDownloadLimitMs = 5ull * 60 * 1000;
+
+// Milliseconds left before a deadline that started at startMs; 0 once it has passed.
+inline unsigned long long RemainingMs(unsigned long long startMs, unsigned long long nowMs,
+                                      unsigned long long limitMs = kDownloadLimitMs) {
+    if (nowMs < startMs) return limitMs;   // a clock that went backwards: start counting again
+    unsigned long long used = nowMs - startMs;
+    return used >= limitMs ? 0 : limitMs - used;
+}
+
+// The longest the game's exit waits for an install that is swapping files.
+constexpr unsigned long kExitWaitMs = 10000;
+
+// Game exit (EngineExit hook): waits, at most kExitWaitMs, for an install that is in progress.
+void WaitForInstallBeforeExit();
 
 // Game: the main menu is up; starts this launch's one background check (later calls do nothing).
 void StartCheckOnce();

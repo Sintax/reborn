@@ -371,12 +371,35 @@ static void notice_texts_read_plainly() {
 // Who checks: only a released player build that was not told not to.
 static void only_released_players_check() {
     using PlayerUpdateUi::WhyNoCheck;
-    CHECK(WhyNoCheck(false, false, false, 3).empty());
-    CHECK(!WhyNoCheck(true, false, false, 3).empty());    // a game server
-    CHECK(!WhyNoCheck(false, true, false, 3).empty());    // -rbautopilot
-    CHECK(!WhyNoCheck(false, false, true, 3).empty());    // -rbnoupdate
-    CHECK(!WhyNoCheck(false, false, false, 0).empty());   // a developer build
+    CHECK(WhyNoCheck(false, false, false, 3, false).empty());
+    CHECK(!WhyNoCheck(true, false, false, 3, false).empty());    // a game server
+    CHECK(!WhyNoCheck(false, true, false, 3, false).empty());    // -rbautopilot
+    CHECK(!WhyNoCheck(false, false, true, 3, false).empty());    // -rbnoupdate
+    CHECK(!WhyNoCheck(false, false, false, 0, false).empty());   // a developer build
+    CHECK(!WhyNoCheck(false, false, false, 3, true).empty());    // dxgi just put the previous mod back
     CHECK(PlayerUpdateUi::kMaxManifestResponse == 64 * 1024);
+}
+
+// Enter and Escape wait half a second after the offer appears.
+static void offer_ignores_keys_at_first() {
+    using PlayerUpdateUi::OfferKeysAccepted;
+    CHECK(!OfferKeysAccepted(0.0));
+    CHECK(!OfferKeysAccepted(0.49));
+    CHECK(OfferKeysAccepted(0.5));
+    CHECK(OfferKeysAccepted(30.0));
+}
+
+// One 5-minute deadline for the whole download.
+static void download_deadline() {
+    using PlayerUpdateUi::RemainingMs;
+    const unsigned long long five = 5ull * 60 * 1000;
+    CHECK(PlayerUpdateUi::kDownloadLimitMs == five);
+    CHECK(RemainingMs(1000, 1000) == five);
+    CHECK(RemainingMs(1000, 1000 + five - 1) == 1);
+    CHECK(RemainingMs(1000, 1000 + five) == 0);
+    CHECK(RemainingMs(1000, 1000 + five + 12345) == 0);
+    CHECK(RemainingMs(5000, 1000) == five);   // the clock went backwards: no instant give-up
+    CHECK(PlayerUpdateUi::kExitWaitMs == 10000);
 }
 
 int main() {
@@ -395,6 +418,8 @@ int main() {
     cleanup_removes_old_files();
     notice_texts_read_plainly();
     only_released_players_check();
+    offer_ignores_keys_at_first();
+    download_deadline();
 
     std::error_code ec;
     fs::remove_all(fs::temp_directory_path() / ("reborn_test_player_update_" + std::to_string(GetCurrentProcessId())), ec);
