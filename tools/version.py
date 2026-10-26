@@ -5,7 +5,7 @@ from pathlib import Path
 from .config import REPO
 
 BASE = "1.0"
-_RELEASE = re.compile(r"^" + re.escape(BASE) + r"\.(\d+)$")
+_RELEASE = re.compile(r"^1\.0\.([1-9][0-9]*)$", re.ASCII)
 HEADER = REPO / "reborn" / "BuildVersion.hpp"
 
 

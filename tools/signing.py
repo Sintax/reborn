@@ -77,7 +77,7 @@ def verify(data: bytes, sig_b64: str, pub_b64: str) -> bool:
         der = encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big"))
         key.verify(der, data, ec.ECDSA(hashes.SHA256()))
         return True
-    except (InvalidSignature, ValueError, binascii.Error):
+    except (InvalidSignature, ValueError, TypeError, binascii.Error):
         return False
 
 

@@ -21,7 +21,8 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from . import build, config, launch
+from . import build, config, launch, version
+from . import build as _build   # build_all has a `build` keyword that shadows the module
 
 DIST = config.REPO / "dist"
 DXGI_PROJECT = config.REPO / "dxgi" / "dxgi.vcxproj"
@@ -62,9 +63,11 @@ def readme(version: str) -> str:
     return f"Battleborn Reborn {version}\r\n\r\n" + doc.replace("\n", "\r\n")
 
 
-def build_all() -> None:
+def build_all(build: int = 0) -> None:
+    """Build the mod and dxgi. build 0 is a developer build; a release passes its number."""
+    version.write_header(build)
     for project in (config.MOD_PROJECT, DXGI_PROJECT):
-        cmd = build.msbuild_command()
+        cmd = _build.msbuild_command()
         cmd[1] = str(project)
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.returncode != 0:
