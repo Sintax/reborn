@@ -191,8 +191,22 @@ namespace ControlPanel.Core
 		public static string InstallArgs(string stagedWin64, string version, string win64, int panelPid, string panelExe) =>
 			$"install --staged {Quote(stagedWin64)} --version {version} --win64 {Quote(win64)} --panel-pid {panelPid} --panel {Quote(panelExe)}";
 
+		// version must pass IsSafeVersionName (checked again here, so nothing else can reach the command line).
 		public static string RollbackArgs(string version, string win64, int panelPid, string panelExe) =>
-			$"rollback --to {version} --win64 {Quote(win64)} --panel-pid {panelPid} --panel {Quote(panelExe)}";
+			IsSafeVersionName(version)
+				? $"rollback --to \"{version}\" --win64 {Quote(win64)} --panel-pid {panelPid} --panel {Quote(panelExe)}"
+				: throw new ArgumentException("Not a saved version name: " + version, nameof(version));
+
+		// The Installer's rule for a saved version's folder name: letters, digits, '.', '_' and '-', starting
+		// with a letter or digit, at most 80 long, and not the staging folder.
+		public static bool IsSafeVersionName(string? name) =>
+			!string.IsNullOrEmpty(name)
+			&& name.Length <= 80
+			&& SafeName().IsMatch(name)
+			&& !string.Equals(name, StagingFolder, StringComparison.OrdinalIgnoreCase);
+
+		[GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9._-]*\z")]
+		private static partial Regex SafeName();
 
 		// No trailing backslash: it would escape the closing quote.
 		private static string Quote(string path) => "\"" + Path.GetFullPath(path).TrimEnd('\\', '/') + "\"";
@@ -221,8 +235,8 @@ namespace ControlPanel.Core
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
 		}
 
-		// The update that broke off, or null. A mark that can't be read counts as "from unknown", as the
-		// Installer reads it.
+		// The update that broke off, or null. A mark that can't be read, or that names an unsafe version,
+		// counts as "from unknown", as the Installer reads it. An unsafe "to" is left out ("").
 		public UnfinishedUpdate? ReadUnfinished()
 		{
 			string path = Path.Combine(VersionsDir, Installer.InProgressFile);
@@ -230,11 +244,24 @@ namespace ControlPanel.Core
 			try
 			{
 				using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
-				if (doc.RootElement.ValueKind == JsonValueKind.Object && Text(doc.RootElement, "from") is string from && from.Trim().Length > 0)
-					return new UnfinishedUpdate(from.Trim(), Text(doc.RootElement, "to")?.Trim() ?? "");
+				if (doc.RootElement.ValueKind == JsonValueKind.Object && Text(doc.RootElement, "from") is string from
+					&& IsSafeVersionName(from))
+				{
+					string to = Text(doc.RootElement, "to") ?? "";
+					return new UnfinishedUpdate(from, IsSafeVersionName(to) ? to : "");
+				}
 			}
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { }
 			return new UnfinishedUpdate("unknown", "");
+		}
+
+		// The updater an update that broke off brought with it (its staged copy), or null. The installed one
+		// may be half-copied after such an update.
+		public string? StagedUpdaterFor(string version)
+		{
+			if (!IsSafeVersionName(version)) return null;
+			string path = Path.Combine(StagingDir, version, "Win64", "ControlPanel", UpdaterExe);
+			return File.Exists(path) ? path : null;
 		}
 
 		private static string? Text(JsonElement root, string name) =>

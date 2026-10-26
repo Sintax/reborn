@@ -42,12 +42,20 @@ namespace ControlPanel
 		public int Run(string file, string args, out string output)
 		{
 			output = "";
+			// Only PATH's absolute folders: never Windows' own search, which looks next to the panel first.
+			string? program = ProgramPath.Find(file, Environment.GetEnvironmentVariable("PATH") ?? "",
+				Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD");
+			if (program == null)
+			{
+				output = file + " was not found.";
+				return -1;
+			}
 			Process? p = null;
 			try
 			{
 				p = Process.Start(new ProcessStartInfo
 				{
-					FileName = FindOnPath(file),
+					FileName = program,
 					Arguments = args,
 					UseShellExecute = false,
 					CreateNoWindow = true,
@@ -89,28 +97,6 @@ namespace ControlPanel
 					return -1;
 				}
 			}
-		}
-
-		// "gh" as the command prompt finds it: the first PATH folder holding gh plus one of PATHEXT's
-		// endings (.exe, .cmd, ...). A path, or a name with an ending, is used as it is.
-		private static string FindOnPath(string file)
-		{
-			if (Path.IsPathRooted(file) || file.Contains('\\') || file.Contains('/') || Path.HasExtension(file)) return file;
-			string[] endings = (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
-				.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-			foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-			{
-				foreach (string ending in endings)
-				{
-					try
-					{
-						string candidate = Path.Combine(dir.Trim('"'), file + ending);
-						if (File.Exists(candidate)) return candidate;
-					}
-					catch (ArgumentException) { }   // a PATH entry with characters a path can't have
-				}
-			}
-			return file;
 		}
 
 		public Task<int> RunElevated(string exe, string args) => Task.Run(() =>

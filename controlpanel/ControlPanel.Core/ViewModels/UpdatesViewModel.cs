@@ -17,6 +17,7 @@ namespace ControlPanel.Core.ViewModels
 		public const string NoUpdaterText = "The update has no updater (RebornUpdater.exe) in it, so it can't be installed. Nothing was changed.";
 		public const string UpdaterMissingText = "RebornUpdater.exe is missing next to the Control Panel, so going back can't start. Nothing was changed.";
 		public const string UpdaterWouldNotStartText = "The updater couldn't be started. Nothing was changed.";
+		public const string AlreadyUpToDateText = "Already up to date.";
 		public const string HandingOverText = "The updater is taking over. The Control Panel closes now and opens again when it is done.";
 
 		private readonly UpdateService _service;
@@ -64,18 +65,24 @@ namespace ControlPanel.Core.ViewModels
 		private string _status = "";
 		public string Status { get => _status; private set => SetProperty(ref _status, value); }
 
-		// True while checking, downloading or handing over; the buttons are off then.
-		private bool _busy;
-		public bool Busy
+		// True while checking, or while Update now or Roll back runs (from its question to the hand-off);
+		// the buttons and the timed check are off then.
+		public bool Busy => _checking || _working;
+
+		// Each owner has its own flag, so a check that ends never ends an update's busy time.
+		private bool _checking;
+		private bool Checking { set { bool was = Busy; _checking = value; BusyMayHaveChanged(was); } }
+
+		private bool _working;
+		private bool Working { set { bool was = Busy; _working = value; BusyMayHaveChanged(was); } }
+
+		private void BusyMayHaveChanged(bool was)
 		{
-			get => _busy;
-			private set
-			{
-				if (!SetProperty(ref _busy, value)) return;
-				CheckCommand.NotifyCanExecuteChanged();
-				UpdateNowCommand.NotifyCanExecuteChanged();
-				RollBackCommand.NotifyCanExecuteChanged();
-			}
+			if (was == Busy) return;
+			OnPropertyChanged(nameof(Busy));
+			CheckCommand.NotifyCanExecuteChanged();
+			UpdateNowCommand.NotifyCanExecuteChanged();
+			RollBackCommand.NotifyCanExecuteChanged();
 		}
 
 		// The saved versions to go back to, newest first (empty while an update is unfinished: then only
@@ -104,6 +111,8 @@ namespace ControlPanel.Core.ViewModels
 			}
 		}
 
+		private string? _unfinishedTo;   // the version the broken-off update was installing ("" if unknown)
+
 		private string? _unfinishedText;
 		public string? UnfinishedText { get => _unfinishedText; private set => SetProperty(ref _unfinishedText, value); }
 
@@ -131,6 +140,7 @@ namespace ControlPanel.Core.ViewModels
 			CurrentVersion = _service.ReadDeployed() ?? NotRecordedText;
 
 			UnfinishedUpdate? unfinished = _service.ReadUnfinished();
+			_unfinishedTo = unfinished?.To;
 			Unfinished = unfinished?.From;
 			UnfinishedText = unfinished == null ? null
 				: (unfinished.To.Length > 0 ? $"The update to {unfinished.To} didn't finish" : "An update didn't finish")
@@ -154,7 +164,7 @@ namespace ControlPanel.Core.ViewModels
 		private async Task CheckAsync()
 		{
 			if (Busy) return;
-			Busy = true;
+			Checking = true;
 			Reload();
 			Status = "Checking GitHub for a newer version...";
 			try
@@ -175,7 +185,7 @@ namespace ControlPanel.Core.ViewModels
 			finally
 			{
 				_nextCheckUtc = _clock.GetUtcNow().UtcDateTime + CheckEvery;
-				Busy = false;
+				Checking = false;
 			}
 		}
 
@@ -183,16 +193,29 @@ namespace ControlPanel.Core.ViewModels
 		{
 			if (Busy || _manifest == null || Unfinished != null) return;
 			UpdateManifest manifest = _manifest;
-			int players = _playersInGames();
-			if (players > 0 && !_dialogs.Confirm(players == 1
-				? "1 player is in a game. Updating stops that game. Update now?"
-				: $"{players} players are in games. Updating stops those games. Update now?"))
-				return;
-
-			Busy = true;
+			// Busy from before the question: the timer keeps ticking while it is open, and no check or
+			// second press may start in between.
+			Working = true;
 			bool handedOver = false;
 			try
 			{
+				int players = _playersInGames();
+				if (players > 0 && !_dialogs.Confirm(players == 1
+					? "1 player is in a game. Updating stops that game. Update now?"
+					: $"{players} players are in games. Updating stops those games. Update now?"))
+					return;
+
+				// The server may have been updated another way since the check (tools.vm update).
+				if (!Versions.Newer(manifest.Build, Versions.Parse(_service.ReadDeployed() ?? "")))
+				{
+					_manifest = null;
+					Available = null;
+					Notes = "";
+					Status = AlreadyUpToDateText;
+					Reload();
+					return;
+				}
+
 				Status = $"Downloading {manifest.Version} ({Megabytes(manifest.Size)}). This can take a few minutes.";
 				StagedUpdate staged = await _service.DownloadAsync(manifest);
 				if (!staged.Ok)
@@ -214,7 +237,7 @@ namespace ControlPanel.Core.ViewModels
 			}
 			finally
 			{
-				if (!handedOver) Busy = false;   // handed over: stay busy until the panel closes
+				if (!handedOver) Working = false;   // handed over: stay busy until the panel closes
 			}
 		}
 
@@ -228,6 +251,11 @@ namespace ControlPanel.Core.ViewModels
 		{
 			version = (version ?? "").Trim();
 			if (Busy || version.Length == 0) return;
+			if (!UpdateService.IsSafeVersionName(version))
+			{
+				Status = "There is no saved copy of that version to go back to.";
+				return;
+			}
 			Reload();
 			if (Unfinished != null ? version != Unfinished : !Kept.Contains(version))
 			{
@@ -236,14 +264,18 @@ namespace ControlPanel.Core.ViewModels
 					: $"There is no saved copy of {version} to go back to.";
 				return;
 			}
-			if (!_dialogs.Confirm($"Go back to {version}? The server restarts.")) return;
 
-			Busy = true;
+			Working = true;   // before the question, as in Update now
 			bool handedOver = false;
 			try
 			{
-				// The installed updater, copied out so the roll back can replace it too.
-				string? updater = _service.CopyUpdater(Path.Combine(Path.GetDirectoryName(_app.ExePath) ?? "", UpdateService.UpdaterExe));
+				if (!_dialogs.Confirm($"Go back to {version}? The server restarts.")) return;
+
+				// The updater is copied out so the roll back can replace it too. After an update that broke
+				// off, the installed one may be half-copied: the one that update brought is used if it is there.
+				string installed = Path.Combine(Path.GetDirectoryName(_app.ExePath) ?? "", UpdateService.UpdaterExe);
+				string source = Unfinished != null && _service.StagedUpdaterFor(_unfinishedTo ?? "") is string staged ? staged : installed;
+				string? updater = _service.CopyUpdater(source);
 				if (updater == null)
 				{
 					Status = UpdaterMissingText;
@@ -253,7 +285,7 @@ namespace ControlPanel.Core.ViewModels
 			}
 			finally
 			{
-				if (!handedOver) Busy = false;
+				if (!handedOver) Working = false;
 			}
 		}
 

@@ -175,9 +175,13 @@ namespace ControlPanel.Tests
 		public string? TextAnswer { get; set; }
 		public List<string> Questions { get; } = new();
 
+		// Runs while the question is "on screen" (a real message box keeps the timer ticking).
+		public Action<string>? WhileAsking { get; set; }
+
 		public bool Confirm(string question)
 		{
 			Questions.Add(question);
+			WhileAsking?.Invoke(question);
 			return ConfirmAnswer;
 		}
 

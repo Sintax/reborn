@@ -431,8 +431,124 @@ namespace ControlPanel.Tests
 			Assert.Equal("the installed updater", File.ReadAllText(copy));
 			var start = Assert.Single(r.T.Runner.StartedWith);
 			Assert.Equal(copy, start.Exe);
-			Assert.Equal($"rollback --to 1.0.1 --win64 \"{r.T.Win64}\" --panel-pid 4242 --panel \"{r.T.App.ExePath}\"", start.Args);
+			Assert.Equal($"rollback --to \"1.0.1\" --win64 \"{r.T.Win64}\" --panel-pid 4242 --panel \"{r.T.App.ExePath}\"", start.Args);
 			Assert.Equal(1, r.T.App.Closed);
+		}
+
+		[Fact]
+		public async Task roll_back_refuses_unsafe_version_names()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			Keep(r, "1.0.1");
+			File.WriteAllText(Path.Combine(r.T.Win64, "ControlPanel", "RebornUpdater.exe"), "the installed updater");
+			r.T.Dialogs.ConfirmAnswer = true;
+
+			// A name that would add its own arguments to the updater's command line.
+			await r.Vm.RollBackCommand.ExecuteAsync("1.0.1\" --win64 \"C:\\elsewhere");
+			Assert.Empty(r.T.Dialogs.Questions);
+			Assert.Empty(r.T.Runner.StartedWith);
+
+			// An unfinished-update mark naming such a version reads as "unknown", as the Installer reads it.
+			File.WriteAllText(Path.Combine(r.T.Win64, "RebornVersions", Installer.InProgressFile),
+				JsonSerializer.Serialize(new { from = "..\\..\\x\" --to \"1.0.1", to = "1.0.3\" --evil", when = "2026-10-26T10:00:00Z" }));
+			r.Vm.Reload();
+			Assert.Equal("unknown", r.Vm.Unfinished);
+			Assert.Equal("An update didn't finish, so the server may be a mix of two versions. Roll back to unknown to put it right.",
+				r.Vm.UnfinishedText);
+			await r.Vm.RollBackCommand.ExecuteAsync("..\\..\\x\" --to \"1.0.1");
+			Assert.Empty(r.T.Dialogs.Questions);
+			Assert.Empty(r.T.Runner.StartedWith);
+		}
+
+		[Fact]
+		public async Task a_timed_check_during_update_now_never_lets_a_second_one_start()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			r.Players = 2;
+			r.T.Dialogs.ConfirmAnswer = true;
+
+			// While the question is open, the refresh timer ticks with the next check due.
+			Task? timed = null;
+			r.T.Dialogs.WhileAsking = _ =>
+			{
+				r.T.Dialogs.WhileAsking = null;
+				r.Clock.Now += TimeSpan.FromHours(6);
+				timed = r.Vm.Tick();
+			};
+			// The download waits until the test lets it go (at most a few seconds).
+			using var gate = new SemaphoreSlim(0);
+			var answer = r.T.Runner.OnRun!;
+			r.T.Runner.OnRun = (f, a) =>
+			{
+				if (a.StartsWith("release download 1.0.3")) gate.Wait(TimeSpan.FromSeconds(5));
+				return answer(f, a);
+			};
+
+			Task first = r.Vm.UpdateNowCommand.ExecuteAsync(null);
+			if (timed != null) await timed;   // a check that slipped in has finished
+			Assert.True(r.Vm.Busy);
+			Assert.Null(r.Vm.Tick());
+			await r.Vm.UpdateNowCommand.ExecuteAsync(null);   // a second press does nothing
+			Assert.Single(r.T.Dialogs.Questions);
+
+			gate.Release();
+			await first;
+			Assert.Single(r.T.Runner.Ran, c => c.Contains("release download 1.0.3"));
+			Assert.Equal("the new mod", File.ReadAllText(Path.Combine(r.StagingDir, "1.0.3", "Win64", "reborn.dll")));
+			Assert.Single(r.T.Runner.StartedWith);
+			Assert.Equal(1, r.T.App.Closed);
+		}
+
+		[Fact]
+		public async Task update_now_rechecks_the_installed_version_first()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal("1.0.3", r.Vm.Available);
+
+			// Meanwhile 1.0.3 was installed another way (tools.vm update).
+			r.Deployed("1.0.3\n");
+			int ran = r.T.Runner.Ran.Count;
+			await r.Vm.UpdateNowCommand.ExecuteAsync(null);
+
+			Assert.Equal("Already up to date.", r.Vm.Status);
+			Assert.Equal(ran, r.T.Runner.Ran.Count);
+			Assert.Empty(r.T.Runner.StartedWith);
+			Assert.Equal(0, r.T.App.Closed);
+			Assert.Null(r.Vm.Available);
+			Assert.False(Directory.Exists(r.StagingDir));
+			Assert.False(r.Vm.Busy);
+		}
+
+		[Fact]
+		public void programs_are_found_only_in_absolute_path_folders()
+		{
+			using var t = new TempPanel();
+			string bin = Path.Combine(t.Root, "bin");
+			Directory.CreateDirectory(bin);
+			string gh = Path.Combine(bin, "gh.cmd");
+			File.WriteAllText(gh, "@echo off");
+
+			Assert.Equal(gh, ProgramPath.Find("gh", "relative-folder;" + bin, ".EXE;.CMD"), ignoreCase: true);   // "gh.CMD" is the same file
+			Assert.Equal(gh, ProgramPath.Find("gh.cmd", bin, ".EXE"));
+			Assert.Equal(gh, ProgramPath.Find(gh, "", ".EXE"));
+
+			// Not found: null (never Windows' own search, which looks next to the panel first).
+			Assert.Null(ProgramPath.Find("gh", bin, ".EXE"));
+			Assert.Null(ProgramPath.Find("gh", "", ".EXE;.CMD"));
+			Assert.Null(ProgramPath.Find(Path.Combine(bin, "missing.exe"), bin, ".EXE"));
+			Assert.Null(ProgramPath.Find("bin\\gh.cmd", t.Root, ".CMD"));
+
+			// A relative PATH entry is never searched, even when it leads to the program.
+			string relative = Path.GetRelativePath(Environment.CurrentDirectory, bin);
+			Assert.False(Path.IsPathRooted(relative));
+			Assert.Null(ProgramPath.Find("gh", relative, ".CMD"));
 		}
 
 		[Fact]
@@ -461,10 +577,24 @@ namespace ControlPanel.Tests
 			Assert.Empty(r.T.Dialogs.Questions);
 			Assert.Empty(r.T.Runner.StartedWith);
 
+			// The header doesn't offer the update while this is unfinished.
+			MainViewModel main = r.T.Main(r.Clock, r.Service);
+			await main.RefreshAsync();
+			await main.Updates.CheckTask!;
+			Assert.Equal("1.0.4", main.Updates.Available);
+			Assert.Equal("", main.UpdateLine);
+
+			// The installed updater may be half-copied: the one from the update that broke off is used.
+			string stagedUpdater = Path.Combine(r.StagingDir, "1.0.3", "Win64", "ControlPanel", "RebornUpdater.exe");
+			Directory.CreateDirectory(Path.GetDirectoryName(stagedUpdater)!);
+			File.WriteAllText(stagedUpdater, "the staged updater");
+
 			await r.Vm.RollBackCommand.ExecuteAsync("1.0.2");
 			Assert.Equal(new[] { "Go back to 1.0.2? The server restarts." }, r.T.Dialogs.Questions);
-			Assert.Equal("rollback --to 1.0.2 --win64 \"" + r.T.Win64 + "\" --panel-pid 4242 --panel \"" + r.T.App.ExePath + "\"",
-				Assert.Single(r.T.Runner.StartedWith).Args);
+			var start = Assert.Single(r.T.Runner.StartedWith);
+			Assert.Equal("rollback --to \"1.0.2\" --win64 \"" + r.T.Win64 + "\" --panel-pid 4242 --panel \"" + r.T.App.ExePath + "\"",
+				start.Args);
+			Assert.Equal("the staged updater", File.ReadAllText(start.Exe));
 
 			// A mark that can't be read still says plainly what happened.
 			File.WriteAllText(Path.Combine(r.T.Win64, "RebornVersions", Installer.InProgressFile), "{ broken");

@@ -36,7 +36,8 @@ namespace ControlPanel.Core.ViewModels
 			Updates = new UpdatesViewModel(updates ?? new UpdateService(paths, runner), dialogs, app, () => Games.PlayersInGames, _clock);
 			Updates.PropertyChanged += (_, e) =>
 			{
-				if (e.PropertyName == nameof(UpdatesViewModel.Available)) OnPropertyChanged(nameof(UpdateLine));
+				if (e.PropertyName is nameof(UpdatesViewModel.Available) or nameof(UpdatesViewModel.Unfinished))
+					OnPropertyChanged(nameof(UpdateLine));
 			};
 			CopyAddressCommand = new RelayCommand(CopyAddress, () => _publicIp != null);
 			StartMatchmakingCommand = new AsyncRelayCommand(StartMatchmakingAsync, () => !MatchmakingUp);
@@ -48,8 +49,9 @@ namespace ControlPanel.Core.ViewModels
 		public LogsViewModel Logs { get; }
 		public UpdatesViewModel Updates { get; }
 
-		// "Update available: 1.0.4" in the header while there is one ("" otherwise).
-		public string UpdateLine => Updates.Available == null ? "" : "Update available: " + Updates.Available;
+		// "Update available: 1.0.4" in the header while there is one ("" otherwise, and while an update
+		// is unfinished: then the Updates page's roll back comes first).
+		public string UpdateLine => Updates.Available == null || Updates.Unfinished != null ? "" : "Update available: " + Updates.Available;
 
 		// "203.0.113.10:5000": what players' games connect to. Shown only inside the panel.
 		private string _serverAddress = "";

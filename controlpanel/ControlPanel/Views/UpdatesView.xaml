@@ -67,7 +67,7 @@
 
             <!-- Saved versions. Hidden while an update is unfinished: then only the notice's roll back is allowed. -->
             <StackPanel Margin="0,20,0,0" Visibility="{Binding UnfinishedText, Converter={StaticResource NoTextToVisibility}}">
-                <TextBlock Text="Go back to an earlier version" Style="{StaticResource SectionTitle}" />
+                <TextBlock Text="Saved versions" Style="{StaticResource SectionTitle}" />
                 <TextBlock Style="{StaticResource NoteText}" Margin="0,0,0,8"
                            Text="Each update keeps a copy of the version it replaced (the last 3). Going back restarts the server." />
                 <TextBlock Text="No earlier versions are kept yet." Style="{StaticResource NoteText}"
