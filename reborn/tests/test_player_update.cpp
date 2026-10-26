@@ -12,6 +12,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 namespace fs = std::filesystem;
 
@@ -185,16 +186,69 @@ static void sha256_known_value() {
 static void older_build_is_not_offered() {
     PlayerUpdate::Manifest m;
     m.build = 5;
-    CHECK(!PlayerUpdate::ShouldOffer(m, 5));
+    CHECK(!PlayerUpdate::ShouldOffer(m, 5, 0));
     m.build = 4;
-    CHECK(!PlayerUpdate::ShouldOffer(m, 5));
+    CHECK(!PlayerUpdate::ShouldOffer(m, 5, 0));
     m.build = 6;
-    CHECK(PlayerUpdate::ShouldOffer(m, 5));
+    CHECK(PlayerUpdate::ShouldOffer(m, 5, 0));
     for (int b : {0, 1, 6, 1000}) {
         m.build = b;
-        CHECK(!PlayerUpdate::ShouldOffer(m, 0));   // a developer build never offers
+        CHECK(!PlayerUpdate::ShouldOffer(m, 0, 0));   // a developer build never offers
     }
 }
+
+// A build that would not start (dxgi put the previous mod back) is never offered again; a newer one is.
+static void refused_build_is_not_offered_again() {
+    PlayerUpdate::Manifest m;
+    m.build = 6;
+    CHECK(!PlayerUpdate::ShouldOffer(m, 5, 6));
+    m.build = 7;
+    CHECK(PlayerUpdate::ShouldOffer(m, 5, 6));
+    CHECK(PlayerUpdate::ShouldOffer(m, 5, 0));
+    m.build = 4;
+    CHECK(!PlayerUpdate::ShouldOffer(m, 5, 3));   // still never older
+
+    CHECK(PlayerUpdate::ParseBuildNumber("6") == 6);
+    CHECK(PlayerUpdate::ParseBuildNumber(" 12\r\n") == 12);
+    for (const char* bad : {"", "0", "07", "1.0.6", "-3", "abc", "6x", "1234567890"})
+        CHECK(PlayerUpdate::ParseBuildNumber(bad) == 0);
+}
+
+// The start after an update: the pending build becomes the refused one only when dxgi rolled back.
+static void refused_build_is_remembered_across_starts() {
+    fs::path dir = FreshFolder("refused");
+    CHECK(PlayerUpdate::NoteRefusedBuildAtStart(dir) == 0);   // nothing recorded yet
+
+    // 1.0.6 was installed and started fine: the pending note goes, nothing is refused.
+    CHECK(PlayerUpdate::WriteBuildFile(dir / PlayerUpdate::kPendingFile, 6));
+    CHECK(ReadAll(dir / PlayerUpdate::kPendingFile) == "6\n");
+    CHECK(PlayerUpdate::NoteRefusedBuildAtStart(dir) == 0);
+    CHECK(!fs::exists(dir / PlayerUpdate::kPendingFile));
+    CHECK(!fs::exists(dir / PlayerUpdate::kRefusedFile));
+
+    // 1.0.7 was installed and would not load: dxgi left reborn.dll.bad.
+    CHECK(PlayerUpdate::WriteBuildFile(dir / PlayerUpdate::kPendingFile, 7));
+    WriteAll(dir / "reborn.dll.bad", "the build that would not load");
+    CHECK(PlayerUpdate::NoteRefusedBuildAtStart(dir) == 7);
+    CHECK(PlayerUpdate::ReadBuildFile(dir / PlayerUpdate::kRefusedFile) == 7);
+    CHECK(!fs::exists(dir / PlayerUpdate::kPendingFile));
+    PlayerUpdate::CleanupOld(dir);
+    CHECK(!fs::exists(dir / "reborn.dll.bad"));
+
+    // Later starts still know.
+    CHECK(PlayerUpdate::NoteRefusedBuildAtStart(dir) == 7);
+    CHECK(PlayerUpdate::NoteRefusedBuildAtStart(dir) == 7);
+
+    // A damaged file counts as nothing refused; writing 0 is refused.
+    WriteAll(dir / PlayerUpdate::kRefusedFile, "garbage");
+    CHECK(PlayerUpdate::NoteRefusedBuildAtStart(dir) == 0);
+    CHECK(!PlayerUpdate::WriteBuildFile(dir / "zero.txt", 0));
+    CHECK(PlayerUpdate::ReadBuildFile(dir / "missing.txt") == 0);
+    CHECK(PlayerUpdate::NoteRefusedBuildAtStart(dir / "does-not-exist") == 0);
+}
+
+// An install's message is fixed text, so making one (even on an error path) never allocates.
+static_assert(std::is_same_v<decltype(PlayerUpdate::InstallOutcome::message), std::string_view>);
 
 static void bad_hash_changes_nothing() {
     fs::path dir = FreshFolder("bad_hash");
@@ -409,6 +463,8 @@ int main() {
     signature_round_trip();
     sha256_known_value();
     older_build_is_not_offered();
+    refused_build_is_not_offered_again();
+    refused_build_is_remembered_across_starts();
     bad_hash_changes_nothing();
     install_swaps_both_files();
     rename_failure_rolls_back();

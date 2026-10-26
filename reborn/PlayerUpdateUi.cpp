@@ -31,7 +31,9 @@ namespace PlayerUpdateUi {
         std::atomic<bool> g_started{ false };
         std::atomic<bool> g_atMenu{ false };
         std::atomic<bool> g_rolledBack{ false };   // dxgi put the previous mod back at this start
+        std::atomic<int> g_refused{ 0 };           // a build that would not start here; never offered again
         std::atomic<bool> g_installing{ false };   // InstallFiles is running (the exit waits for it)
+        std::atomic<bool> g_exiting{ false };      // the game is closing: no install may start any more
 
         void SetStage(Stage s, const std::string& failure = "") {
             std::lock_guard<std::mutex> l(g_lock);
@@ -102,7 +104,12 @@ namespace PlayerUpdateUi {
                     std::printf("[UPDATE] the server's update list could not be read; ignoring it\n");
                     return;
                 }
-                if (!PlayerUpdate::ShouldOffer(*m, Version::Build)) {
+                if (m->build == g_refused && m->build > Version::Build) {
+                    std::printf("[UPDATE] the server has Reborn %s, which did not start here before; not offering it again\n",
+                                m->version.c_str());
+                    return;
+                }
+                if (!PlayerUpdate::ShouldOffer(*m, Version::Build, g_refused)) {
                     std::printf("[UPDATE] the server has Reborn %s; this is %s, so there is nothing newer\n",
                                 m->version.c_str(), Version::Text);
                     return;
@@ -122,6 +129,11 @@ namespace PlayerUpdateUi {
             ~InstallingFlag() { g_installing = false; }
         };
 
+        // The download thread's last look before it changes any file. The flag is set first and the exit
+        // flag read second, while the exit sets its flag first and reads this one second: so either the
+        // exit sees the install and waits for it, or the install sees the exit and never starts.
+        bool ExitStarted() { return g_exiting.load(); }
+
         // Background thread: download every file, then let PlayerUpdate check and swap them.
         // startMs is when the player pressed Download; all the files share one 5-minute deadline.
         void Download(PlayerUpdate::Manifest m, ULONGLONG startMs) {
@@ -140,17 +152,29 @@ namespace PlayerUpdateUi {
                     bytes[f.name] = std::move(body);
                 }
                 if (reason.empty()) {
+                    if (ExitStarted()) {
+                        std::printf("[UPDATE] the game is closing, so the update was not installed\n");
+                        return;
+                    }
+                    const std::filesystem::path win64 = StartKey::Win64Dir();
                     PlayerUpdate::InstallOutcome out;
                     {
                         InstallingFlag installing;
-                        out = PlayerUpdate::InstallFiles(StartKey::Win64Dir(), m, bytes);
+                        if (ExitStarted()) {
+                            std::printf("[UPDATE] the game is closing, so the update was not installed\n");
+                            return;
+                        }
+                        out = PlayerUpdate::InstallFiles(win64, m, bytes);
+                        // Remembered so that, if this build will not start, the next start knows which one it was.
+                        if (out.ok) PlayerUpdate::WriteBuildFile(win64 / PlayerUpdate::kPendingFile, m.build);
                     }
                     if (out.ok) {
                         std::printf("[UPDATE] installed Reborn %s; the game uses it from the next start\n", m.version.c_str());
                         SetStage(Stage::Ready);
                         return;
                     }
-                    std::printf("[UPDATE] installing Reborn %s failed: %s\n", m.version.c_str(), out.message.c_str());
+                    std::printf("[UPDATE] installing Reborn %s failed: %.*s\n", m.version.c_str(),
+                                (int)out.message.size(), out.message.data());
                     reason = InstallFailureReason(out.message);
                 }
             } catch (...) {
@@ -185,6 +209,8 @@ namespace PlayerUpdateUi {
         // before dxgi.dll.new -> dxgi.dll: the next start finds no dxgi.dll, Windows loads its own,
         // the mod never loads, and nothing can repair it (the rollback lives in our dxgi.dll).
         // So the exit waits for the install to finish (well under a second), at most 10 s.
+        // The exit flag goes up first, so an install that has not begun yet never begins (ExitStarted).
+        g_exiting = true;
         if (!g_installing) return;
         std::printf("[UPDATE] waiting for the update to finish installing before the game closes\n");
         std::fflush(stdout);
@@ -300,6 +326,10 @@ namespace PlayerUpdateUi {
             g_rolledBack = true;   // StartCheckOnce skips this launch's check (WhyNoCheck)
             std::printf("[UPDATE] the last update did not start, so the previous version was put back\n");
         }
+        // Before CleanupOld, which removes reborn.dll.bad.
+        g_refused = PlayerUpdate::NoteRefusedBuildAtStart(win64);
+        if (g_refused > 0)
+            std::printf("[UPDATE] build %d did not start here before; it will not be offered again\n", g_refused.load());
         PlayerUpdate::CleanupOld(win64);
     }
 }

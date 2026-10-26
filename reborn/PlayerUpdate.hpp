@@ -44,13 +44,36 @@ bool VerifySignature(std::string_view data, std::string_view sigB64, std::string
 // Lowercase hex SHA-256 of bytes; empty string if Windows' crypto API fails.
 std::string Sha256Hex(std::string_view bytes);
 
-// Offer an update only to a released build (> 0) and only when the manifest is newer.
-bool ShouldOffer(const Manifest& m, int currentBuild);
+// Offer an update only to a released build (> 0), only when the manifest is newer, and never the
+// build that would not start here before (refusedBuild; 0 = none). A newer build is offered again.
+bool ShouldOffer(const Manifest& m, int currentBuild, int refusedBuild);
 
 struct InstallOutcome {
     bool ok;
-    std::string message;   // plain words for the player when ok is false
+    // Plain words for the player when ok is false ("" when ok). Always fixed text in the program,
+    // so making or returning an outcome never allocates (InstallFiles' error paths rely on that).
+    std::string_view message;
 };
+
+// Files in Win64 that remember an update across starts, one build number each:
+// pending = the build just installed, waiting for the next start to load it;
+// refused = a build that would not start, so dxgi put the previous mod back. Never offered again.
+constexpr const char* kPendingFile = "reborn-update-pending.txt";
+constexpr const char* kRefusedFile = "reborn-update-refused.txt";
+
+// "7" (spaces and line ends around it allowed) -> 7. Anything else -> 0.
+int ParseBuildNumber(std::string_view text);
+
+// The build number in the file, or 0 if it is missing or not a build number. Never throws.
+int ReadBuildFile(const std::filesystem::path& file);
+
+// Writes the build number (and a line end) to the file. False if that did not work. Never throws.
+bool WriteBuildFile(const std::filesystem::path& file, int build);
+
+// At a player's start, before CleanupOld: if dxgi put the previous mod back (reborn.dll.bad is there),
+// the build that was waiting to load (the pending file) becomes the refused one. The pending file is
+// removed either way. Returns the refused build (0 = none). Never throws.
+int NoteRefusedBuildAtStart(const std::filesystem::path& win64);
 
 // Installs the manifest's files into win64 from bytesByName. Every file's size and hash is
 // checked before anything is written. Then each file is written as <name>.new, and for each

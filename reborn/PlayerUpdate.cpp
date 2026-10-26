@@ -240,8 +240,54 @@ std::string Sha256Hex(std::string_view bytes) {
     return out;
 }
 
-bool ShouldOffer(const Manifest& m, int currentBuild) {
-    return currentBuild > 0 && m.build > currentBuild;
+bool ShouldOffer(const Manifest& m, int currentBuild, int refusedBuild) {
+    return currentBuild > 0 && m.build > currentBuild && (refusedBuild <= 0 || m.build != refusedBuild);
+}
+
+int ParseBuildNumber(std::string_view text) {
+    text = TrimAscii(text);
+    if (text.empty() || text.size() > 9 || text.front() == '0') return 0;
+    int n = 0;
+    for (char c : text) {
+        if (c < '0' || c > '9') return 0;
+        n = n * 10 + (c - '0');
+    }
+    return n;
+}
+
+int ReadBuildFile(const fs::path& file) {
+    try {
+        std::ifstream f(file, std::ios::binary);
+        if (!f) return 0;
+        char buf[32] = {};
+        f.read(buf, sizeof(buf) - 1);
+        if (f.bad()) return 0;
+        return ParseBuildNumber(std::string_view(buf, size_t(f.gcount())));
+    } catch (...) {
+        return 0;
+    }
+}
+
+bool WriteBuildFile(const fs::path& file, int build) {
+    try {
+        return build > 0 && WriteFileBytes(file, std::to_string(build) + "\n");
+    } catch (...) {
+        return false;
+    }
+}
+
+int NoteRefusedBuildAtStart(const fs::path& win64) {
+    try {
+        std::error_code ec;
+        if (fs::exists(win64 / "reborn.dll.bad", ec)) {
+            int pending = ReadBuildFile(win64 / kPendingFile);
+            if (pending > 0) WriteBuildFile(win64 / kRefusedFile, pending);
+        }
+        RemoveQuietly(win64 / kPendingFile);
+        return ReadBuildFile(win64 / kRefusedFile);
+    } catch (...) {
+        return 0;
+    }
 }
 
 InstallOutcome InstallFiles(const fs::path& win64, const Manifest& m,
@@ -316,11 +362,7 @@ InstallOutcome InstallFiles(const fs::path& win64, const Manifest& m,
         }
     }
     removeNew();
-    try {
-        return {false, restored ? kInUse : kNotPutBack};
-    } catch (...) {
-        return {false, std::string()};   // out of memory building the message; still a failure
-    }
+    return {false, restored ? kInUse : kNotPutBack};
 }
 
 void CleanupOld(const fs::path& win64) {
