@@ -7,6 +7,7 @@
 #include "Constants.hpp"
 #include "Hooks.hpp"
 #include "LocalHost.hpp"
+#include "PlayerUpdateUi.hpp"
 #include "StartKey.hpp"
 #include "StartGameWindow.hpp"
 #include "UiStyle.hpp"
@@ -756,6 +757,9 @@ namespace Overlay {
             }
             ImGui::End();
         }
+
+        // A newer Reborn on the server: offer it (main menu only). Under the refusal notice.
+        PlayerUpdateUi::Render();
 
         // The server turned this player away: its message stays up until OK, even after the game
         // has dropped back to the menu. Drawn last so it sits on top of everything else.

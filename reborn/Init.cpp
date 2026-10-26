@@ -4,6 +4,7 @@
 #include "CharSelectRules.hpp"
 #include "CharSelect.hpp"
 #include "PlayerNames.hpp"
+#include "PlayerUpdateUi.hpp"
 
 namespace Init {
     void Globals() {
@@ -25,6 +26,10 @@ namespace Init {
         freopen_s(&fileOut, "CONOUT$", "w", stdout);
         freopen_s(&fileErr, "CONOUT$", "w", stderr);
         freopen_s(&fileIn, "CONIN$", "r", stdin);
+    }
+
+    void UpdateCleanup() {
+        PlayerUpdateUi::CleanupAtStart();   // PlayerUpdate::CleanupOld on the game folder
     }
 
     void Hooks() {

@@ -5,6 +5,7 @@
 #include "dxgi.h"
 #include "dxgi1_3.h"
 #include "dxgi1_6.h"
+#include "ModRollback.hpp"
 
 #pragma comment(lib, "DXGI.lib")
 
@@ -53,10 +54,29 @@ extern "C" HRESULT __stdcall CreateDXGIFactory2Fake(UINT Flags, REFIID riid, voi
     return E_FAIL;
 }
 
+// The game's Win64 folder (where Battleborn.exe, this dxgi.dll and reborn.dll live).
+static std::wstring GameFolder() {
+    wchar_t exe[MAX_PATH];
+    DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return L"";
+    std::wstring dir(exe, n);
+    size_t slash = dir.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? L"" : dir.substr(0, slash);
+}
+
 void Main() {
     InitializeOriginalFunctions();
 
-    LoadLibraryA("reborn.dll");
+    if (LoadLibraryA("reborn.dll")) return;
+
+    // A player update that does not load: go back to the mod it replaced (kept as reborn.dll.old).
+    DWORD err = GetLastError();
+    std::wstring win64 = GameFolder();
+    if (win64.empty() || !ModRollback::PutBackPreviousMod(win64)) return;
+    char note[160];
+    sprintf_s(note, "[UPDATE] reborn.dll did not load (error %lu); put the previous version back\n", err);
+    OutputDebugStringA(note);
+    LoadLibraryW((win64 + L"\\reborn.dll").c_str());
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule,

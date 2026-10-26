@@ -133,6 +133,7 @@ void MainThread() {
             [](const std::string&) { return Combat::SnapshotJson(); },
             Combat::ApplyOrderJson, Combat::ActJson });
     }
+    Init::UpdateCleanup();
     Init::Hooks();
 
     while (!Globals::GetGWorld()) {

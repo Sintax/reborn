@@ -68,6 +68,9 @@ int main() {
     CHECK(LaunchOptions::Parse(L"Serverborn.exe -rbrandomhero -rbinstance=x").randomHero);
     CHECK(!sgDefaults.minConsole);
     CHECK(LaunchOptions::Parse(L"Battleborn.exe -rbminconsole").minConsole);
+    CHECK(!sgDefaults.noUpdate);
+    auto nu = LaunchOptions::Parse(L"Battleborn.exe -rbnoupdate");
+    CHECK(nu.noUpdate && nu.unknown.empty() && nu.errors.empty());
     CHECK(!LaunchOptions::Parse(L"Battleborn.exe -rbbots=9,1").errors.empty());
     CHECK(sgDefaults.draftStyle == "QuickSelect");
     auto ds = LaunchOptions::Parse(L"Battleborn.exe -rbautopilot -rbhost=Viaduct_P -rbdraftstyle=BanPick");

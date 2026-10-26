@@ -16,6 +16,7 @@
 #include "CharSelect.hpp"
 #include "PlayerNames.hpp"
 #include "Access.hpp"
+#include "PlayerUpdateUi.hpp"
 
 namespace Hooks {
     SafetyHookInline ProcessRemoteFunction;
@@ -1219,6 +1220,7 @@ namespace Hooks {
         }
         else {
             PlayerNames::ClientTick(DeltaTime);
+            PlayerUpdateUi::Tick();   // is the main menu up (the update notice is only drawn there)
             // Four times a second: finding the local controller walks the object list.
             static float sinceGearBox = 0.0f;
             sinceGearBox += DeltaTime;
@@ -1511,7 +1513,9 @@ namespace Hooks {
     // items. Returning 1 right away means the node never runs, so no service call happens on the
     // main menu (the online service this talks to no longer exists). Not part of character select.
     // Added in the first commit (cb9bb4a).
+    // It runs at the main menu, so it also starts this launch's one check for a player update.
     bool MainMenuHook(__int64 a1, __int64* a2, __int64 a3, __int64 a4, int a5, int a6, __int64* a7) {
+        PlayerUpdateUi::StartCheckOnce();
         return 1;
     }
 

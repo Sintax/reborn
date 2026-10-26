@@ -1,5 +1,6 @@
 // reborn/tests/test_player_update.cpp
 #include "../PlayerUpdate.hpp"
+#include "../PlayerUpdateUi.hpp"
 
 #include <windows.h>
 #include <sddl.h>
@@ -337,6 +338,47 @@ static void cleanup_removes_old_files() {
     PlayerUpdate::CleanupOld(dir / "does-not-exist");    // missing folder: still fine
 }
 
+// The notice's words, built from what InstallFiles really says.
+static void notice_texts_read_plainly() {
+    using namespace PlayerUpdateUi;
+    CHECK(OfferText("1.0.3") == "Update available: Reborn 1.0.3");
+    CHECK(std::string(kReadyText) == "Update ready. Restart the game to use it.");
+    CHECK(FailureText("the download did not finish") ==
+          "The update could not be installed: the download did not finish. You can keep playing.");
+
+    fs::path dir = FreshFolder("texts");
+    std::string reborn = "new reborn bytes", dxgi = "new dxgi bytes";
+    auto damaged = PlayerUpdate::InstallFiles(dir, NewManifest(reborn, dxgi), {{"reborn.dll", reborn}, {"dxgi.dll", "new dxgi bytez"}});
+    CHECK(!damaged.ok);
+    CHECK(InstallFailureReason(damaged.message) == "the download was damaged");
+
+    HANDLE h = CreateFileW((dir / "dxgi.dll").c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    auto inUse = PlayerUpdate::InstallFiles(dir, NewManifest(reborn, dxgi), {{"reborn.dll", reborn}, {"dxgi.dll", dxgi}});
+    CloseHandle(h);
+    CHECK(!inUse.ok);
+    CHECK(FailureText(InstallFailureReason(inUse.message)) ==
+          "The update could not be installed: a game file is in use. Please try again after restarting the game. "
+          "You can keep playing.");
+
+    CHECK(InstallFailureReason("The update could not be installed, and the old files could not all be put back. "
+                               "Please reinstall Battleborn Reborn.") ==
+          "the old files could not all be put back. Please reinstall Battleborn Reborn");
+    CHECK(InstallFailureReason("The update could not be installed. Nothing was changed.") == "the new files could not be saved");
+    CHECK(InstallFailureReason("") == "the new files could not be saved");
+}
+
+// Who checks: only a released player build that was not told not to.
+static void only_released_players_check() {
+    using PlayerUpdateUi::WhyNoCheck;
+    CHECK(WhyNoCheck(false, false, false, 3).empty());
+    CHECK(!WhyNoCheck(true, false, false, 3).empty());    // a game server
+    CHECK(!WhyNoCheck(false, true, false, 3).empty());    // -rbautopilot
+    CHECK(!WhyNoCheck(false, false, true, 3).empty());    // -rbnoupdate
+    CHECK(!WhyNoCheck(false, false, false, 0).empty());   // a developer build
+    CHECK(PlayerUpdateUi::kMaxManifestResponse == 64 * 1024);
+}
+
 int main() {
     manifest_parses();
     manifest_rejects_other_names();
@@ -351,6 +393,8 @@ int main() {
     unreadable_file_is_a_failure_not_missing();
     manifest_version_matches_build_and_notes_are_short();
     cleanup_removes_old_files();
+    notice_texts_read_plainly();
+    only_released_players_check();
 
     std::error_code ec;
     fs::remove_all(fs::temp_directory_path() / ("reborn_test_player_update_" + std::to_string(GetCurrentProcessId())), ec);

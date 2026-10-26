@@ -12,6 +12,9 @@ namespace Init {
 
     void Console();
 
+    // Removes what an earlier player update left behind (reborn.dll.old and friends).
+    void UpdateCleanup();
+
     void Hooks();
 
     void ImGUI();

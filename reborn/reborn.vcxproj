@@ -176,6 +176,7 @@
     <ClInclude Include="UiStyle.hpp" />
     <ClInclude Include="StartGameWindow.hpp" />
     <ClInclude Include="PlayerUpdate.hpp" />
+    <ClInclude Include="PlayerUpdateUi.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BB\GameDefines.cpp" />
@@ -225,6 +226,7 @@
     <ClCompile Include="UiStyle.cpp" />
     <ClCompile Include="StartGameWindow.cpp" />
     <ClCompile Include="PlayerUpdate.cpp" />
+    <ClCompile Include="PlayerUpdateUi.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

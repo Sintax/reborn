@@ -21,6 +21,7 @@ namespace LaunchOptions {
         int players = 0;              // server: players to wait for (0 = keep default)
         bool randomHero = false;      // server, local tests only: sets ServerSettings::RandomHero (real games get it from the coordinator)
         bool minConsole = false;      // start the mod's console window minimized (logs are still written)
+        bool noUpdate = false;        // client: never check the server for a player update
         std::wstring readyEvent;      // server: named event to set once it is listening (LocalHost.cpp)
         std::string coordinator;      // "host:port" of the matchmaking service (empty = Constants::GameCoordinatorEndpoint)
         std::string coordinatorKey;   // server: the token the service gave this server; with coordinator, turns on coordinator mode

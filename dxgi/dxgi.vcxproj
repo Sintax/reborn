@@ -143,6 +143,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />
+    <ClInclude Include="ModRollback.hpp" />
     <ClInclude Include="pch.h" />
   </ItemGroup>
   <ItemGroup>
