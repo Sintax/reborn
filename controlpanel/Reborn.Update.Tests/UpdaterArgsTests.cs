@@ -85,6 +85,7 @@ public sealed class UpdaterArgsTests : IDisposable
     [Fact]
     public void Panel_that_will_not_close_changes_nothing_and_says_so()
     {
+        MakeGameFolder();
         Scratch.Write(_s.Win64, "reborn.dll", "old dll");
         string staged = _s.Staged("1.0.7");
         Scratch.Write(staged, "reborn.dll", "new dll");
@@ -111,6 +112,7 @@ public sealed class UpdaterArgsTests : IDisposable
     [Fact]
     public void Install_swaps_the_files_then_starts_the_panel_again()
     {
+        MakeGameFolder();
         Scratch.Write(_s.Win64, "reborn-deployed.txt", "1.0.1\n");
         Scratch.Write(_s.Win64, "reborn.dll", "old dll");
         string staged = _s.Staged("1.0.7");
@@ -134,6 +136,7 @@ public sealed class UpdaterArgsTests : IDisposable
     [Fact]
     public void Failed_install_still_starts_the_panel_and_exits_1()
     {
+        MakeGameFolder();
         Scratch.Write(_s.Win64, "reborn-deployed.txt", "1.0.1\n");
         Scratch.Write(_s.Win64, "reborn.dll", "old dll");
         string staged = _s.Staged("1.0.7");
@@ -155,6 +158,7 @@ public sealed class UpdaterArgsTests : IDisposable
     [Fact]
     public void Rollback_to_a_version_that_was_not_kept_says_so_and_starts_the_panel()
     {
+        MakeGameFolder();
         var servers = new FakeServers(_s.Win64);
         var started = new List<string>();
         var output = new StringWriter();
@@ -164,9 +168,197 @@ public sealed class UpdaterArgsTests : IDisposable
 
         Assert.Equal(1, exit);
         Assert.Empty(servers.Calls);
-        Assert.Equal(["p.exe"], started);
+        Assert.Equal([Path.GetFullPath("p.exe")], started);   // handed on as an absolute path
         using JsonDocument last = JsonDocument.Parse(File.ReadAllText(Path.Combine(_s.Versions, "last-update.json")));
         Assert.False(last.RootElement.GetProperty("ok").GetBoolean());
+    }
+
+    // A pretend game folder: Battleborn.exe is what marks a real Win64.
+    void MakeGameFolder() => Scratch.Write(_s.Win64, "Battleborn.exe", "game");
+
+    [Fact]
+    public void Missing_win64_folder_changes_nothing_and_exits_1()
+    {
+        string missing = Path.Combine(_s.Root, "no-such-folder");
+        string staged = _s.Staged("1.0.7");
+        Scratch.Write(staged, "reborn.dll", "new dll");
+        var servers = new FakeServers(missing);
+        var output = new StringWriter();
+
+        int exit = UpdaterCli.Run(InstallArgs(missing, staged), output, servers,
+            (_, _) => throw new Xunit.Sdk.XunitException("must not wait"),
+            (_, _) => throw new Xunit.Sdk.XunitException("must not start"), () => When);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(servers.Calls);
+        Assert.False(Directory.Exists(missing));
+        Assert.Contains("isn't the game's Win64 folder", output.ToString());
+    }
+
+    [Fact]
+    public void Win64_folder_without_the_game_changes_nothing_and_exits_1()
+    {
+        // A folder that exists but is not the game's (no Battleborn.exe, no matchmaking folder).
+        Scratch.Write(_s.Win64, "other.txt", "x");
+        string staged = _s.Staged("1.0.7");
+        Scratch.Write(staged, "reborn.dll", "new dll");
+        var servers = new FakeServers(_s.Win64);
+        var output = new StringWriter();
+
+        int exit = UpdaterCli.Run(InstallArgs(_s.Win64, staged), output, servers,
+            (_, _) => throw new Xunit.Sdk.XunitException("must not wait"),
+            (_, _) => throw new Xunit.Sdk.XunitException("must not start"), () => When);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(servers.Calls);
+        Assert.False(Directory.Exists(_s.Versions));
+        Assert.Contains("isn't the game's Win64 folder", output.ToString());
+    }
+
+    [Fact]
+    public void Missing_staged_folder_changes_nothing_and_exits_1()
+    {
+        MakeGameFolder();
+        var servers = new FakeServers(_s.Win64);
+        var output = new StringWriter();
+
+        int exit = UpdaterCli.Run(InstallArgs(_s.Win64, Path.Combine(_s.Root, "no-staged")), output, servers,
+            (_, _) => throw new Xunit.Sdk.XunitException("must not wait"),
+            (_, _) => throw new Xunit.Sdk.XunitException("must not start"), () => When);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(servers.Calls);
+        Assert.False(Directory.Exists(_s.Versions));
+        Assert.Contains("downloaded update folder is missing", output.ToString());
+    }
+
+    [Fact]
+    public void A_matchmaking_folder_is_enough_to_count_as_the_game_folder()
+    {
+        Directory.CreateDirectory(Path.Combine(_s.Win64, "matchmaking"));
+        var servers = new FakeServers(_s.Win64);
+        int exit = UpdaterCli.Run(["rollback", "--to", "1.0.9", "--win64", _s.Win64, "--panel-pid", "9", "--panel", "p.exe"],
+            new StringWriter(), servers, (_, _) => true, (_, _) => true, () => When);
+        Assert.Equal(1, exit);   // got past the folder check; 1.0.9 was simply never saved
+        Assert.True(Directory.Exists(_s.Versions));
+    }
+
+    [Fact]
+    public void Relative_paths_are_made_absolute_before_the_panel_is_started()
+    {
+        MakeGameFolder();
+        var started = new List<(string Exe, string Dir)>();
+        string relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), _s.Win64);
+
+        UpdaterCli.Run(["rollback", "--to", "1.0.9", "--win64", relative, "--panel-pid", "9", "--panel", Path.Combine(relative, "ControlPanel", "ControlPanel.exe")],
+            new StringWriter(), new FakeServers(_s.Win64), (_, _) => true, (exe, dir) => { started.Add((exe, dir)); return true; }, () => When);
+
+        Assert.Single(started);
+        Assert.True(Path.IsPathRooted(started[0].Exe));
+        Assert.Equal(Path.Combine(_s.Win64, "ControlPanel", "ControlPanel.exe"), started[0].Exe);
+        Assert.Equal(Path.Combine(_s.Win64, "ControlPanel"), started[0].Dir);
+    }
+
+    sealed class ThrowingServers : IServerControl
+    {
+        public void StopAll() => throw new InvalidOperationException("stop blew up");
+        public bool StartMatchmaking() => throw new InvalidOperationException("start blew up");
+        public bool WaitForGame(TimeSpan timeout) => throw new InvalidOperationException("wait blew up");
+    }
+
+    [Fact]
+    public void Servers_that_throw_still_end_with_exit_1_and_the_panel_opened_again()
+    {
+        MakeGameFolder();
+        Scratch.Write(_s.Win64, "reborn-deployed.txt", "1.0.1\n");
+        Scratch.Write(_s.Win64, "reborn.dll", "old dll");
+        string staged = _s.Staged("1.0.7");
+        Scratch.Write(staged, "reborn.dll", "new dll");
+        var started = new List<string>();
+        var output = new StringWriter();
+
+        int exit = UpdaterCli.Run(InstallArgs(_s.Win64, staged), output, new ThrowingServers(), (_, _) => true,
+            (exe, _) => { started.Add(exe); return true; }, () => When);
+
+        Assert.Equal(1, exit);
+        Assert.Single(started);
+        Assert.Equal("old dll", _s.Read("reborn.dll"));
+    }
+
+    [Fact]
+    public void An_unexpected_error_prints_one_line_exits_1_and_still_opens_the_panel()
+    {
+        MakeGameFolder();
+        var started = new List<string>();
+        var output = new StringWriter();
+
+        // The clock is only read once the panel has closed, so this fails inside the guarded part, even
+        // while the result is being written.
+        int exit = UpdaterCli.Run(["rollback", "--to", "1.0.9", "--win64", _s.Win64, "--panel-pid", "9", "--panel", "p.exe"],
+            output, new FakeServers(_s.Win64), (_, _) => true, (exe, _) => { started.Add(exe); return true; },
+            () => throw new InvalidOperationException("clock broke"));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("The updater hit a problem: clock broke", output.ToString());
+        Assert.Single(started);
+    }
+
+    [Fact]
+    public void An_error_while_waiting_for_the_panel_does_not_start_the_panel()
+    {
+        MakeGameFolder();
+        var output = new StringWriter();
+        var servers = new FakeServers(_s.Win64);
+
+        int exit = UpdaterCli.Run(["rollback", "--to", "1.0.9", "--win64", _s.Win64, "--panel-pid", "9", "--panel", "p.exe"],
+            output, servers, (_, _) => throw new InvalidOperationException("no access"),
+            (_, _) => throw new Xunit.Sdk.XunitException("the panel never closed"), () => When);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("The updater hit a problem: no access", output.ToString());
+        Assert.Empty(servers.Calls);
+    }
+
+    [Fact]
+    public void An_error_inside_a_roll_back_says_the_roll_back_stopped_and_is_recorded()
+    {
+        MakeGameFolder();
+        int calls = 0;
+        var output = new StringWriter();
+
+        // The first clock read is inside the installer; the next one is the updater writing its own record.
+        int exit = UpdaterCli.Run(["rollback", "--to", "1.0.9", "--win64", _s.Win64, "--panel-pid", "9", "--panel", "p.exe"],
+            output, new FakeServers(_s.Win64), (_, _) => true, (_, _) => true,
+            () => calls++ == 0 ? throw new InvalidOperationException("clock broke") : When);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("The roll back stopped because of an error: clock broke", output.ToString());
+        using JsonDocument last = JsonDocument.Parse(File.ReadAllText(Path.Combine(_s.Versions, "last-update.json")));
+        Assert.StartsWith("The roll back stopped", last.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Failure_wording_says_roll_back_or_update()
+    {
+        Assert.Equal("The roll back stopped", UpdaterCli.StoppedText(UpdaterArgs.Parse(["rollback", "--to", "1.0.1", "--win64", "w", "--panel-pid", "4", "--panel", "p"])!));
+        Assert.Equal("The update stopped", UpdaterCli.StoppedText(UpdaterArgs.Parse(InstallArgs())!));
+    }
+
+    [Fact]
+    public void Unreadable_matchmaking_note_says_what_to_do()
+    {
+        Assert.StartsWith("NOTE:", WindowsServerControl.UnreadableNote);
+        Assert.Contains("another Windows account", WindowsServerControl.UnreadableNote);
+        Assert.Contains("could not be stopped", WindowsServerControl.UnreadableNote);
+    }
+
+    [Fact]
+    public void Port_name_is_read_in_any_letter_case()
+    {
+        Scratch.Write(_s.Win64, @"matchmaking\appsettings.json", "{ \"coordinatorport\": 6123 }");
+        Assert.Equal(6123, WindowsServerControl.ReadCoordinatorPort(_s.Win64));
+        Scratch.Write(_s.Win64, @"matchmaking\appsettings.json", "{ \"COORDINATORPORT\": \"6124\" }");
+        Assert.Equal(6124, WindowsServerControl.ReadCoordinatorPort(_s.Win64));
     }
 
     [Fact]

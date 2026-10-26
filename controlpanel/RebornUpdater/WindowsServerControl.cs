@@ -6,9 +6,16 @@ namespace RebornUpdater;
 
 /// <summary>Stops and starts the real game servers and matchmaking on this machine, the way
 /// StartMatchmaking.bat and StopMatchmaking.bat do. Never throws: anything that goes wrong is a "no".</summary>
-public sealed class WindowsServerControl(string win64) : IServerControl
+public sealed class WindowsServerControl(string win64, Action<string>? note = null) : IServerControl
 {
     public const int DefaultCoordinatorPort = 5000;
+
+    /// <summary>Printed when a gamecontroller program is running but its location can't be read.</summary>
+    public const string UnreadableNote =
+        "NOTE: A gamecontroller program is running but its location can't be read. It may be matchmaking running under another " +
+        "Windows account, and it could not be stopped. If the update fails, close it by hand (Task Manager) and try again.";
+
+    bool _noted;
     static readonly TimeSpan StopWait = TimeSpan.FromSeconds(15);
     static readonly TimeSpan PollEvery = TimeSpan.FromSeconds(5);
 
@@ -82,11 +89,16 @@ public sealed class WindowsServerControl(string win64) : IServerControl
         {
             using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(win64, "matchmaking", "appsettings.json")),
                 new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("CoordinatorPort", out JsonElement v))
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
             {
-                if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int n) && n is > 0 and <= 65535) return n;
-                if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out int s) && s is > 0 and <= 65535) return s;
+                // The name is matched in any letter case, as the matchmaking program's own settings reader does.
+                foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
+                {
+                    if (!string.Equals(prop.Name, "CoordinatorPort", StringComparison.OrdinalIgnoreCase)) continue;
+                    JsonElement v = prop.Value;
+                    if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int n) && n is > 0 and <= 65535) return n;
+                    if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out int s) && s is > 0 and <= 65535) return s;
+                }
             }
         }
         catch (Exception) { }
@@ -115,7 +127,16 @@ public sealed class WindowsServerControl(string win64) : IServerControl
             string? exe = p.MainModule?.FileName;
             return exe != null && string.Equals(Path.GetFullPath(exe), Path.GetFullPath(MatchmakingExe), StringComparison.OrdinalIgnoreCase);
         }
-        catch (Exception) { return false; }   // cannot see its path: not ours to stop
+        catch (Exception)
+        {
+            // Cannot see its path (another account's process, usually): not ours to stop. Say so once.
+            if (!_noted)
+            {
+                _noted = true;
+                try { note?.Invoke(UnreadableNote); } catch (Exception) { }
+            }
+            return false;
+        }
     }
 
     static List<Process> Find(string name, Func<Process, bool> keep)

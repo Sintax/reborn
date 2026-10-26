@@ -5,7 +5,8 @@ using Reborn.Update;
 namespace RebornUpdater;
 
 /// <summary>What RebornUpdater.exe does, with the outside world handed in so tests can run it.
-/// Exit codes: 0 done, 1 the update or roll back did not work (the old version is back), 2 bad command line.</summary>
+/// Exit codes: 0 done, 1 the update or roll back did not work (the old version is back, or nothing was
+/// touched), 2 bad command line.</summary>
 public static class UpdaterCli
 {
     public const string PanelStillOpen = "Close the Control Panel and try again.";
@@ -27,43 +28,97 @@ public static class UpdaterCli
         now ??= () => DateTime.Now;
         panelGone ??= WaitForProcessToEnd;
         startPanel ??= StartProgram;
-        string win64 = Path.GetFullPath(a.Win64);
-        string what = a.Command == UpdaterArgs.Install ? $"Updating the server to {a.Version}" : $"Going back to {a.Version}";
 
-        output.WriteLine($"{what}.");
-        output.WriteLine("Waiting for the Control Panel to close...");
-        if (!panelGone(a.PanelPid, PanelWait))
-        {
-            output.WriteLine(PanelStillOpen + " Nothing was changed.");
-            WriteResult(win64, a.Version, false, PanelStillOpen, now);
-            return 1;
-        }
-
-        InstallResult result;
+        // Everything downstream gets absolute paths, whatever folder the updater was started from.
+        string win64, panel, staged;
         try
         {
-            var installer = new Installer(win64, servers ?? new WindowsServerControl(win64), now);
-            output.WriteLine("Saving a copy of the current files, then stopping the game servers and matchmaking.");
-            output.WriteLine("Then the new files go in and matchmaking starts. This can take up to 3 minutes. Please wait.");
-            result = a.Command == UpdaterArgs.Install ? installer.Install(a.Staged!, a.Version) : installer.RollBack(a.Version);
+            win64 = Path.GetFullPath(a.Win64);
+            panel = Path.GetFullPath(a.Panel);
+            staged = a.Staged is null ? "" : Path.GetFullPath(a.Staged);
         }
         catch (Exception e)
         {
-            result = new InstallResult(false, "The update stopped because of an error: " + e.Message);
-            WriteResult(win64, a.Version, false, result.Message, now);
+            output.WriteLine("The updater hit a problem: " + e.Message);
+            return 1;
         }
 
-        output.WriteLine(result.Message);
-        output.WriteLine(result.Ok ? "Done." : "This did not work.");
+        // Check the folders before anything is closed or stopped.
+        if (!Directory.Exists(win64) || !(File.Exists(Path.Combine(win64, "Battleborn.exe")) || Directory.Exists(Path.Combine(win64, "matchmaking"))))
+        {
+            output.WriteLine($"{win64} isn't the game's Win64 folder (no Battleborn.exe or matchmaking folder there). Nothing was changed.");
+            return 1;
+        }
+        if (a.Command == UpdaterArgs.Install && !Directory.Exists(staged))
+        {
+            output.WriteLine("The downloaded update folder is missing. Nothing was changed.");
+            return 1;
+        }
 
-        output.WriteLine("Opening the Control Panel again...");
-        string? panelDir = Path.GetDirectoryName(Path.GetFullPath(a.Panel));
-        if (!startPanel(a.Panel, panelDir ?? win64))
-            output.WriteLine("The Control Panel could not be opened. Start it yourself from " + a.Panel);
-        return result.Ok ? 0 : 1;
+        string what = a.Command == UpdaterArgs.Install ? $"Updating the server to {a.Version}" : $"Going back to {a.Version}";
+        bool panelClosed = false;
+        int exit = 1;
+        try
+        {
+            output.WriteLine($"{what}.");
+            output.WriteLine("Waiting for the Control Panel to close...");
+            if (!panelGone(a.PanelPid, PanelWait))
+            {
+                output.WriteLine(PanelStillOpen + " Nothing was changed.");
+                WriteResult(win64, a.Version, false, PanelStillOpen, now);
+                return 1;
+            }
+            panelClosed = true;
+
+            InstallResult result;
+            try
+            {
+                var installer = new Installer(win64, servers ?? new WindowsServerControl(win64, output.WriteLine), now);
+                output.WriteLine("Saving a copy of the current files, then stopping the game servers and matchmaking.");
+                output.WriteLine("Then the new files go in and matchmaking starts. This can take up to 3 minutes. Please wait.");
+                result = a.Command == UpdaterArgs.Install ? installer.Install(staged, a.Version) : installer.RollBack(a.Version);
+            }
+            catch (Exception e)
+            {
+                result = new InstallResult(false, $"{StoppedText(a)} because of an error: {e.Message}");
+                WriteResult(win64, a.Version, false, result.Message, now);
+            }
+
+            output.WriteLine(result.Message);
+            output.WriteLine(result.Ok ? "Done." : "This did not work.");
+            exit = result.Ok ? 0 : 1;
+        }
+        catch (Exception e)
+        {
+            output.WriteLine("The updater hit a problem: " + e.Message);
+            exit = 1;
+        }
+        finally
+        {
+            // The panel was closed for this run, so open it again whatever happened.
+            if (panelClosed)
+            {
+                try
+                {
+                    output.WriteLine("Opening the Control Panel again...");
+                    if (!startPanel(panel, Path.GetDirectoryName(panel) ?? win64))
+                        output.WriteLine("The Control Panel could not be opened. Start it yourself from " + panel);
+                }
+                catch (Exception e)
+                {
+                    try { output.WriteLine("The Control Panel could not be opened (" + e.Message + "). Start it yourself from " + panel); }
+                    catch (Exception) { }
+                }
+            }
+        }
+        return exit;
     }
 
-    // Same shape as the installer's own record, for the one case where it is never called.
+    /// <summary>The start of the plain sentence for a run that stopped on an error.</summary>
+    public static string StoppedText(UpdaterArgs a) =>
+        a.Command == UpdaterArgs.Install ? "The update stopped" : "The roll back stopped";
+
+    // Same shape as the installer's own record, for the cases where it is never called.
     static void WriteResult(string win64, string version, bool ok, string message, Func<DateTime> now)
     {
         try
