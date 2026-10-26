@@ -24,8 +24,9 @@ def server_args(map_name: str, players: int) -> list[str]:
 
 
 def client_args() -> list[str]:
-    # A normal game, but with its own instance name so it may run beside the server.
-    return ["-nomoviestartup", "-NOSPLASH", f"-rbinstance={CLIENT_NAME}"]
+    # A normal game, but with its own instance name so it may run beside the server, and it never
+    # looks for a player update (it runs whatever mod was built here).
+    return ["-nomoviestartup", "-NOSPLASH", launch.NO_UPDATE_ARG, f"-rbinstance={CLIENT_NAME}"]
 
 
 def main(argv: list[str] | None = None, launcher=None) -> int:

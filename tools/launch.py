@@ -40,14 +40,19 @@ def client_res() -> tuple[int, int]:
         return CLIENT_RES_FALLBACK
 
 
+# Test players never look for a player update, whatever DLL they run: a numbered DLL left on disk
+# after `python -m tools.release` would otherwise ask matchmaking for one at the menu.
+NO_UPDATE_ARG = "-rbnoupdate"
+
+
 def base_args(role: str) -> list[str]:
     if role == "solo":
-        return list(GAME_BASE_ARGS)
+        return [*GAME_BASE_ARGS, NO_UPDATE_ARG]
     a = [x for x in GAME_BASE_ARGS if not x.startswith(("-ResX=", "-ResY="))]
     if role == "server":
         return a + ["-nullrhi"]
     w, h = client_res()
-    return a + [f"-ResX={w}", f"-ResY={h}"]
+    return a + [f"-ResX={w}", f"-ResY={h}", NO_UPDATE_ARG]
 GAME_EXES = ("Battleborn.exe", "Serverborn.exe")
 STEAMID_BASE = 76561197960287930
 LOADER_FILES = ("steamclient_loader_x64.exe", "steamclient64.dll", "steamclient.dll")

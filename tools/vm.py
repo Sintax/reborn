@@ -13,7 +13,9 @@ On the VM, from its clone of this repo (Claude there runs it):
 
 A numbered release (1.0.N) says which commit it was built from in its commit.txt; the VM checks out
 that commit. It also carries the player update (player-update.zip), which goes into
-matchmaking\\player-update so matchmaking can offer it to players' games.
+matchmaking\\player-update so matchmaking can offer it to players' games, and the Control Panel's
+updater (RebornUpdater.exe), which goes beside the panel. Install the first numbered release this
+way; after that use the panel's Update now (mixing the two leaves gaps in the panel's saved versions).
 
 Users (who may join the server, and who may start games). The list is reborn-users.json in the
 game's Win64 folder; changes take effect within a second, no restart:
@@ -68,8 +70,13 @@ PLAYER_UPDATE_DIR = "player-update"                # ...unpacked into matchmakin
 PLAYER_UPDATE_FILES = ("manifest.json", "manifest.json.sig", "reborn.dll", "dxgi.dll")
 COMMIT_ASSET = "commit.txt"                        # numbered releases: the commit they were built from
 COMMIT_RE = re.compile(r"[0-9a-f]{7,40}")
+UPDATER_EXE = "RebornUpdater.exe"                  # numbered releases: the panel's updater, beside the panel
 # A numbered release also holds the big server update zip, which this update does not use.
-VM_ASSETS = (*MOD_FILES, PANEL_EXE, PLAYER_ZIP_ASSET, PLAYER_UPDATE_ZIP)
+VM_ASSETS = (*MOD_FILES, PANEL_EXE, UPDATER_EXE, PLAYER_ZIP_ASSET, PLAYER_UPDATE_ZIP)
+# A release number as the mod carries it (Version.hpp's text, a C string): "1.0.7\0".
+NUMBERED_DLL_RE = re.compile(rb"(?<![0-9.])1\.0\.[1-9][0-9]*\x00")
+GH_MISSING = ("GitHub's command line tool (gh) is not installed. Install it from https://cli.github.com "
+              "and sign in with gh auth login.")
 PANEL_PROJECT = config.REPO / "controlpanel" / "ControlPanel"
 PANEL_PUBLISH = PANEL_PROJECT / "bin" / "release-publish"                  # bin/ is gitignored
 # The player installer WITH the Steam loader (dist/ is gitignored). Private: it goes only to the
@@ -92,11 +99,25 @@ class VmError(RuntimeError):
     pass
 
 
+def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    except FileNotFoundError:
+        if cmd[0] == "gh":
+            raise VmError(GH_MISSING) from None
+        raise
+
+
 def run(cmd: list[str], cwd: Path = config.REPO, check: bool = True) -> str:
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    p = _run(cmd, cwd)
     if check and p.returncode != 0:
         raise VmError(f"{' '.join(cmd)} failed:\n{p.stdout}{p.stderr}")
     return p.stdout.strip()
+
+
+def succeeds(cmd: list[str], cwd: Path = config.REPO) -> bool:
+    """True when the program ran and said yes (exit code 0)."""
+    return _run(cmd, cwd).returncode == 0
 
 
 def git(*args: str, check: bool = True) -> str:
@@ -152,17 +173,33 @@ def panel_files() -> list[Path]:
     return [exe, PLAYER_ZIP]
 
 
+def check_not_numbered(files: list[Path]) -> None:
+    """The reverse of tools.release's check: a release named after a commit must hold a developer
+    build. After `python -m tools.release` the DLLs on disk call themselves 1.0.N until rebuilt, and
+    uploading them here would put a numbered mod under a commit's name."""
+    for f in files:
+        if f.name not in ("reborn.dll", "dxgi.dll"):
+            continue
+        m = NUMBERED_DLL_RE.search(f.read_bytes())
+        if m:
+            number = m.group()[:-1].decode("ascii")
+            raise VmError(f"{f.name} on disk is release {number}, left from python -m tools.release. "
+                          "Build it again first (run this without --no-build, or python -m tools.build). "
+                          "Nothing was uploaded.")
+
+
 def release(build: bool) -> str:
     version = check_pushed()
     if build:
         package.build_all()
         publish_panel()
         build_player_zip(version)   # after the mod build: the zip holds those DLLs
-    mod = [str(f) for f in mod_files()]
+    mod_paths = mod_files()
+    check_not_numbered(mod_paths)
+    mod = [str(f) for f in mod_paths]
     panel_exe, player_zip = panel_files()   # all checked before anything is uploaded
     notes = f"{git('rev-parse', '--abbrev-ref', 'HEAD')}: {git('log', '-1', '--format=%s')}"
-    exists = subprocess.run(["gh", "release", "view", version, "--repo", BUILDS_REPO],
-                            capture_output=True, text=True).returncode == 0
+    exists = succeeds(["gh", "release", "view", version, "--repo", BUILDS_REPO])
     # Once `python -m tools.release` has made numbered releases, the newest of those must stay
     # "latest": the Control Panel and a plain `tools.vm update` look there for update.json and the
     # player update, and this kind of release has neither.
@@ -279,6 +316,9 @@ def stage_panel(downloaded: Path, win64: Path) -> list[tuple[str, Path, Path]]:
     and the error is a VmError."""
     wanted = [("Control Panel", PANEL_EXE, win64 / "ControlPanel" / PANEL_EXE,
                "This release has no Control Panel; keeping the one already installed."),
+              # The panel's Update now and Roll back start this one; it must sit beside the panel.
+              ("Control Panel's updater", UPDATER_EXE, win64 / "ControlPanel" / UPDATER_EXE,
+               f"This release has no updater ({UPDATER_EXE}); keeping the one already installed, if any."),
               ("player installer zip", PLAYER_ZIP_ASSET, win64 / PLAYER_ZIP_ASSET,
                "This release has no player installer zip; keeping the one already installed.")]
     staged: list[tuple[str, Path, Path]] = []
@@ -446,15 +486,25 @@ def start_matchmaking(win64: Path) -> None:
                      creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)
 
 
+def ready_games(games) -> list[dict]:
+    """The games whose "ready" is true (any letter case). Matchmaking lists a game the moment it
+    starts the game server, with "ready": false until that server has loaded and checked in, so only
+    a ready game shows the new version works."""
+    if not isinstance(games, list):
+        return []
+    return [g for g in games if isinstance(g, dict)
+            and any(isinstance(k, str) and k.lower() == "ready" and v is True for k, v in g.items())]
+
+
 def wait_for_game(seconds: int = 180) -> list[dict]:
     deadline = time.time() + seconds
     while time.time() < deadline:
         try:
             with urllib.request.urlopen(GAMES_URL, timeout=5) as r:
-                games = json.load(r)
+                games = ready_games(json.load(r))
             if games:
                 return games
-        except OSError:
+        except (OSError, ValueError):   # not answering yet, or not JSON
             pass
         time.sleep(5)
     return []
@@ -521,15 +571,15 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     games = wait_for_game()
     if not games:
         log = win64 / "matchmaking" / "matchmaking.log"
-        print(f"PROBLEM: no game listed at {GAMES_URL} after 3 minutes; read {log} "
+        print(f"PROBLEM: no game server was ready at {GAMES_URL} after 3 minutes; read {log} "
               f"and the newest rb-* folder in {config.LOG_DIR}")
         if log.exists():
             print("Last lines of the matchmaking log:")
             print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]))
         return 1
     for g in games:
-        print(f"Game listed: {g.get('instanceName')}  {g.get('serverConnectString')}")
-    deadline = time.time() + 90   # the game is listed as soon as Serverborn starts; it listens ~20 s later
+        print(f"Game ready: {g.get('instanceName')}  {g.get('serverConnectString')}")
+    deadline = time.time() + 90   # ready; the server log should also say it is listening
     while not newest_log_says_listening() and time.time() < deadline:
         time.sleep(5)
     if not newest_log_says_listening():

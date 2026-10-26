@@ -14,8 +14,9 @@ In order, it:
 The developer version header is put back at the end, whether it worked or not.
 
 The release holds the Steam loader (inside the player installer zip), so it goes only to the private
-builds repo. The files of the last release stay in dist/private/release/ for a look. The VM installs a
-release with the Control Panel's Update button, or the older way: python -m tools.vm update.
+builds repo. The files of the last release stay in dist/private/release/ for a look. The VM installs the
+first numbered release with python -m tools.vm update (that also puts in the Control Panel's Updates tab
+and its updater); later ones with the panel's Update now.
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ BUILDS_REPO = vm.BUILDS_REPO
 OUT = config.REPO / "dist" / "private" / "release"   # dist/ is gitignored; private: the loader is inside
 UPDATER_PROJECT = config.REPO / "controlpanel" / "RebornUpdater"
 UPDATER_PUBLISH = UPDATER_PROJECT / "bin" / "release-publish"                    # bin/ is gitignored
-UPDATER_EXE = "RebornUpdater.exe"
+UPDATER_EXE = vm.UPDATER_EXE
 MATCHMAKING_PUBLISH = config.REPO / "gamecontroller" / "bin" / "release-publish"
 KEY_FILES = (config.REPO / "reborn" / "UpdateKey.hpp",
              config.REPO / "controlpanel" / "Reborn.Update" / "UpdateKey.cs")
@@ -60,7 +61,12 @@ class ReleaseError(RuntimeError):
 
 def run(cmd: list[str], capture: bool = True) -> subprocess.CompletedProcess:
     """Every outside program goes through here (tests replace it). capture=False shows the output."""
-    return subprocess.run(cmd, cwd=config.REPO, capture_output=capture, text=True)
+    try:
+        return subprocess.run(cmd, cwd=config.REPO, capture_output=capture, text=True)
+    except FileNotFoundError:
+        if cmd[0] == "gh":
+            raise ReleaseError(vm.GH_MISSING) from None
+        raise
 
 
 def say(text: str) -> None:
@@ -263,17 +269,19 @@ def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
                   "zip": zip_path.name, "sha256": sha256(zip_path), "size": zip_path.stat().st_size}
         write_signed(assets / UPDATE_JSON, json_bytes(update), key_path)
 
-        # What tools.vm update downloads, under the names it looks for.
+        # What tools.vm update downloads, under the names it looks for. The updater goes too: the
+        # first numbered release is installed that way, and the panel's Roll back needs it there.
         for name in vm.MOD_FILES:
             shutil.copyfile(mod[name], assets / name)
         shutil.copyfile(panel_exe, assets / vm.PANEL_EXE)
+        shutil.copyfile(updater_exe, assets / vm.UPDATER_EXE)
         shutil.copyfile(player_zip, assets / vm.PLAYER_ZIP_ASSET)
         zip_folder(player_update, assets / vm.PLAYER_UPDATE_ZIP, player_update_names())
         (assets / COMMIT_ASSET).write_bytes((commit + "\n").encode("ascii"))
 
         say(f"Step 7 of 7: uploading release {ver} to {BUILDS_REPO}.")
         files = [UPDATE_JSON, UPDATE_JSON + ".sig", zip_path.name, *vm.MOD_FILES, vm.PANEL_EXE,
-                 vm.PLAYER_ZIP_ASSET, vm.PLAYER_UPDATE_ZIP, COMMIT_ASSET]
+                 vm.UPDATER_EXE, vm.PLAYER_ZIP_ASSET, vm.PLAYER_UPDATE_ZIP, COMMIT_ASSET]
         p = run(["gh", "release", "create", ver, *(str(assets / f) for f in files), "--repo", BUILDS_REPO,
                  "--title", ver, "--notes", notes, "--latest"])
         if p.returncode != 0:
