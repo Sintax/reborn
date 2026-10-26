@@ -121,11 +121,29 @@ namespace ControlPanel.Tests
 			if (Throws) throw new System.ComponentModel.Win32Exception(5, "Access is denied");
 		}
 
-		public bool Start(string exe, string args, string workingDir)
+		// Every Start in full, and the answer Start gives.
+		public List<(string Exe, string Args, string WorkingDir, bool Minimized)> StartedWith { get; } = new();
+		public bool StartWorks { get; set; } = true;
+
+		public bool Start(string exe, string args, string workingDir, bool minimized = true)
 		{
 			MaybeThrow();
 			Started.Add(exe);
-			return true;
+			StartedWith.Add((exe, args, workingDir, minimized));
+			return StartWorks;
+		}
+
+		// Every Run as "file args". OnRun answers it (exit code and output); by default a program that
+		// cannot start (-1).
+		public List<string> Ran { get; } = new();
+		public Func<string, string, (int Exit, string Output)>? OnRun { get; set; }
+
+		public int Run(string file, string args, out string output)
+		{
+			MaybeThrow();
+			lock (Ran) Ran.Add(file + " " + args);
+			(int exit, output) = OnRun?.Invoke(file, args) ?? (-1, "");
+			return exit;
 		}
 
 		public Task<int> RunElevated(string exe, string args)
@@ -170,6 +188,14 @@ namespace ControlPanel.Tests
 		}
 	}
 
+	public sealed class FakeApp : IPanelApp
+	{
+		public int ProcessId { get; set; } = 4242;
+		public string ExePath { get; set; } = @"C:\Panel\ControlPanel.exe";
+		public int Closed { get; private set; }
+		public void Close() => Closed++;
+	}
+
 	public sealed class FakeMemory : ISystemMemory
 	{
 		public MemoryReading? Reading { get; set; } = new(16.0, 9.5);
@@ -188,6 +214,7 @@ namespace ControlPanel.Tests
 		public FakeRunner Runner { get; } = new();
 		public FakeDialogs Dialogs { get; } = new();
 		public FakeMemory Memory { get; } = new();
+		public FakeApp App { get; } = new();
 
 		public TempPanel(string? settings = null)
 		{
@@ -207,7 +234,9 @@ namespace ControlPanel.Tests
 
 		public AdminClient Client() => new(new HttpClient(Api), Paths.ReadToken, Paths.AdminBaseUri);
 
-		public MainViewModel Main(TimeProvider? clock = null) => new(Client(), Paths, Clipboard, Runner, Dialogs, Memory, clock);
+		public MainViewModel Main(TimeProvider? clock = null, UpdateService? updates = null) =>
+			new(Client(), Paths, Clipboard, Runner, Dialogs, Memory, App, clock,
+				updates ?? new UpdateService(Paths, Runner, tempDir: Path.Combine(Root, "temp")));
 
 		public void Dispose()
 		{

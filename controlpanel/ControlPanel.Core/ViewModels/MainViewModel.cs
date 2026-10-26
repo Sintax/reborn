@@ -20,8 +20,9 @@ namespace ControlPanel.Core.ViewModels
 		private DateTime? _startAskedUtc;
 		private bool _refreshing;
 
+		// updates: where server updates come from (GitHub with the release key unless a test gives its own).
 		public MainViewModel(AdminClient client, PanelPaths paths, IClipboard clipboard, IProcessRunner runner, IDialogs dialogs,
-			ISystemMemory memory, TimeProvider? clock = null)
+			ISystemMemory memory, IPanelApp app, TimeProvider? clock = null, UpdateService? updates = null)
 		{
 			_client = client;
 			_clipboard = clipboard;
@@ -32,6 +33,11 @@ namespace ControlPanel.Core.ViewModels
 			Users = new UsersViewModel(client, paths, dialogs, runner, _clock);
 			Ports = new PortsViewModel(client, paths, runner, dialogs, memory, _control);
 			Logs = new LogsViewModel(paths, runner);
+			Updates = new UpdatesViewModel(updates ?? new UpdateService(paths, runner), dialogs, app, () => Games.PlayersInGames, _clock);
+			Updates.PropertyChanged += (_, e) =>
+			{
+				if (e.PropertyName == nameof(UpdatesViewModel.Available)) OnPropertyChanged(nameof(UpdateLine));
+			};
 			CopyAddressCommand = new RelayCommand(CopyAddress, () => _publicIp != null);
 			StartMatchmakingCommand = new AsyncRelayCommand(StartMatchmakingAsync, () => !MatchmakingUp);
 		}
@@ -40,6 +46,10 @@ namespace ControlPanel.Core.ViewModels
 		public UsersViewModel Users { get; }
 		public PortsViewModel Ports { get; }
 		public LogsViewModel Logs { get; }
+		public UpdatesViewModel Updates { get; }
+
+		// "Update available: 1.0.4" in the header while there is one ("" otherwise).
+		public string UpdateLine => Updates.Available == null ? "" : "Update available: " + Updates.Available;
 
 		// "203.0.113.10:5000": what players' games connect to. Shown only inside the panel.
 		private string _serverAddress = "";
@@ -78,6 +88,9 @@ namespace ControlPanel.Core.ViewModels
 			{
 				DateTime now = _clock.GetUtcNow().UtcDateTime;
 				ExpireCopyNotice(now);
+				// The Updates page reads its files, and checks GitHub at launch and every 6 hours. The check
+				// runs on its own (gh is slow), so this refresh never waits for it.
+				_ = Updates.Tick();
 				var status = await _client.GetStatusAsync();
 				if (!status.Ok)
 				{

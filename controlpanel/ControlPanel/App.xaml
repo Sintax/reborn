@@ -8,6 +8,7 @@
          Colours come from the theme's own brushes, so both work. -->
     <Application.Resources>
         <local:TextToVisibility x:Key="TextToVisibility" />
+        <local:TextToVisibility x:Key="NoTextToVisibility" Invert="True" />
         <local:BoolToVisibility x:Key="BoolToVisibility" />
         <local:BoolToVisibility x:Key="NotBoolToVisibility" Invert="True" />
         <local:ZeroToVisibility x:Key="ZeroToVisibility" />

@@ -12,8 +12,12 @@ namespace ControlPanel.Core
 	// (The panel also catches anything that slips through and shows it as a plain message.)
 	public interface IProcessRunner
 	{
-		// Starts a program (minimized, in workingDir) without waiting. False if it could not start.
-		bool Start(string exe, string args, string workingDir);
+		// Starts a program (minimized unless asked otherwise, in workingDir) without waiting. False if it could not start.
+		bool Start(string exe, string args, string workingDir, bool minimized = true);
+
+		// Runs a program with no window and waits for it. Its exit code, or -1 if it could not start.
+		// output: everything it printed (standard output, then errors). Call it off the UI thread.
+		int Run(string file, string args, out string output);
 
 		// Runs a program hidden, as administrator (Windows asks the owner), and waits. Its exit code,
 		// -1 when the owner said no, or another non-zero code when it could not run.
@@ -27,6 +31,18 @@ namespace ControlPanel.Core
 
 		// Opens a folder in File Explorer (does nothing if it can't).
 		void OpenFolder(string path);
+	}
+
+	// The panel's own program, for handing over to the updater (which waits for it to close).
+	public interface IPanelApp
+	{
+		int ProcessId { get; }
+
+		// The full path of the panel's exe, which the updater starts again when it is done.
+		string ExePath { get; }
+
+		// Closes the panel.
+		void Close();
 	}
 
 	public interface IDialogs

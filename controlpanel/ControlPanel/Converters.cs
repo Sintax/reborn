@@ -4,11 +4,14 @@ using System.Windows.Data;
 
 namespace ControlPanel
 {
-	// Shows an element only when the bound text is not empty (banners, warnings, messages).
+	// Shows an element only when the bound text is not empty (banners, warnings, messages),
+	// or only when it is empty if Invert is set.
 	public sealed class TextToVisibility : IValueConverter
 	{
+		public bool Invert { get; set; }
+
 		public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-			string.IsNullOrEmpty(value as string) ? Visibility.Collapsed : Visibility.Visible;
+			string.IsNullOrEmpty(value as string) != Invert ? Visibility.Collapsed : Visibility.Visible;
 
 		public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
 			Binding.DoNothing;

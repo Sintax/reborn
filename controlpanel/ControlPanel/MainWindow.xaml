@@ -76,6 +76,10 @@
                            Visibility="{Binding StatusLine, Converter={StaticResource TextToVisibility}}" />
                 <TextBlock Text="{Binding Version, StringFormat=Version {0}}" HorizontalAlignment="Right" Style="{StaticResource NoteText}"
                            Visibility="{Binding Version, Converter={StaticResource TextToVisibility}}" />
+                <TextBlock Text="{Binding UpdateLine}" HorizontalAlignment="Right" FontWeight="SemiBold"
+                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
+                           ToolTip="See the Updates tab."
+                           Visibility="{Binding UpdateLine, Converter={StaticResource TextToVisibility}}" />
                 <TextBlock Text="{Binding Ports.MemoryText}" HorizontalAlignment="Right" Style="{StaticResource NoteText}"
                            MaxWidth="520" TextAlignment="Right" />
             </StackPanel>
@@ -111,6 +115,9 @@
             </TabItem>
             <TabItem x:Name="LogsTab" Header="Logs">
                 <views:LogsView DataContext="{Binding Logs}" />
+            </TabItem>
+            <TabItem Header="Updates">
+                <views:UpdatesView DataContext="{Binding Updates}" />
             </TabItem>
         </TabControl>
     </Grid>

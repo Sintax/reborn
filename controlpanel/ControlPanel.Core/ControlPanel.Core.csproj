@@ -13,6 +13,11 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 
+  <!-- Server updates: the signed manifest, the signature check and the saved versions. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Reborn.Update\Reborn.Update.csproj" />
+  </ItemGroup>
+
   <!-- The friend's guide in each friend zip (README-<name>.txt), as tools/package.py uses it. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\docs\FRIEND-SETUP.md" LogicalName="FRIEND-SETUP.md" Link="FRIEND-SETUP.md" />

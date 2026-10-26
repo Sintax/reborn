@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using ControlPanel.Core;
 
 namespace ControlPanel
@@ -13,7 +14,7 @@ namespace ControlPanel
 		// panel says the update failed rather than "answer Yes next time".
 		public const int CouldNotRun = -2;
 
-		public bool Start(string exe, string args, string workingDir)
+		public bool Start(string exe, string args, string workingDir, bool minimized = true)
 		{
 			try
 			{
@@ -25,7 +26,7 @@ namespace ControlPanel
 					Arguments = args,
 					WorkingDirectory = workingDir,
 					UseShellExecute = true,
-					WindowStyle = ProcessWindowStyle.Minimized,
+					WindowStyle = minimized ? ProcessWindowStyle.Minimized : ProcessWindowStyle.Normal,
 				});
 				return true;
 			}
@@ -33,6 +34,83 @@ namespace ControlPanel
 			{
 				return false;
 			}
+		}
+
+		// A program that never ends (gh stuck on a dead connection) is stopped after this long.
+		public static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(30);
+
+		public int Run(string file, string args, out string output)
+		{
+			output = "";
+			Process? p = null;
+			try
+			{
+				p = Process.Start(new ProcessStartInfo
+				{
+					FileName = FindOnPath(file),
+					Arguments = args,
+					UseShellExecute = false,
+					CreateNoWindow = true,
+					RedirectStandardInput = true,    // closed at once: nothing can sit waiting for an answer
+					RedirectStandardOutput = true,
+					RedirectStandardError = true,
+					StandardOutputEncoding = System.Text.Encoding.UTF8,
+					StandardErrorEncoding = System.Text.Encoding.UTF8,
+				});
+				if (p == null) return -1;
+			}
+			catch (Exception)
+			{
+				p?.Dispose();
+				return -1;
+			}
+
+			using (p)
+			{
+				try
+				{
+					p.StandardInput.Close();
+					// Both streams are read at the same time, so a full one can't stall the other.
+					Task<string> stdout = p.StandardOutput.ReadToEndAsync();
+					Task<string> stderr = p.StandardError.ReadToEndAsync();
+					if (!p.WaitForExit(RunLimit))
+					{
+						try { p.Kill(entireProcessTree: true); } catch (Exception) { }
+						output = "It took longer than " + (int)RunLimit.TotalMinutes + " minutes and was stopped.";
+						return -1;
+					}
+					p.WaitForExit();
+					output = stdout.Result + stderr.Result;
+					return p.ExitCode;
+				}
+				catch (Exception e)
+				{
+					output = e.Message;
+					return -1;
+				}
+			}
+		}
+
+		// "gh" as the command prompt finds it: the first PATH folder holding gh plus one of PATHEXT's
+		// endings (.exe, .cmd, ...). A path, or a name with an ending, is used as it is.
+		private static string FindOnPath(string file)
+		{
+			if (Path.IsPathRooted(file) || file.Contains('\\') || file.Contains('/') || Path.HasExtension(file)) return file;
+			string[] endings = (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+				.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+			foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+			{
+				foreach (string ending in endings)
+				{
+					try
+					{
+						string candidate = Path.Combine(dir.Trim('"'), file + ending);
+						if (File.Exists(candidate)) return candidate;
+					}
+					catch (ArgumentException) { }   // a PATH entry with characters a path can't have
+				}
+			}
+			return file;
 		}
 
 		public Task<int> RunElevated(string exe, string args) => Task.Run(() =>
