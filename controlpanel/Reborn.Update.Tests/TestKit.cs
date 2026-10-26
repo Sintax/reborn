@@ -1,26 +1,46 @@
 namespace Reborn.Update.Tests;
 
-/// <summary>Pretend servers: records every call and answers from queues (empty queue = true).</summary>
-public sealed class FakeServers : IServerControl
+/// <summary>Pretend servers: records every call, what reborn.dll and reborn-deployed.txt held at that
+/// moment (null = missing), and answers from queues (empty queue = true).</summary>
+public sealed class FakeServers(string win64) : IServerControl
 {
-    public List<string> Calls { get; } = new();
+    public sealed record Seen(string Call, string? Dll, string? Deployed);
+
+    public List<Seen> Snapshots { get; } = new();
+    public List<string> Calls => Snapshots.Select(s => s.Call).ToList();
     public Queue<bool> StartAnswers { get; } = new();
     public Queue<bool> WaitAnswers { get; } = new();
+    public int StopThrows { get; set; }
     public TimeSpan? LastTimeout { get; private set; }
 
-    public void StopAll() => Calls.Add("StopAll");
+    public void Clear() => Snapshots.Clear();
+    public Seen First(string call) => Snapshots.First(s => s.Call == call);
+
+    public void StopAll()
+    {
+        Note("StopAll");
+        if (StopThrows > 0) { StopThrows--; throw new InvalidOperationException("Serverborn.exe would not close."); }
+    }
 
     public bool StartMatchmaking()
     {
-        Calls.Add("StartMatchmaking");
+        Note("StartMatchmaking");
         return StartAnswers.Count == 0 || StartAnswers.Dequeue();
     }
 
     public bool WaitForGame(TimeSpan timeout)
     {
-        Calls.Add("WaitForGame");
+        Note("WaitForGame");
         LastTimeout = timeout;
         return WaitAnswers.Count == 0 || WaitAnswers.Dequeue();
+    }
+
+    void Note(string call) => Snapshots.Add(new Seen(call, ReadOrNull("reborn.dll"), ReadOrNull("reborn-deployed.txt")));
+
+    string? ReadOrNull(string relative)
+    {
+        string path = Path.Combine(win64, relative);
+        return File.Exists(path) ? File.ReadAllText(path) : null;
     }
 }
 
