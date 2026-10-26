@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Server updates: checks a signed release and swaps it in on the VM with a backup,
+       a health check and roll-back. Plain .NET (no WPF) so RebornUpdater.exe and the
+       Control Panel can both use it and it can be tested. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Reborn.Update</RootNamespace>
+  </PropertyGroup>
+
+</Project>
