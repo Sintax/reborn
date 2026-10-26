@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Reborn.Update\Reborn.Update.csproj" />
+    <ProjectReference Include="..\RebornUpdater\RebornUpdater.csproj" />
   </ItemGroup>
 
 </Project>

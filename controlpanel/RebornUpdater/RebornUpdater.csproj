@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- RebornUpdater.exe: the small program the Control Panel starts to swap the server files
+       (the panel cannot replace itself while it runs). Wraps the Reborn.Update library.
+       Published like the panel: Release, win-x64, self-contained, PublishSingleFile=true and
+       IncludeNativeLibrariesForSelfExtract=true. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>RebornUpdater</RootNamespace>
+    <AssemblyName>RebornUpdater</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Reborn.Update\Reborn.Update.csproj" />
+  </ItemGroup>
+
+</Project>
