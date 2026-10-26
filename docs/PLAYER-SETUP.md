@@ -170,8 +170,9 @@ If your game came from a recent zip, it can update itself. You do not have to ru
 
 If something goes wrong, the box says "The update could not be installed" and tells you why.
 Press **OK**. Your game is still the old version, and you can keep playing.
-If the new version does not start at all, the game puts the old one back by itself the next time
-you start it.
+If the new version will not load, the game puts the old one back by itself the next time you
+start it, and does not offer that version again.
+If the game won't start after an update, install it again from your zip (run its `Install.bat`).
 
 **Nothing personal changes.** An update only replaces the two game files of the mod
 (`reborn.dll` and `dxgi.dll`). Your name (`reborn-player.txt`), your key (`reborn-key.txt`)

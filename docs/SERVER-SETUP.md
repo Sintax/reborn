@@ -183,6 +183,10 @@ The **Updates** tab does the rest. You never copy files by hand.
 (`gh`) signed in. If it can't, the tab says: "This server can't reach the builds on GitHub
 right now. Nothing was changed."
 
+**The very first time.** The **Updates** tab comes with the first numbered release, so that
+one (1.0.1) can't be installed from the tab. Install it on the server with
+`python -m tools.vm update`. Every later version goes in with **Update now**.
+
 **Look for a new version.**
 
 1. Open the **Updates** tab. It shows **Installed version**.
@@ -205,25 +209,29 @@ right now. Nothing was changed."
    and running."
 
 **If the new version does not work.** After the update, the server waits up to 3 minutes for
-a game to show up. If none does, it puts the old version back and starts matchmaking again by
-itself. **Last update** then says what went wrong, in a warning colour, and "Details" has the
+a game server to start and report that it is ready. If none does, it puts the old version back
+and starts matchmaking again by itself. **Last update** then says what went wrong, in a warning colour, and "Details" has the
 technical part. Your players can join again as soon as matchmaking is back.
 
 **Go back to an older version.** Under **Saved versions**, each earlier version has a **Roll
 back** button. Press it, answer the question ("Go back to 1.0.3? The server restarts."), and
-the server goes back the same way an update goes forward. Use this if a new version works but
+the server goes back the same way an update goes forward. If players are in games, the
+question says so first, as it does for **Update now**. Use this if a new version works but
 you don't like it.
 
 **Saved versions and disk space.** Every update first saves a copy of the version it replaces,
 in the `RebornVersions` folder inside `Binaries\Win64`. The last **3** are kept. Older ones are
 deleted by themselves. Each one takes roughly **150 MB**, so the three together are about
-**450 MB**. Make sure the drive has room for them. The folder also holds the download while an
-update is running.
+**450 MB**. Make sure the drive has room for them. While an update runs, the folder also holds
+the unpacked download (a few hundred MB more). It is deleted once the update has worked. After
+an update that did not work, it stays until the next **Update now** replaces it.
 
 **If an update did not finish.** If the machine switched off, or someone closed the update
 window part way through, the **Updates** tab shows a warning: the server may be a mix of two
 versions. It then offers **one** button, **Roll back to** the version you had before. Press
 it. **Update now** and the list of saved versions stay switched off until you do.
+If the saved copy of that version is gone, there is no button. The warning names a file
+(`in-progress.json`) instead. Delete that file and check the server by hand.
 
 **What an update never touches.** The player names and keys on your user list, the "last seen"
 list, your record of made zips, `appsettings.json` (your games and ports) and the panel's
@@ -236,7 +244,8 @@ menu, and can press **Download**. But a friend's game can only do that if it cam
 made **after** the first numbered release. Zips made earlier don't know how to update, so each
 friend needs **one last zip**:
 
-1. Update the server to the first numbered release (1.0.1) with **Update now**.
+1. Update the server to the first numbered release (1.0.1) with `python -m tools.vm update`
+   (see "The very first time" above).
 2. On the **Users** tab, press **Make zip** on each friend's row, and send them the new zip.
 3. They run its `Install.bat`. From then on their game updates itself.
 
