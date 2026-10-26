@@ -63,6 +63,8 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
     {
         string name = (toVersion ?? "").Trim();
         string? from = Unfinished();
+        if (from is not null && !CanRecover())
+            return Finish(name, false, StuckMessage(InProgressFullPath));
         bool recovery = from is not null && string.Equals(name, from, StringComparison.OrdinalIgnoreCase);
         if (from is not null && !recovery)
             return Finish(name, false, UnfinishedMessage(from));
@@ -176,6 +178,11 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
         bool started = false;
         string reason = "the servers couldn't be stopped";
         string? path = null;
+        // How many of `files` were copied in, and the one being copied when something failed (it may be
+        // half-written). Only these, plus the files a roll back removes, are put back after a failure:
+        // a file the update never reached (one held open by another program, say) is left alone.
+        int copiedCount = 0;
+        string? copying = null;
         try
         {
             // 2. Stop everything so no file is in use.
@@ -192,24 +199,31 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
             {
                 (path, reason) = (rel, $"{rel} couldn't be copied into place");
                 string target = Path.Combine(win64, rel);
+                copying = rel;
                 CreateDirectories(Path.GetDirectoryName(target)!, createdDirs);
                 File.Copy(Path.Combine(job.SourceDir, rel), target, overwrite: true);
+                copying = null;
+                copiedCount++;
             }
 
             // 4. Record which version is installed.
             (path, reason) = (DeployedFile, "the new version number couldn't be saved");
             WriteDeployed(job.Recorded);
 
-            // 5. Start matchmaking, 6. and wait for it to list a game.
+            // 5. Start matchmaking, 6. and wait for a game server to start and check in.
             (path, reason) = (null, "matchmaking didn't start");
             started = true;
             if (servers.StartMatchmaking())
             {
-                reason = "no game showed up within 3 minutes";
+                reason = "no game server started within 3 minutes";
                 if (servers.WaitForGame(HealthTimeout))
                 {
-                    ClearInProgress(run);
+                    bool cleared = ClearInProgress(run);
                     try { Prune(); } catch (Exception) { /* an old copy left behind is harmless */ }
+                    if (!cleared)
+                        return Finish(job.Name, false,
+                            $"{job.Success} A game is up and running, but the update's in-progress mark couldn't be removed, " +
+                            $"so the panel thinks the update didn't finish. Delete {InProgressFullPath} by hand.", run);
                     return Finish(job.Name, true, $"{job.Success} A game is up and running.", run);
                 }
             }
@@ -219,10 +233,12 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
             run.Fail(path, e);   // `reason` already names the step that failed
         }
 
-        return Restore(job, reason, current, backupDir, affected, createdDirs, deployedBefore, started, run);
+        List<string> touched = deletes.Concat(files.Take(copiedCount)).ToList();
+        if (copying is not null) touched.Add(copying);
+        return Restore(job, reason, current, backupDir, touched, createdDirs, deployedBefore, started, run);
     }
 
-    InstallResult Restore(Job job, string reason, string current, string? backupDir, List<string> affected,
+    InstallResult Restore(Job job, string reason, string current, string? backupDir, List<string> touched,
         List<string> createdDirs, string? deployedBefore, bool started, Run run)
     {
         bool restored = backupDir is not null;
@@ -232,7 +248,7 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
         }
         if (backupDir is not null)
         {
-            foreach (string rel in affected)
+            foreach (string rel in touched)
             {
                 try
                 {
@@ -240,6 +256,7 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
                     string live = Path.Combine(win64, rel);
                     if (File.Exists(saved))
                     {
+                        if (SameFile(saved, live)) continue;   // never changed (or already back): nothing to do
                         Directory.CreateDirectory(Path.GetDirectoryName(live)!);
                         File.Copy(saved, live, overwrite: true);
                     }
@@ -262,7 +279,7 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
-        if (restored) ClearInProgress(run);
+        bool markStuck = restored && !ClearInProgress(run);
 
         bool running;
         try { running = servers.StartMatchmaking(); }
@@ -280,7 +297,31 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
         else
             message.Append($"Putting {old} back didn't fully work, so the server needs a look. ")
                    .Append(running ? "Matchmaking is running." : "Matchmaking isn't running.");
+        if (markStuck)
+            message.Append($" The update's in-progress mark couldn't be removed: delete {InProgressFullPath} by hand.");
         return Finish(job.Name, false, message.ToString(), run);
+    }
+
+    // True when both files exist and hold the same bytes.
+    static bool SameFile(string a, string b)
+    {
+        try
+        {
+            var fa = new FileInfo(a);
+            var fb = new FileInfo(b);
+            if (!fa.Exists || !fb.Exists || fa.Length != fb.Length) return false;
+            using FileStream sa = new(a, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using FileStream sb = new(b, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            byte[] ba = new byte[81920], bb = new byte[81920];
+            while (true)
+            {
+                int na = sa.ReadAtLeast(ba, ba.Length, throwOnEndOfStream: false);
+                int nb = sb.ReadAtLeast(bb, bb.Length, throwOnEndOfStream: false);
+                if (na != nb || !ba.AsSpan(0, na).SequenceEqual(bb.AsSpan(0, nb))) return false;
+                if (na == 0) return true;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
     // Saves the files about to change into RebornVersions\<current>\, plus the exact deployed text and the
@@ -446,9 +487,12 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
     private static partial Regex UnsafeChars();
 
     // The version an update that broke off started from, or null when nothing is part way.
-    string? Unfinished()
+    // A mark that can't be read counts as "unknown".
+    string? Unfinished() => File.Exists(InProgressPath) ? ReadMark() ?? Unknown : null;
+
+    // The mark's "from", or null when the mark can't be read or names something that isn't a version folder.
+    string? ReadMark()
     {
-        if (!File.Exists(InProgressPath)) return null;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(InProgressPath));
@@ -459,18 +503,42 @@ public sealed partial class Installer(string win64, IServerControl servers, Func
                 return from.GetString();
         }
         catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) { }
-        return Unknown;
+        return null;
     }
 
-    static string UnfinishedMessage(string from) => $"A previous update didn't finish. Roll back to {from} first.";
+    /// <summary>True when an update broke off and the roll back that puts it right can run: its mark can be
+    /// read and the saved copy it started from is still there.</summary>
+    public bool CanRecover() =>
+        File.Exists(InProgressPath) && ReadMark() is string from && HasSavedCopy(from);
+
+    bool HasSavedCopy(string name) =>
+        IsVersionFolderName(name) && File.Exists(Path.Combine(VersionsDir, name, BackupMarkerFile));
+
+    /// <summary>What to say when an update broke off and the roll back that would put it right can't run.</summary>
+    public static string StuckMessage(string inProgressPath) =>
+        $"An earlier update did not finish and its saved copy is gone. Delete {inProgressPath} and check the server by hand.";
+
+    string UnfinishedMessage(string from) =>
+        CanRecover() ? $"A previous update didn't finish. Roll back to {from} first." : StuckMessage(InProgressFullPath);
+
+    string InProgressFullPath => Path.GetFullPath(InProgressPath);
 
     void WriteInProgress(string from, string to) =>
         File.WriteAllText(InProgressPath, JsonSerializer.Serialize(new { from, to, when = now() }));
 
-    void ClearInProgress(Run run)
+    // False when the mark is still there afterwards.
+    bool ClearInProgress(Run run)
     {
-        try { if (File.Exists(InProgressPath)) File.Delete(InProgressPath); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { run.Fail(InProgressFile, e); }
+        try
+        {
+            if (File.Exists(InProgressPath)) File.Delete(InProgressPath);
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            run.Fail(InProgressFile, e);
+            return false;
+        }
     }
 
     static string Capital(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];

@@ -185,14 +185,16 @@ public sealed class UpdaterArgsTests : IDisposable
         var servers = new FakeServers(missing);
         var output = new StringWriter();
 
+        var started = new List<string>();
+
         int exit = UpdaterCli.Run(InstallArgs(missing, staged), output, servers,
-            (_, _) => throw new Xunit.Sdk.XunitException("must not wait"),
-            (_, _) => throw new Xunit.Sdk.XunitException("must not start"), () => When);
+            (_, _) => true, (exe, _) => { started.Add(exe); return true; }, () => When);
 
         Assert.Equal(1, exit);
         Assert.Empty(servers.Calls);
-        Assert.False(Directory.Exists(missing));
+        Assert.False(Directory.Exists(missing));   // nothing is written into a folder that isn't the game's
         Assert.Contains("isn't the game's Win64 folder", output.ToString());
+        Assert.Single(started);                    // the panel closed itself for this run: it is opened again
     }
 
     [Fact]
@@ -205,14 +207,16 @@ public sealed class UpdaterArgsTests : IDisposable
         var servers = new FakeServers(_s.Win64);
         var output = new StringWriter();
 
+        var started = new List<string>();
+
         int exit = UpdaterCli.Run(InstallArgs(_s.Win64, staged), output, servers,
-            (_, _) => throw new Xunit.Sdk.XunitException("must not wait"),
-            (_, _) => throw new Xunit.Sdk.XunitException("must not start"), () => When);
+            (_, _) => true, (exe, _) => { started.Add(exe); return true; }, () => When);
 
         Assert.Equal(1, exit);
         Assert.Empty(servers.Calls);
         Assert.False(Directory.Exists(_s.Versions));
         Assert.Contains("isn't the game's Win64 folder", output.ToString());
+        Assert.Single(started);
     }
 
     [Fact]
@@ -222,14 +226,112 @@ public sealed class UpdaterArgsTests : IDisposable
         var servers = new FakeServers(_s.Win64);
         var output = new StringWriter();
 
+        var started = new List<string>();
+
         int exit = UpdaterCli.Run(InstallArgs(_s.Win64, Path.Combine(_s.Root, "no-staged")), output, servers,
-            (_, _) => throw new Xunit.Sdk.XunitException("must not wait"),
-            (_, _) => throw new Xunit.Sdk.XunitException("must not start"), () => When);
+            (_, _) => true, (exe, _) => { started.Add(exe); return true; }, () => When);
 
         Assert.Equal(1, exit);
         Assert.Empty(servers.Calls);
-        Assert.False(Directory.Exists(_s.Versions));
         Assert.Contains("downloaded update folder is missing", output.ToString());
+        Assert.Single(started);
+        using JsonDocument last = JsonDocument.Parse(File.ReadAllText(Path.Combine(_s.Versions, "last-update.json")));
+        Assert.False(last.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("The downloaded update folder is missing. Nothing was changed.", last.RootElement.GetProperty("message").GetString());
+        Assert.Equal("1.0.7", last.RootElement.GetProperty("version").GetString());
+    }
+
+    [Fact]
+    public void A_panel_still_open_after_a_folder_problem_is_not_started_twice()
+    {
+        var started = new List<string>();
+
+        int exit = UpdaterCli.Run(InstallArgs(Path.Combine(_s.Root, "no-such-folder"), _s.Staged("1.0.7")), new StringWriter(),
+            new FakeServers(_s.Win64), (_, _) => false, (exe, _) => { started.Add(exe); return true; }, () => When);
+
+        Assert.Equal(1, exit);
+        Assert.Empty(started);
+    }
+
+    [Fact]
+    public void A_good_install_deletes_the_unpacked_download()
+    {
+        MakeGameFolder();
+        Scratch.Write(_s.Win64, "reborn-deployed.txt", "1.0.1\n");
+        Scratch.Write(_s.Win64, "reborn.dll", "old dll");
+        string staging = Path.Combine(_s.Versions, "staging");
+        string staged = Path.Combine(staging, "1.0.7", "Win64");
+        Scratch.Write(staged, "reborn.dll", "new dll");
+
+        int exit = UpdaterCli.Run(InstallArgs(_s.Win64, staged), new StringWriter(), new FakeServers(_s.Win64),
+            (_, _) => true, (_, _) => true, () => When);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("new dll", _s.Read("reborn.dll"));
+        Assert.False(Directory.Exists(staging));
+    }
+
+    [Fact]
+    public void A_failed_install_keeps_the_unpacked_download_until_the_next_one()
+    {
+        MakeGameFolder();
+        Scratch.Write(_s.Win64, "reborn-deployed.txt", "1.0.1\n");
+        Scratch.Write(_s.Win64, "reborn.dll", "old dll");
+        string staged = Path.Combine(_s.Versions, "staging", "1.0.7", "Win64");
+        Scratch.Write(staged, "reborn.dll", "new dll");
+        var servers = new FakeServers(_s.Win64);
+        servers.WaitAnswers.Enqueue(false);
+
+        int exit = UpdaterCli.Run(InstallArgs(_s.Win64, staged), new StringWriter(), servers,
+            (_, _) => true, (_, _) => true, () => When);
+
+        Assert.Equal(1, exit);
+        Assert.Equal("old dll", _s.Read("reborn.dll"));
+        Assert.True(Directory.Exists(staged));
+    }
+
+    [Fact]
+    public void A_mark_that_will_not_go_away_is_a_failure_and_keeps_the_download()
+    {
+        MakeGameFolder();
+        Scratch.Write(_s.Win64, "reborn-deployed.txt", "1.0.1\n");
+        Scratch.Write(_s.Win64, "reborn.dll", "old dll");
+        string staged = Path.Combine(_s.Versions, "staging", "1.0.7", "Win64");
+        Scratch.Write(staged, "reborn.dll", "new dll");
+        string mark = Path.Combine(_s.Versions, "in-progress.json");
+        using var servers = new LockMarkServers(mark);
+        var output = new StringWriter();
+
+        int exit = UpdaterCli.Run(InstallArgs(_s.Win64, staged), output, servers, (_, _) => true, (_, _) => true, () => When);
+        servers.Dispose();
+
+        Assert.Equal(1, exit);
+        Assert.Equal("new dll", _s.Read("reborn.dll"));
+        Assert.True(File.Exists(mark));
+        Assert.True(Directory.Exists(staged));
+        Assert.Contains("Updated to 1.0.7.", output.ToString());
+        Assert.Contains("in-progress mark couldn't be removed", output.ToString());
+        Assert.Contains(mark, output.ToString());
+        using JsonDocument last = JsonDocument.Parse(File.ReadAllText(Path.Combine(_s.Versions, "last-update.json")));
+        Assert.False(last.RootElement.GetProperty("ok").GetBoolean());
+    }
+
+    // Holds in-progress.json open once the game is waited for, so the installer can't delete it.
+    sealed class LockMarkServers(string mark) : IServerControl, IDisposable
+    {
+        FileStream? _lock;
+        public void StopAll() { }
+        public bool StartMatchmaking() => true;
+        public bool WaitForGame(TimeSpan timeout)
+        {
+            _lock ??= new FileStream(mark, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return true;
+        }
+        public void Dispose()
+        {
+            _lock?.Dispose();
+            _lock = null;
+        }
     }
 
     [Fact]
@@ -292,15 +394,18 @@ public sealed class UpdaterArgsTests : IDisposable
         var started = new List<string>();
         var output = new StringWriter();
 
-        // The clock is only read once the panel has closed, so this fails inside the guarded part, even
-        // while the result is being written.
+        // The clock is only read once the panel has closed, so this fails inside the guarded part. The
+        // updater's own record still goes in (with the computer's clock).
         int exit = UpdaterCli.Run(["rollback", "--to", "1.0.9", "--win64", _s.Win64, "--panel-pid", "9", "--panel", "p.exe"],
             output, new FakeServers(_s.Win64), (_, _) => true, (exe, _) => { started.Add(exe); return true; },
             () => throw new InvalidOperationException("clock broke"));
 
         Assert.Equal(1, exit);
-        Assert.Contains("The updater hit a problem: clock broke", output.ToString());
+        Assert.Contains("The roll back stopped because of an error: clock broke", output.ToString());
         Assert.Single(started);
+        using JsonDocument last = JsonDocument.Parse(File.ReadAllText(Path.Combine(_s.Versions, "last-update.json")));
+        Assert.False(last.RootElement.GetProperty("ok").GetBoolean());
+        Assert.StartsWith("The roll back stopped", last.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -317,6 +422,9 @@ public sealed class UpdaterArgsTests : IDisposable
         Assert.Equal(1, exit);
         Assert.Contains("The updater hit a problem: no access", output.ToString());
         Assert.Empty(servers.Calls);
+        // Recorded, so the panel shows it when it is opened again.
+        using JsonDocument last = JsonDocument.Parse(File.ReadAllText(Path.Combine(_s.Versions, "last-update.json")));
+        Assert.Equal("The updater hit a problem: no access", last.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -374,12 +482,22 @@ public sealed class UpdaterArgsTests : IDisposable
     }
 
     [Theory]
-    [InlineData("[{\"name\":\"Story\"}]", true)]
+    [InlineData("[{\"ready\":true}]", true)]
+    [InlineData("[{\"ready\":false}]", false)]
+    [InlineData("[{\"name\":\"Story\",\"ready\":false},{\"name\":\"PvP\",\"Ready\":true}]", true)]
+    [InlineData("[{\"READY\":true}]", true)]
+    [InlineData("[{\"name\":\"Story\"}]", false)]
+    [InlineData("[{\"ready\":\"true\"}]", false)]
+    [InlineData("[true]", false)]
     [InlineData("[]", false)]
     [InlineData("{}", false)]
+    [InlineData("{\"ready\":true}", false)]
     [InlineData("", false)]
     [InlineData(null, false)]
     [InlineData("<html>", false)]
-    public void A_game_counts_only_when_the_list_has_an_entry(string? json, bool expected) =>
+    public void A_game_counts_only_once_it_is_ready(string? json, bool expected)
+    {
+        Assert.Equal(expected, GamesList.HasReadyGame(json));
         Assert.Equal(expected, WindowsServerControl.HasGame(json));
+    }
 }

@@ -119,11 +119,15 @@ public class PlayerUpdateApiTests : IDisposable
     public void Listed_file_is_served()
     {
         var c = Make();
-        var reborn = Assert.IsType<FileContentResult>(c.GetPlayerFile("reborn.dll"));
+        // Streamed from the update folder, not read into memory first.
+        var reborn = Assert.IsType<PhysicalFileResult>(c.GetPlayerFile("reborn.dll"));
         Assert.Equal("application/octet-stream", reborn.ContentType);
-        Assert.Equal(RebornDll, reborn.FileContents);
-        var dxgi = Assert.IsType<FileContentResult>(c.GetPlayerFile("dxgi.dll"));
-        Assert.Equal(DxgiDll, dxgi.FileContents);
+        Assert.Equal(Path.GetFullPath(Path.Combine(UpdateDir, "reborn.dll")), reborn.FileName);
+        Assert.Equal(RebornDll, File.ReadAllBytes(reborn.FileName));
+        var dxgi = Assert.IsType<PhysicalFileResult>(c.GetPlayerFile("dxgi.dll"));
+        Assert.Equal(Path.GetFullPath(Path.Combine(UpdateDir, "dxgi.dll")), dxgi.FileName);
+        Assert.Equal(DxgiDll, File.ReadAllBytes(dxgi.FileName));
+        Assert.Equal("no-store", c.Response.Headers.CacheControl.ToString());
     }
 
     [Fact]
@@ -131,7 +135,7 @@ public class PlayerUpdateApiTests : IDisposable
     {
         string onlyReborn = "{\"version\":\"1.0.7\",\"build\":7,\"notes\":\"\",\"files\":[{\"name\":\"reborn.dll\",\"sha256\":\"aa\",\"size\":4}]}";
         var c = Make(manifest: onlyReborn);
-        Assert.IsType<FileContentResult>(c.GetPlayerFile("reborn.dll"));
+        Assert.IsType<PhysicalFileResult>(c.GetPlayerFile("reborn.dll"));
         Assert.IsType<NotFoundObjectResult>(c.GetPlayerFile("dxgi.dll"));
 
         File.Delete(Path.Combine(UpdateDir, "reborn.dll"));

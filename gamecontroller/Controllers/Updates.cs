@@ -92,9 +92,10 @@ namespace gamecontroller.Controllers
 
 			try
 			{
-				string path = Path.Combine(Folder(_config), file);
+				// Streamed from disk, not read into memory first (each file can be tens of MB).
+				string path = Path.GetFullPath(Path.Combine(Folder(_config), file));
 				if (!System.IO.File.Exists(path)) return NoUpdate();
-				return File(System.IO.File.ReadAllBytes(path), "application/octet-stream");
+				return PhysicalFile(path, "application/octet-stream");
 			}
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return NoUpdate(); }
 		}

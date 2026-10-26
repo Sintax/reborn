@@ -98,7 +98,9 @@ namespace ControlPanel.Tests
 	{
 		public DateTimeOffset Now { get; set; } = new(2026, 10, 22, 12, 0, 0, TimeSpan.Zero);
 		public override DateTimeOffset GetUtcNow() => Now;
-		public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+		public override TimeZoneInfo LocalTimeZone => ZoneThrows ? throw new InvalidOperationException("no time zone") : TimeZoneInfo.Utc;
+		// Makes reading the local time zone fail, so a reload that shows a dated result throws.
+		public bool ZoneThrows { get; set; }
 	}
 
 	public sealed class FakeRunner : IProcessRunner

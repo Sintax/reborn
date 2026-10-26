@@ -116,6 +116,11 @@ namespace ControlPanel.Core.ViewModels
 		private string? _unfinishedText;
 		public string? UnfinishedText { get => _unfinishedText; private set => SetProperty(ref _unfinishedText, value); }
 
+		// True when the roll back in the notice can actually run. False when its saved copy is gone or the mark
+		// can't be read: then the notice says what to delete, and no roll back is offered.
+		private bool _unfinishedCanRollBack;
+		public bool UnfinishedCanRollBack { get => _unfinishedCanRollBack; private set => SetProperty(ref _unfinishedCanRollBack, value); }
+
 		public IAsyncRelayCommand CheckCommand { get; }
 		public IAsyncRelayCommand UpdateNowCommand { get; }
 		public IAsyncRelayCommand<string> RollBackCommand { get; }
@@ -142,7 +147,9 @@ namespace ControlPanel.Core.ViewModels
 			UnfinishedUpdate? unfinished = _service.ReadUnfinished();
 			_unfinishedTo = unfinished?.To;
 			Unfinished = unfinished?.From;
+			UnfinishedCanRollBack = unfinished?.CanRollBack ?? false;
 			UnfinishedText = unfinished == null ? null
+				: !unfinished.CanRollBack ? Installer.StuckMessage(unfinished.MarkPath)
 				: (unfinished.To.Length > 0 ? $"The update to {unfinished.To} didn't finish" : "An update didn't finish")
 					+ $", so the server may be a mix of two versions. Roll back to {unfinished.From} to put it right.";
 
@@ -165,10 +172,10 @@ namespace ControlPanel.Core.ViewModels
 		{
 			if (Busy) return;
 			Checking = true;
-			Reload();
-			Status = "Checking GitHub for a newer version...";
 			try
 			{
+				Reload();
+				Status = "Checking GitHub for a newer version...";
 				UpdateCheck check = await _service.CheckAsync();
 				_manifest = check.Manifest;
 				Available = check.Manifest?.Version;
@@ -199,27 +206,28 @@ namespace ControlPanel.Core.ViewModels
 			bool handedOver = false;
 			try
 			{
+				// The server may have been updated another way since the check (tools.vm update). Asked first,
+				// so nobody is warned about stopping games for an update that won't happen.
+				if (!Versions.Newer(manifest.Build, Versions.Parse(_service.ReadDeployed() ?? "")))
+				{
+					ForgetAvailable();
+					Status = AlreadyUpToDateText;
+					Reload();
+					return;
+				}
+
 				int players = _playersInGames();
 				if (players > 0 && !_dialogs.Confirm(players == 1
 					? "1 player is in a game. Updating stops that game. Update now?"
 					: $"{players} players are in games. Updating stops those games. Update now?"))
 					return;
 
-				// The server may have been updated another way since the check (tools.vm update).
-				if (!Versions.Newer(manifest.Build, Versions.Parse(_service.ReadDeployed() ?? "")))
-				{
-					_manifest = null;
-					Available = null;
-					Notes = "";
-					Status = AlreadyUpToDateText;
-					Reload();
-					return;
-				}
-
 				Status = $"Downloading {manifest.Version} ({Megabytes(manifest.Size)}). This can take a few minutes.";
 				StagedUpdate staged = await _service.DownloadAsync(manifest);
 				if (!staged.Ok)
 				{
+					// Not offered again until a later check finds it again.
+					ForgetAvailable();
 					Status = staged.Message;
 					return;
 				}
@@ -228,6 +236,7 @@ namespace ControlPanel.Core.ViewModels
 				if (updater == null)
 				{
 					_service.ClearStaging();
+					ForgetAvailable();
 					Status = NoUpdaterText;
 					return;
 				}
@@ -239,6 +248,13 @@ namespace ControlPanel.Core.ViewModels
 			{
 				if (!handedOver) Working = false;   // handed over: stay busy until the panel closes
 			}
+		}
+
+		private void ForgetAvailable()
+		{
+			_manifest = null;
+			Available = null;
+			Notes = "";
 		}
 
 		private Task RollBackAsync(string? version)
@@ -257,6 +273,11 @@ namespace ControlPanel.Core.ViewModels
 				return;
 			}
 			Reload();
+			if (Unfinished != null && !UnfinishedCanRollBack)
+			{
+				Status = UnfinishedText ?? "";   // the saved copy is gone: says what to delete instead
+				return;
+			}
 			if (Unfinished != null ? version != Unfinished : !Kept.Contains(version))
 			{
 				Status = Unfinished != null
@@ -269,7 +290,14 @@ namespace ControlPanel.Core.ViewModels
 			bool handedOver = false;
 			try
 			{
-				if (!_dialogs.Confirm($"Go back to {version}? The server restarts.")) return;
+				int players = _playersInGames();
+				string question = players switch
+				{
+					0 => $"Go back to {version}? The server restarts.",
+					1 => $"1 player is in a game. Going back stops that game. Go back to {version}?",
+					_ => $"{players} players are in games. Going back stops those games. Go back to {version}?",
+				};
+				if (!_dialogs.Confirm(question)) return;
 
 				// The updater is copied out so the roll back can replace it too. After an update that broke
 				// off, the installed one may be half-copied: the one that update brought is used if it is there.

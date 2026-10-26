@@ -11,6 +11,8 @@ public static class UpdaterCli
 {
     public const string PanelStillOpen = "Close the Control Panel and try again.";
     public static readonly TimeSpan PanelWait = TimeSpan.FromSeconds(30);
+    /// <summary>How long the window stays open after a run that did not work.</summary>
+    public static readonly TimeSpan FailurePause = TimeSpan.FromSeconds(5);
 
     /// <param name="servers">Starts and stops the real servers. Null = this machine's.</param>
     /// <param name="panelGone">Waits up to the given time for the process to end. True = it has.</param>
@@ -44,19 +46,27 @@ public static class UpdaterCli
         }
 
         // Check the folders before anything is closed or stopped.
-        if (!Directory.Exists(win64) || !(File.Exists(Path.Combine(win64, "Battleborn.exe")) || Directory.Exists(Path.Combine(win64, "matchmaking"))))
+        bool gameFolder = Directory.Exists(win64)
+            && (File.Exists(Path.Combine(win64, "Battleborn.exe")) || Directory.Exists(Path.Combine(win64, "matchmaking")));
+        if (!gameFolder)
         {
+            // Nothing is written there: it isn't the game's folder, so the panel would never read it.
             output.WriteLine($"{win64} isn't the game's Win64 folder (no Battleborn.exe or matchmaking folder there). Nothing was changed.");
+            OpenPanelIfClosed(a, panel, win64, output, panelGone, startPanel);
             return 1;
         }
         if (a.Command == UpdaterArgs.Install && !Directory.Exists(staged))
         {
-            output.WriteLine("The downloaded update folder is missing. Nothing was changed.");
+            const string missing = "The downloaded update folder is missing. Nothing was changed.";
+            output.WriteLine(missing);
+            WriteResult(win64, a.Version, false, missing, now);
+            OpenPanelIfClosed(a, panel, win64, output, panelGone, startPanel);
             return 1;
         }
 
         string what = a.Command == UpdaterArgs.Install ? $"Updating the server to {a.Version}" : $"Going back to {a.Version}";
         bool panelClosed = false;
+        bool panelStillOpen = false;
         int exit = 1;
         try
         {
@@ -64,6 +74,7 @@ public static class UpdaterCli
             output.WriteLine("Waiting for the Control Panel to close...");
             if (!panelGone(a.PanelPid, PanelWait))
             {
+                panelStillOpen = true;
                 output.WriteLine(PanelStillOpen + " Nothing was changed.");
                 WriteResult(win64, a.Version, false, PanelStillOpen, now);
                 return 1;
@@ -84,52 +95,87 @@ public static class UpdaterCli
                 WriteResult(win64, a.Version, false, result.Message, now);
             }
 
+            // The unpacked download isn't needed once the update is in. Kept while an update is part way,
+            // because the roll back that puts it right uses the updater inside it.
+            if (result.Ok && a.Command == UpdaterArgs.Install
+                && !File.Exists(Path.Combine(win64, Installer.VersionsFolder, Installer.InProgressFile)))
+                TryDeleteDirectory(Path.Combine(win64, Installer.VersionsFolder, StagingFolder));
+
             output.WriteLine(result.Message);
             output.WriteLine(result.Ok ? "Done." : "This did not work.");
             exit = result.Ok ? 0 : 1;
         }
         catch (Exception e)
         {
-            output.WriteLine("The updater hit a problem: " + e.Message);
+            string message = "The updater hit a problem: " + e.Message;
+            output.WriteLine(message);
+            WriteResult(win64, a.Version, false, message, now);
             exit = 1;
         }
         finally
         {
-            // The panel was closed for this run, so open it again whatever happened.
-            if (panelClosed)
-            {
-                try
-                {
-                    output.WriteLine("Opening the Control Panel again...");
-                    if (!startPanel(panel, Path.GetDirectoryName(panel) ?? win64))
-                        output.WriteLine("The Control Panel could not be opened. Start it yourself from " + panel);
-                }
-                catch (Exception e)
-                {
-                    try { output.WriteLine("The Control Panel could not be opened (" + e.Message + "). Start it yourself from " + panel); }
-                    catch (Exception) { }
-                }
-            }
+            // Open the panel again whatever happened, unless it never closed. When the wait for it went
+            // wrong, it is asked once more whether it is gone.
+            if (panelClosed) OpenPanel(panel, win64, output, startPanel);
+            else if (!panelStillOpen) OpenPanelIfClosed(a, panel, win64, output, panelGone, startPanel);
         }
         return exit;
+    }
+
+    /// <summary>The panel's download folder inside RebornVersions.</summary>
+    public const string StagingFolder = "staging";
+
+    // Starts the panel again if its process has ended (it closes itself right after starting the updater).
+    static void OpenPanelIfClosed(UpdaterArgs a, string panel, string win64, TextWriter output,
+        Func<int, TimeSpan, bool> panelGone, Func<string, string, bool> startPanel)
+    {
+        bool gone;
+        try { gone = panelGone(a.PanelPid, PanelWait); }
+        catch (Exception) { gone = false; }
+        if (gone) OpenPanel(panel, win64, output, startPanel);
+    }
+
+    static void OpenPanel(string panel, string win64, TextWriter output, Func<string, string, bool> startPanel)
+    {
+        try
+        {
+            output.WriteLine("Opening the Control Panel again...");
+            if (!startPanel(panel, Path.GetDirectoryName(panel) ?? win64))
+                output.WriteLine("The Control Panel could not be opened. Start it yourself from " + panel);
+        }
+        catch (Exception e)
+        {
+            try { output.WriteLine("The Control Panel could not be opened (" + e.Message + "). Start it yourself from " + panel); }
+            catch (Exception) { }
+        }
+    }
+
+    static void TryDeleteDirectory(string dir)
+    {
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     /// <summary>The start of the plain sentence for a run that stopped on an error.</summary>
     public static string StoppedText(UpdaterArgs a) =>
         a.Command == UpdaterArgs.Install ? "The update stopped" : "The roll back stopped";
 
-    // Same shape as the installer's own record, for the cases where it is never called.
+    // Same shape as the installer's own record, for the cases where it is never called (or broke off).
+    // Never throws: it runs on the way out of every failure.
     static void WriteResult(string win64, string version, bool ok, string message, Func<DateTime> now)
     {
         try
         {
+            DateTime when;
+            try { when = now(); }
+            catch (Exception) { when = DateTime.Now; }
             string dir = Path.Combine(win64, Installer.VersionsFolder);
             Directory.CreateDirectory(dir);
-            string json = JsonSerializer.Serialize(new { version, ok, message, details = "", when = now() },
+            string json = JsonSerializer.Serialize(new { version, ok, message, details = "", when },
                 new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(Path.Combine(dir, Installer.LastUpdateFile), json);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        catch (Exception) { }
     }
 
     static bool WaitForProcessToEnd(int pid, TimeSpan limit)

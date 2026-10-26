@@ -261,6 +261,10 @@ namespace ControlPanel.Tests
 			Assert.Empty(r.T.Runner.StartedWith);
 			Assert.Equal(0, r.T.App.Closed);
 			Assert.False(r.Vm.Busy);
+			// That release isn't offered again until a later check finds it.
+			Assert.Null(r.Vm.Available);
+			Assert.Equal("", r.Vm.Notes);
+			Assert.False(r.Vm.UpdateNowCommand.CanExecute(null));
 			Assert.Contains("gh release download 1.0.3 --repo Sintax/reborn-builds --pattern \"Reborn-Server-Update-1.0.3.zip\" --dir \""
 				+ r.StagingDir + "\" --clobber", r.T.Runner.Ran);
 
@@ -454,8 +458,8 @@ namespace ControlPanel.Tests
 				JsonSerializer.Serialize(new { from = "..\\..\\x\" --to \"1.0.1", to = "1.0.3\" --evil", when = "2026-10-26T10:00:00Z" }));
 			r.Vm.Reload();
 			Assert.Equal("unknown", r.Vm.Unfinished);
-			Assert.Equal("An update didn't finish, so the server may be a mix of two versions. Roll back to unknown to put it right.",
-				r.Vm.UnfinishedText);
+			Assert.False(r.Vm.UnfinishedCanRollBack);
+			Assert.Equal(Installer.StuckMessage(Path.Combine(r.T.Win64, "RebornVersions", Installer.InProgressFile)), r.Vm.UnfinishedText);
 			await r.Vm.RollBackCommand.ExecuteAsync("..\\..\\x\" --to \"1.0.1");
 			Assert.Empty(r.T.Dialogs.Questions);
 			Assert.Empty(r.T.Runner.StartedWith);
@@ -596,11 +600,105 @@ namespace ControlPanel.Tests
 				start.Args);
 			Assert.Equal("the staged updater", File.ReadAllText(start.Exe));
 
-			// A mark that can't be read still says plainly what happened.
-			File.WriteAllText(Path.Combine(r.T.Win64, "RebornVersions", Installer.InProgressFile), "{ broken");
+			// A mark that can't be read still says plainly what happened, and what to do instead.
+			string mark = Path.Combine(r.T.Win64, "RebornVersions", Installer.InProgressFile);
+			File.WriteAllText(mark, "{ broken");
 			r.Vm.Reload();
 			Assert.Equal("unknown", r.Vm.Unfinished);
-			Assert.Contains("didn't finish", r.Vm.UnfinishedText);
+			Assert.False(r.Vm.UnfinishedCanRollBack);
+			Assert.Equal("An earlier update did not finish and its saved copy is gone. Delete " + mark + " and check the server by hand.",
+				r.Vm.UnfinishedText);
+		}
+
+		[Fact]
+		public async Task unfinished_update_whose_saved_copy_is_gone_offers_no_roll_back()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.3\n");
+			File.WriteAllText(Path.Combine(r.T.Win64, "ControlPanel", "RebornUpdater.exe"), "the installed updater");
+			string mark = Path.Combine(Directory.CreateDirectory(Path.Combine(r.T.Win64, "RebornVersions")).FullName, Installer.InProgressFile);
+			File.WriteAllText(mark, "{\"from\":\"1.0.2\",\"to\":\"1.0.3\",\"when\":\"2026-10-26T10:00:00Z\"}");
+			r.Vm.Reload();
+
+			Assert.Equal("1.0.2", r.Vm.Unfinished);
+			Assert.False(r.Vm.UnfinishedCanRollBack);
+			Assert.Equal(Installer.StuckMessage(mark), r.Vm.UnfinishedText);
+			Assert.False(r.Vm.UpdateNowCommand.CanExecute(null));
+
+			r.T.Dialogs.ConfirmAnswer = true;
+			await r.Vm.RollBackCommand.ExecuteAsync("1.0.2");
+			Assert.Empty(r.T.Dialogs.Questions);
+			Assert.Empty(r.T.Runner.StartedWith);
+			Assert.Equal(0, r.T.App.Closed);
+			Assert.Equal(Installer.StuckMessage(mark), r.Vm.Status);
+
+			// Once the saved copy is there again, the notice offers its roll back.
+			Keep(r, "1.0.2");
+			r.Vm.Reload();
+			Assert.True(r.Vm.UnfinishedCanRollBack);
+		}
+
+		[Fact]
+		public async Task roll_back_warns_when_players_are_in_games()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			Keep(r, "1.0.1");
+			File.WriteAllText(Path.Combine(r.T.Win64, "ControlPanel", "RebornUpdater.exe"), "the installed updater");
+			r.Vm.Reload();
+
+			r.Players = 2;
+			r.T.Dialogs.ConfirmAnswer = false;
+			await r.Vm.RollBackCommand.ExecuteAsync("1.0.1");
+			Assert.Equal(new[] { "2 players are in games. Going back stops those games. Go back to 1.0.1?" }, r.T.Dialogs.Questions);
+			Assert.Empty(r.T.Runner.StartedWith);
+			Assert.False(r.Vm.Busy);
+
+			r.Players = 1;
+			await r.Vm.RollBackCommand.ExecuteAsync("1.0.1");
+			Assert.Equal("1 player is in a game. Going back stops that game. Go back to 1.0.1?", r.T.Dialogs.Questions[1]);
+
+			r.T.Dialogs.ConfirmAnswer = true;
+			await r.Vm.RollBackCommand.ExecuteAsync("1.0.1");
+			Assert.Single(r.T.Runner.StartedWith);
+			Assert.Equal(1, r.T.App.Closed);
+		}
+
+		[Fact]
+		public async Task already_current_is_found_before_asking_about_players()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			r.Deployed("1.0.3\n");   // installed another way meanwhile
+			r.Players = 2;
+
+			await r.Vm.UpdateNowCommand.ExecuteAsync(null);
+
+			Assert.Empty(r.T.Dialogs.Questions);
+			Assert.Equal(UpdatesViewModel.AlreadyUpToDateText, r.Vm.Status);
+			Assert.Null(r.Vm.Available);
+		}
+
+		[Fact]
+		public async Task a_check_whose_reload_fails_still_ends()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(r.T.Win64, "RebornVersions")).FullName, Installer.LastUpdateFile),
+				"{\"version\":\"1.0.2\",\"ok\":true,\"message\":\"Updated to 1.0.2.\",\"details\":\"\",\"when\":\"2026-10-26T11:30:00Z\"}");
+			r.Clock.ZoneThrows = true;
+
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+
+			Assert.False(r.Vm.Busy);
+			Assert.StartsWith("The update check hit a problem", r.Vm.Status);
+			Assert.True(r.Vm.CheckCommand.CanExecute(null));
+			r.Clock.ZoneThrows = false;
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal("1.0.3", r.Vm.Available);
 		}
 
 		[Fact]

@@ -19,8 +19,10 @@ namespace ControlPanel.Core
 	// RebornVersions\last-update.json, written by the Installer after every update or roll back.
 	public sealed record LastUpdate(string Version, bool Ok, string Message, string Details, DateTimeOffset? When);
 
-	// RebornVersions\in-progress.json: an update or roll back that broke off part way.
-	public sealed record UnfinishedUpdate(string From, string To);
+	// RebornVersions\in-progress.json: an update or roll back that broke off part way. CanRollBack is false
+	// when the roll back that would put it right can't run (the mark can't be read, or the saved copy of
+	// From is gone); MarkPath is the mark's full path, the file the owner then deletes by hand.
+	public sealed record UnfinishedUpdate(string From, string To, bool CanRollBack = true, string MarkPath = "");
 
 	// Server updates from the private builds repo on GitHub, through the gh program (signed in on the VM).
 	// Nothing here changes the installed server: the swap is RebornUpdater.exe's job.
@@ -239,8 +241,11 @@ namespace ControlPanel.Core
 		// counts as "from unknown", as the Installer reads it. An unsafe "to" is left out ("").
 		public UnfinishedUpdate? ReadUnfinished()
 		{
-			string path = Path.Combine(VersionsDir, Installer.InProgressFile);
+			string path = Path.GetFullPath(Path.Combine(VersionsDir, Installer.InProgressFile));
 			if (!File.Exists(path)) return null;
+			bool canRollBack;
+			try { canRollBack = new Installer(_paths.Win64, NoServers.Instance, () => DateTime.Now).CanRecover(); }
+			catch (Exception e) when (e is IOException or UnauthorizedAccessException) { canRollBack = false; }
 			try
 			{
 				using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
@@ -248,11 +253,11 @@ namespace ControlPanel.Core
 					&& IsSafeVersionName(from))
 				{
 					string to = Text(doc.RootElement, "to") ?? "";
-					return new UnfinishedUpdate(from, IsSafeVersionName(to) ? to : "");
+					return new UnfinishedUpdate(from, IsSafeVersionName(to) ? to : "", canRollBack, path);
 				}
 			}
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { }
-			return new UnfinishedUpdate("unknown", "");
+			return new UnfinishedUpdate("unknown", "", false, path);
 		}
 
 		// The updater an update that broke off brought with it (its staged copy), or null. The installed one

@@ -105,17 +105,8 @@ public sealed class WindowsServerControl(string win64, Action<string>? note = nu
         return DefaultCoordinatorPort;
     }
 
-    /// <summary>True when the games list is a JSON array with at least one entry.</summary>
-    public static bool HasGame(string? json)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(json)) return false;
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0;
-        }
-        catch (Exception) { return false; }
-    }
+    /// <summary>True when the games list has at least one game that has started and checked in ("ready": true).</summary>
+    public static bool HasGame(string? json) => GamesList.HasReadyGame(json);
 
     List<Process> MatchmakingProcesses() => Find("gamecontroller", IsMatchmaking);
 

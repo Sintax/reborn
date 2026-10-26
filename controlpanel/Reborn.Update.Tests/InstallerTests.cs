@@ -178,6 +178,88 @@ public sealed class InstallerTests : IDisposable
     }
 
     [Fact]
+    public void A_locked_file_the_update_never_reached_does_not_spoil_the_restore()
+    {
+        // reborn.dll is copied last (after reborn-version.txt). Another program holds it open, so the copy
+        // fails there, and the file itself was never changed.
+        string staged = StageVersion("1.0.2", "new dll");
+        InstallResult result;
+        using (new FileStream(Path.Combine(_s.Win64, "reborn.dll"), FileMode.Open, FileAccess.Read, FileShare.Read))
+            result = _installer.Install(staged, "1.0.2");
+
+        Assert.False(result.Ok);
+        Assert.Contains("reborn.dll couldn't be copied into place", result.Message);
+        Assert.Contains("1.0.1 was put back and matchmaking is running again.", result.Message);
+        Assert.DoesNotContain("needs a look", result.Message);
+        AssertOldVersionBack();   // includes: the in-progress mark is gone, so Update now works again
+        Assert.Equal(new[] { "StopAll", "StartMatchmaking" }, _servers.Calls);
+    }
+
+    [Fact]
+    public void A_file_changed_by_the_update_is_still_put_back()
+    {
+        // reborn-version.txt exists before (an older copy), gets overwritten, then the copy breaks at reborn.dll.
+        Scratch.Write(_s.Win64, "reborn-version.txt", "1.0.1 text");
+        string staged = StageVersion("1.0.2", "new dll");
+        InstallResult result;
+        using (new FileStream(Path.Combine(_s.Win64, "reborn.dll"), FileMode.Open, FileAccess.Read, FileShare.Read))
+            result = _installer.Install(staged, "1.0.2");
+
+        Assert.False(result.Ok);
+        Assert.DoesNotContain("needs a look", result.Message);
+        Assert.Equal("1.0.1 text", _s.Read("reborn-version.txt"));
+        Assert.Equal("old mm", _s.Read(@"matchmaking\gamecontroller.exe"));
+        Assert.False(_s.Has("new.txt"));
+        Assert.False(File.Exists(InProgress));
+    }
+
+    [Fact]
+    public void An_unfinished_update_whose_saved_copy_is_gone_says_what_to_delete()
+    {
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(_s.Versions).FullName, "in-progress.json"),
+            """{"from":"1.0.1","to":"1.0.2","when":"2026-10-26T12:00:00Z"}""");
+        string expected = "An earlier update did not finish and its saved copy is gone. Delete " +
+            Path.GetFullPath(InProgress) + " and check the server by hand.";
+
+        Assert.False(_installer.CanRecover());
+        Assert.Equal(expected, _installer.Install(StageVersion("1.0.2", "new dll"), "1.0.2").Message);
+        Assert.Equal(expected, _installer.RollBack("1.0.1").Message);
+        Assert.Equal(expected, LastUpdate().GetProperty("message").GetString());
+
+        // A mark that can't be read is the same: there is no way to know what to go back to.
+        Scratch.Write(Path.Combine(_s.Versions, "1.0.1"), ".reborn-backup.txt", "1.0.1\n");
+        File.WriteAllText(InProgress, "{ broken");
+        Assert.False(_installer.CanRecover());
+        Assert.Equal(expected, _installer.Install(StageVersion("1.0.2", "new dll"), "1.0.2").Message);
+        Assert.Equal(expected, _installer.RollBack("unknown").Message);
+
+        Assert.Empty(_servers.Calls);
+        Assert.Equal("old dll", _s.Read("reborn.dll"));
+
+        // With the saved copy there and a readable mark, the roll back can run.
+        File.WriteAllText(InProgress, """{"from":"1.0.1","to":"1.0.2","when":"2026-10-26T12:00:00Z"}""");
+        Assert.True(_installer.CanRecover());
+    }
+
+    [Fact]
+    public void A_mark_that_will_not_go_away_after_a_good_update_is_not_a_success()
+    {
+        string staged = StageVersion("1.0.2", "new dll");
+        FileStream? held = null;
+        _servers.OnWait = () => held = new FileStream(InProgress, FileMode.Open, FileAccess.Read, FileShare.Read);
+        InstallResult result;
+        try { result = _installer.Install(staged, "1.0.2"); }
+        finally { held?.Dispose(); }
+
+        Assert.False(result.Ok);
+        Assert.Equal("Updated to 1.0.2. A game is up and running, but the update's in-progress mark couldn't be removed, " +
+            "so the panel thinks the update didn't finish. Delete " + Path.GetFullPath(InProgress) + " by hand.", result.Message);
+        Assert.Equal("new dll", _s.Read("reborn.dll"));
+        Assert.False(LastUpdate().GetProperty("ok").GetBoolean());
+        Assert.Contains("in-progress.json", LastUpdate().GetProperty("details").GetString());
+    }
+
+    [Fact]
     public void Roll_back_installs_a_kept_version()
     {
         Assert.True(_installer.Install(StageVersion("1.0.2", "new dll"), "1.0.2").Ok);

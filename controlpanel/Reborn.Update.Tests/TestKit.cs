@@ -28,10 +28,14 @@ public sealed class FakeServers(string win64) : IServerControl
         return StartAnswers.Count == 0 || StartAnswers.Dequeue();
     }
 
+    /// <summary>Runs inside WaitForGame, before it answers.</summary>
+    public Action? OnWait { get; set; }
+
     public bool WaitForGame(TimeSpan timeout)
     {
         Note("WaitForGame");
         LastTimeout = timeout;
+        OnWait?.Invoke();
         return WaitAnswers.Count == 0 || WaitAnswers.Dequeue();
     }
 
