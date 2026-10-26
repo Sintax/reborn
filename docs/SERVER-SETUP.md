@@ -111,8 +111,9 @@ program that lists games and lets players join them) that runs on the server.
 **To open it,** double-click the **Reborn Control Panel** icon on the server's desktop. The
 update puts the icon there the first time it installs the panel. If you can't see it, open
 `ControlPanel\ControlPanel.exe` inside the game's `Binaries\Win64` folder (the folder with
-`Battleborn.exe` in it). **Close the panel before you run an update.**
-Windows cannot replace a program while it is open, and the update will tell you to close it.
+`Battleborn.exe` in it). If you update from the command line instead of the **Updates** tab,
+**close the panel first.** Windows cannot replace a program while it is open, and the update
+will tell you to close it. The **Updates** tab closes and reopens the panel for you.
 
 **The top of the window** shows:
 
@@ -158,6 +159,8 @@ Windows cannot replace a program while it is open, and the update will tell you 
   - The tab also tells you how much memory your ports need. Each game takes about 1.3 GB.
 - **Logs.** The end of the matchmaking log, newest at the bottom. **Refresh** reads it again.
   **Open game logs folder** opens the folder with the game servers' own logs.
+- **Updates.** Puts a new version of Reborn on this server, and takes it back if you change
+  your mind. See **Updating the server from the panel** below.
 
 **Where friend zips are saved.** **Make zip** saves the file in
 `Documents\Reborn Friend Zips` on the server machine, named `Reborn-Mod-Installer_<name>.zip`.
@@ -166,8 +169,76 @@ that friend only. It holds their personal key and the Steam loader, so never pos
 public. The panel makes it from
 `reborn-player-installer.zip` in the game's `Binaries\Win64` folder, which every update refreshes.
 
-Updates never touch your user list, your "last seen" list, your record of made zips, or the
-panel's private password file (the small file that lets the panel talk to matchmaking).
+Updates never touch your user list, your "last seen" list, your record of made zips, your
+matchmaking settings, or the panel's private password file (the small file that lets the
+panel talk to matchmaking).
+
+## Updating the server from the panel
+
+New versions of Reborn have numbers like **1.0.4**. The owner makes them on their own PC.
+Each one is signed, so this server only accepts a version that really came from the owner.
+The **Updates** tab does the rest. You never copy files by hand.
+
+**What you need.** The server machine must be able to reach GitHub, with the GitHub program
+(`gh`) signed in. If it can't, the tab says: "This server can't reach the builds on GitHub
+right now. Nothing was changed."
+
+**Look for a new version.**
+
+1. Open the **Updates** tab. It shows **Installed version**.
+2. The panel looks for a new version by itself when it opens, and again every 6 hours. Press
+   **Check for updates** to look right now.
+3. If there is one, the tab says **Update available** with the new number, and a **What's
+   new** note. The same line shows at the top of the window.
+
+**Install it.**
+
+1. Press **Update now**.
+2. If players are in games, the panel asks you first, for example: "2 players are in games.
+   Updating stops those games. Update now?" Say No to wait. Nothing changes until you say Yes.
+3. The panel downloads the update and checks it is exactly the one the owner signed. Then it
+   **closes by itself.** A small update window opens and shows what it is doing. Leave it alone.
+4. The update window stops matchmaking and the games, puts the new files in, and starts
+   matchmaking again. The **Control Panel opens again by itself** when it is done. This
+   usually takes a minute or two.
+5. The tab shows the result under **Last update**, for example "Updated to 1.0.4. A game is up
+   and running."
+
+**If the new version does not work.** After the update, the server waits up to 3 minutes for
+a game to show up. If none does, it puts the old version back and starts matchmaking again by
+itself. **Last update** then says what went wrong, in a warning colour, and "Details" has the
+technical part. Your players can join again as soon as matchmaking is back.
+
+**Go back to an older version.** Under **Saved versions**, each earlier version has a **Roll
+back** button. Press it, answer the question ("Go back to 1.0.3? The server restarts."), and
+the server goes back the same way an update goes forward. Use this if a new version works but
+you don't like it.
+
+**Saved versions and disk space.** Every update first saves a copy of the version it replaces,
+in the `RebornVersions` folder inside `Binaries\Win64`. The last **3** are kept. Older ones are
+deleted by themselves. Each one takes roughly **150 MB**, so the three together are about
+**450 MB**. Make sure the drive has room for them. The folder also holds the download while an
+update is running.
+
+**If an update did not finish.** If the machine switched off, or someone closed the update
+window part way through, the **Updates** tab shows a warning: the server may be a mix of two
+versions. It then offers **one** button, **Roll back to** the version you had before. Press
+it. **Update now** and the list of saved versions stay switched off until you do.
+
+**What an update never touches.** The player names and keys on your user list, the "last seen"
+list, your record of made zips, `appsettings.json` (your games and ports) and the panel's
+private password file all stay exactly as they were. Your friends' own name, key and Steam
+files on their PCs are not touched either (see the friends' note below).
+
+**Friends and the in-game update.** The server also hands out the new game files to players.
+A player who has the update system sees **Update available: Reborn 1.0.4** in the game's main
+menu, and can press **Download**. But a friend's game can only do that if it came from a zip
+made **after** the first numbered release. Zips made earlier don't know how to update, so each
+friend needs **one last zip**:
+
+1. Update the server to the first numbered release (1.0.1) with **Update now**.
+2. On the **Users** tab, press **Make zip** on each friend's row, and send them the new zip.
+3. They run its `Install.bat`. From then on their game updates itself.
 
 ## Start a game by hand (no matchmaking)
 
@@ -187,7 +258,8 @@ Do **not** sign out. Signing out closes the server.
 
 ## A new build of the mod
 
-Copy the new server kit over and unzip it into `Win64` again, replacing files. Stop the
+The easy way is the **Updates** tab in the Control Panel (see above). The old way still
+works: copy the new server kit over and unzip it into `Win64` again, replacing files. Stop the
 server first, or Windows won't let the files be replaced.
 
 ## When something goes wrong

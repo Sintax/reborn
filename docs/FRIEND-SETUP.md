@@ -124,4 +124,28 @@ in. Click **OK**, then check these:
 
 ## Updates
 
-When the host sends a new zip, extract it and run its `Install.bat` again.
+If your game came from a recent zip, it can update itself. You do not have to run
+`Install.bat` again for a normal update.
+
+1. When you reach the main menu, the game checks for a new version. This happens quietly,
+   once each time you start the game.
+2. If there is one, a **Reborn** box appears in the middle of the menu. It says **Update
+   available: Reborn 1.0.4**, and a short note about what changed.
+3. Press **Download**. (Press **Not now** to hide the box. It comes back the next time you
+   start the game.)
+4. The game downloads the new files and puts them in place. This takes a few seconds. Then
+   the box says **Update ready. Restart the game to use it.** Press **OK**.
+5. Close the game and start it again. You are now on the new version.
+
+If something goes wrong, the box says "The update could not be installed" and tells you why.
+Press **OK**. Your game is still the old version, and you can keep playing.
+If the new version does not start at all, the game puts the old one back by itself the next time
+you start it.
+
+**Nothing personal changes.** An update only replaces the two game files of the mod
+(`reborn.dll` and `dxgi.dll`). Your name (`reborn-player.txt`), your key (`reborn-key.txt`)
+and your Steam files stay exactly as they are.
+
+**Older zips cannot do this.** If your zip is from before updates were added, your game
+does not know how to update itself yet. Ask the host for a new zip once, and run its
+`Install.bat`. After that, updates come by themselves.
