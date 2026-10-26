@@ -9,6 +9,11 @@ On the VM, from its clone of this repo (Claude there runs it):
 
     python -m tools.vm update               # newest release
     python -m tools.vm update --version abc1234 --no-start
+    python -m tools.vm update --version 1.0.4  # a numbered release from `python -m tools.release`
+
+A numbered release (1.0.N) says which commit it was built from in its commit.txt; the VM checks out
+that commit. It also carries the player update (player-update.zip), which goes into
+matchmaking\\player-update so matchmaking can offer it to players' games.
 
 Users (who may join the server, and who may start games). The list is reborn-users.json in the
 game's Win64 folder; changes take effect within a second, no restart:
@@ -47,15 +52,24 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, package
+from . import version as release_numbers   # `version` is a parameter name all through this file
 
 BUILDS_REPO = "Sintax/reborn-builds"
 MOD_FILES = ("reborn.dll", "reborn.pdb", "dxgi.dll")
 PANEL_EXE = "ControlPanel.exe"                     # a release asset, and the installed file's name
 PLAYER_ZIP_ASSET = "reborn-player-installer.zip"   # the player installer under the name the panel looks for
+PLAYER_UPDATE_ZIP = "player-update.zip"            # numbered releases: what matchmaking offers players
+PLAYER_UPDATE_DIR = "player-update"                # ...unpacked into matchmaking\player-update
+PLAYER_UPDATE_FILES = ("manifest.json", "manifest.json.sig", "reborn.dll", "dxgi.dll")
+COMMIT_ASSET = "commit.txt"                        # numbered releases: the commit they were built from
+COMMIT_RE = re.compile(r"[0-9a-f]{7,40}")
+# A numbered release also holds the big server update zip, which this update does not use.
+VM_ASSETS = (*MOD_FILES, PANEL_EXE, PLAYER_ZIP_ASSET, PLAYER_UPDATE_ZIP)
 PANEL_PROJECT = config.REPO / "controlpanel" / "ControlPanel"
 PANEL_PUBLISH = PANEL_PROJECT / "bin" / "release-publish"                  # bin/ is gitignored
 # The player installer WITH the Steam loader (dist/ is gitignored). Private: it goes only to the
@@ -169,6 +183,21 @@ def latest_version() -> str:
     return json.loads(out)["tagName"]
 
 
+def release_commit(version: str) -> str:
+    """The commit to check out for a release. Older releases are named after their commit; a
+    numbered one (1.0.N, from tools.release) names it in its commit.txt."""
+    if release_numbers.parse(version) == 0:
+        return version
+    with tempfile.TemporaryDirectory() as d:
+        run(["gh", "release", "download", version, "--repo", BUILDS_REPO, "--pattern", COMMIT_ASSET,
+             "--dir", d])
+        f = Path(d) / COMMIT_ASSET
+        sha = f.read_text(encoding="utf-8", errors="replace").strip() if f.exists() else ""
+    if not COMMIT_RE.fullmatch(sha):
+        raise VmError(f"release {version} does not say which commit it was built from; nothing was changed")
+    return sha
+
+
 def checkout(version: str) -> None:
     if git("status", "--porcelain", "--untracked-files=no"):
         raise VmError(f"the clone at {config.REPO} has local edits; the VM should not be edited by hand")
@@ -187,7 +216,11 @@ def stop_servers() -> None:
 def download_mod(version: str, scratch: Path) -> Path:
     if scratch.exists():
         shutil.rmtree(scratch)
-    run(["gh", "release", "download", version, "--repo", BUILDS_REPO, "--dir", str(scratch)])
+    cmd = ["gh", "release", "download", version, "--repo", BUILDS_REPO, "--dir", str(scratch)]
+    if release_numbers.parse(version) > 0:   # a numbered release: leave out the big server update zip
+        for name in VM_ASSETS:
+            cmd += ["--pattern", name]
+    run(cmd)
     for name in MOD_FILES:   # the panel and the zip may be missing: older releases (rollback) have none
         if not (scratch / name).exists():
             raise VmError(f"release {version} has no {name}")
@@ -327,6 +360,50 @@ def install_matchmaking(published: Path, win64: Path) -> None:
         (dest / name).write_bytes(data)
 
 
+def stage_player_update(downloaded: Path, scratch: Path) -> Path | None:
+    """Unpack the release's player update into scratch and check it holds exactly the four files
+    matchmaking serves, before anything is stopped. None when the release has none (older ones)."""
+    src = downloaded / PLAYER_UPDATE_ZIP
+    if not src.exists():
+        print("This release has no player update; players' games will not be offered one.")
+        return None
+    if scratch.exists():
+        shutil.rmtree(scratch)
+    scratch.mkdir(parents=True)
+    try:
+        with zipfile.ZipFile(src) as z:
+            if sorted(z.namelist()) != sorted(PLAYER_UPDATE_FILES):
+                raise VmError("the player update in this release does not hold the expected files; "
+                              "nothing was changed")
+            for name in PLAYER_UPDATE_FILES:
+                (scratch / name).write_bytes(z.read(name))
+    except (zipfile.BadZipFile, OSError) as e:
+        raise VmError(f"the player update in this release cannot be read ({e}); nothing was changed") from None
+    return scratch
+
+
+def install_player_update(staged: Path | None, win64: Path) -> None:
+    """Put the player update in matchmaking\\player-update. Run after install_matchmaking, which
+    empties the matchmaking folder. The folder is filled beside its place and then renamed in, so
+    matchmaking never serves a new list with an old signature. A failure here does not fail the
+    update: the server runs, players are just not offered the new mod yet."""
+    if staged is None:
+        return
+    dest = win64 / "matchmaking" / PLAYER_UPDATE_DIR
+    tmp = dest.with_name(dest.name + ".new")
+    try:
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        shutil.copytree(staged, tmp)
+        if dest.exists():
+            shutil.rmtree(dest)
+        os.replace(tmp, dest)
+    except OSError as e:
+        print(f"The player update could not be put in place ({e}); players' games will not be "
+              "offered the new mod until the next update.")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def start_matchmaking(win64: Path) -> None:
     subprocess.Popen(["cmd", "/c", str(win64 / "StartMatchmaking.bat")], cwd=win64,
                      creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)
@@ -371,7 +448,7 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     ensure_panel_closed()   # first of all: an open panel locks its exe, and nothing must be half-done
     version = version or latest_version()
     if not checked_out:
-        checkout(version)
+        checkout(release_commit(version))
         # Carry on with the code of the version just checked out, not the code that started.
         return subprocess.call([sys.executable, "-m", "tools.vm", "update", "--version", version,
                                 "--win64", str(win64), "--checked-out", *([] if start else ["--no-start"])],
@@ -380,12 +457,14 @@ def update(version: str | None, win64: Path, start: bool, checked_out: bool) -> 
     scratch = Path(os.environ.get("TEMP", str(config.REPO))) / "reborn-vm-update"
     downloaded = download_mod(version, scratch / "mod")      # both before stopping anything,
     published = build_matchmaking(scratch / "matchmaking")  # so a failure leaves the server up
+    player_update = stage_player_update(downloaded, scratch / PLAYER_UPDATE_DIR)
     ensure_panel_closed()   # again: the downloads take a while, and the panel may have been opened since
     staged = stage_panel(downloaded, win64)   # the big copy, while the old server still runs
     stop_servers()
     install_mod(downloaded, win64)
     install_scripts(version, win64)
     install_matchmaking(published, win64)
+    install_player_update(player_update, win64)   # after: install_matchmaking empties that folder
     swap_panel(staged)
     (win64 / DEPLOYED_MARK).write_text(version + "\n", encoding="utf-8")
     print(f"Installed {version} into {win64}")
