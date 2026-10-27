@@ -10,7 +10,7 @@ from typing import Protocol
 
 import psutil
 
-from . import config
+from . import config, deploy
 
 GAME_BASE_ARGS = ["-windowed", "-ResX=960", "-ResY=540", "-nosound", "-nomoviestartup", "-NOSPLASH"]
 # Spike S3: three instances at 960x540 push this laptop's free RAM under 2 GB, so in multiplayer
@@ -162,13 +162,37 @@ def find_game_processes() -> list[int]:
     return [p.pid for p in psutil.process_iter(["name"]) if p.info["name"] in GAME_EXES]
 
 
+DEPLOYED_FILES = ("reborn.dll", "reborn.pdb")
+
+
+def prepare_server_folder(player_win64: Path, server_win64: Path) -> None:
+    """A server folder other than the players' (BB_SERVER_GAME_DIR) must run the same mod build as
+    the players and have its own Serverborn.exe, exactly as the players' folder gets from deploy."""
+    for f in DEPLOYED_FILES:
+        src, dst = player_win64 / f, server_win64 / f
+        if src.exists() and _sha(src) != _sha(dst):
+            shutil.copy2(src, dst)
+    deploy.ensure_serverborn(server_win64)
+
+
 class RealLauncher:
-    def __init__(self, win64: Path = config.WIN64):
+    def __init__(self, win64: Path = config.WIN64, server_win64: Path | None = None):
         self.win64 = win64
+        self._server_win64 = server_win64
+
+    def win64_for(self, role: str) -> Path:
+        """Server processes start from the server folder (BB_SERVER_GAME_DIR, if set); all others
+        from the players' folder."""
+        if role != "server":
+            return self.win64
+        return self._server_win64 or config.server_win64(self.win64)
 
     def start(self, name: str, role: str, args: list[str]) -> ProcessHandle:
         exe = "Serverborn.exe" if role == "server" else "Battleborn.exe"
-        d = ensure_identity(name, exe, args, self.win64)
+        win64 = self.win64_for(role)
+        if win64 != self.win64:
+            prepare_server_folder(self.win64, win64)
+        d = ensure_identity(name, exe, args, win64)
         loader = subprocess.Popen([str(d / "steamclient_loader_x64.exe")], cwd=d)
         marker = f"-rbinstance={name}"
         deadline = time.time() + 60

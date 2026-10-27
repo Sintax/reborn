@@ -1,0 +1,331 @@
+"""Find out which game files a server can do without.
+
+A server does not need every file the game ships (movies, sound, the debug builds of the physics
+library...). This tool makes a copy of the game folder with chosen parts left out, runs the
+regression games with the server started from that copy, and records which parts were safe to leave
+out in tools/trim_results.json. The installer offers only the parts recorded as passed.
+
+The copy costs almost no disk space: everything is a hard link (a second name for the same file on
+disk) except the few folders a running game writes into, which are real copies. Deleting the copy
+removes only the extra names; the real game folder is never changed.
+
+  python -m tools.trim test --part movies     try one part
+  python -m tools.trim test --all-passed      try every part that passed, all removed together
+  python -m tools.trim test --clean           delete a copy left behind by a crash
+  python -m tools.trim measure                show how big each part is
+"""
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from datetime import date
+from pathlib import Path
+from typing import Callable
+
+from . import config
+
+PARTS_FILE = Path(__file__).resolve().parent / "trim_parts.json"
+RESULTS_FILE = Path(__file__).resolve().parent / "trim_results.json"
+COPY_NAME = "Battleborn-trimtest"
+MARKER = ".trimtest-copy"
+SCENARIOS = ("s1-dojo-1client-smoke", "s2-algorithm-2clients-smoke", "s3-meltdown-2clients-bots-smoke")
+ALL_PASSED = "all-passed"
+
+# Folders (relative to the game folder) a running game may write into: these are real copies, so
+# nothing the test server writes can reach the real game files through a shared hard link.
+REAL_COPY_DIRS = ("Binaries/Win64", "Engine/Config", "Gearbox/Config", "PoplarGame/Config", "WillowGame/Config")
+# Inside Win64: the runner's own working folders (several GB of loader copies and old DLLs). The
+# runner makes what it needs again, so the copy leaves them out; they never count as game files.
+SKIPPED_DIRS = ("Binaries/Win64/rb_ids", "Binaries/Win64/rb_backups")
+
+
+class TrimError(Exception):
+    """A problem with a plain-language message."""
+
+
+class HarnessProblem(TrimError):
+    """The regression run itself could not run (not a verdict on the part)."""
+
+
+# ---------------------------------------------------------------- parts and matching
+
+def load_parts(path: Path = PARTS_FILE) -> list[dict]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def find_part(part_id: str, parts: list[dict]) -> dict:
+    for p in parts:
+        if p["id"] == part_id:
+            return p
+    raise TrimError(f"unknown part '{part_id}'; known parts: {', '.join(p['id'] for p in parts)}")
+
+
+def _glob_regex(glob: str) -> re.Pattern:
+    """Glob -> regex over a '/'-separated path relative to the game folder, any letter case.
+    `**` crosses folders, `**/` also matches no folder at all, `*` and `?` stay inside one name."""
+    g = glob.replace("\\", "/").lstrip("/")
+    out, i = [], 0
+    while i < len(g):
+        if g.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif g.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif g[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif g[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(g[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z", re.IGNORECASE)
+
+
+def _matcher(parts: list[dict]) -> Callable[[str], bool]:
+    rx = [_glob_regex(g) for p in parts for g in p["globs"]]
+    return lambda rel: any(r.match(rel) for r in rx)
+
+
+def _is_link(p: str) -> bool:
+    return os.path.islink(p) or os.path.isjunction(p)
+
+
+def _under(rel: str, folder: str) -> bool:
+    low, f = rel.lower(), folder.lower()
+    return low == f or low.startswith(f + "/")
+
+
+def walk_game(game: Path):
+    """Yield (relative path with '/', is_dir) for everything in the game folder except the
+    runner's working folders. A link folder is refused: a copy that followed it would be wrong."""
+    root = str(game)
+    for cur, dirs, files in os.walk(root):
+        rel_cur = os.path.relpath(cur, root).replace("\\", "/")
+        rel_cur = "" if rel_cur == "." else rel_cur
+        keep = []
+        for d in dirs:
+            rel = f"{rel_cur}/{d}" if rel_cur else d
+            if _is_link(os.path.join(cur, d)):
+                raise TrimError(f"{rel} is a link to another folder; the trim test cannot copy that")
+            if any(_under(rel, s) for s in SKIPPED_DIRS):
+                continue
+            keep.append(d)
+            yield rel, True
+        dirs[:] = keep
+        for f in files:
+            rel = f"{rel_cur}/{f}" if rel_cur else f
+            if _is_link(os.path.join(cur, f)):
+                raise TrimError(f"{rel} is a link; the trim test cannot copy that")
+            yield rel, False
+
+
+def matching_files(game: Path, parts: list[dict]) -> list[str]:
+    hit = _matcher(parts)
+    return [rel for rel, is_dir in walk_game(game) if not is_dir and hit(rel)]
+
+
+def measure(game: Path, part: dict) -> int:
+    """Bytes of the files in the game folder that the part matches."""
+    return sum(os.path.getsize(game / rel) for rel in matching_files(game, [part]))
+
+
+# ---------------------------------------------------------------- the copy
+
+def _same_volume(a: Path, b: Path) -> bool:
+    return os.stat(a).st_dev == os.stat(b).st_dev
+
+
+def _nearest_existing(p: Path) -> Path:
+    while not p.exists():
+        if p.parent == p:
+            break
+        p = p.parent
+    return p
+
+
+def make_trimmed_copy(src: Path, dst: Path, remove: list[dict]) -> None:
+    """Copy `src` to `dst`. Binaries\\Win64 (and the small Config folders) are real copies, every
+    other file is a hard link, and files matched by `remove` are left out."""
+    src, dst = Path(src), Path(dst)
+    if not (src / "Binaries" / "Win64" / "Battleborn.exe").is_file():
+        raise TrimError(f"{src} is not a Battleborn folder (Binaries\\Win64\\Battleborn.exe is missing)")
+    if dst.exists():
+        raise TrimError(f"{dst} already exists. Delete it first (python -m tools.trim test --clean).")
+    anchor = _nearest_existing(dst.parent)
+    if not _same_volume(src, anchor):
+        raise TrimError(f"{dst} is on a different drive than the game folder; the test copy has to be on "
+                        "the same drive so it can share files instead of using another 40 GB.")
+    hit = _matcher(remove)
+    try:
+        dst.mkdir(parents=True)
+        for rel, is_dir in walk_game(src):
+            if is_dir:
+                (dst / rel).mkdir(exist_ok=True)
+                continue
+            if hit(rel):
+                continue
+            s, d = src / rel, dst / rel
+            if any(_under(rel, f) for f in REAL_COPY_DIRS):
+                shutil.copy2(s, d)
+            else:
+                os.link(s, d)
+        (dst / MARKER).write_text("A test copy made by tools.trim. Safe to delete.\n", encoding="utf-8")
+    except BaseException:
+        remove_copy(dst, force=True)
+        raise
+
+
+def remove_copy(dst: Path, force: bool = False) -> None:
+    """Delete a test copy. Only a folder carrying our marker is ever deleted (`force` is for a copy
+    whose marker was not written yet). Deleting removes the extra names of hard-linked files only;
+    the files in the real game folder stay. Attributes are never changed: they are shared."""
+    dst = Path(dst)
+    if not dst.exists():
+        return
+    if not force and not (dst / MARKER).is_file():
+        raise TrimError(f"{dst} is not a trim test copy (no marker file); not deleting it")
+    errors: list[str] = []
+    shutil.rmtree(dst, onexc=lambda fn, path, exc: errors.append(f"{path}: {exc}"))
+    if errors:
+        raise TrimError(f"could not fully delete {dst}: {errors[0]}")
+
+
+# ---------------------------------------------------------------- results
+
+def load_results(path: Path = RESULTS_FILE) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+
+
+def write_results(results: dict, path: Path = RESULTS_FILE) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _commit() -> str:
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=config.REPO,
+                           capture_output=True, text=True, timeout=30)
+        return r.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def record(results_path: Path, key: str, scenarios: dict, nbytes: int, commit: str | None = None) -> dict:
+    entry = {"passed": bool(scenarios) and all(k == "pass" for k in scenarios.values()),
+             "bytes": nbytes, "scenarios": dict(scenarios),
+             "commit": commit or _commit(), "date": date.today().isoformat()}
+    results = load_results(results_path)
+    results[key] = entry
+    write_results(results, results_path)
+    return entry
+
+
+# ---------------------------------------------------------------- running the games
+
+Runner = Callable[[str, Path], str]   # (scenario name, server game folder) -> outcome kind ("pass" ...)
+
+
+def real_runner(scenario: str, server_game: Path) -> str:
+    """Run one regression game with the server started from `server_game`; players use the normal folder."""
+    env = {**os.environ, "BB_SERVER_GAME_DIR": str(server_game)}
+    r = subprocess.run([sys.executable, "-m", "debugloop.run", scenario], cwd=config.REPO, env=env,
+                       capture_output=True, text=True)
+    sys.stdout.write(r.stdout[-2000:])
+    if r.returncode == 0:
+        return "pass"
+    if r.returncode == 1:
+        start = r.stdout.find("{")
+        try:
+            return str(json.loads(r.stdout[start:])["outcome"]["kind"])
+        except (ValueError, KeyError, TypeError):
+            return "fail"
+    raise HarnessProblem(f"the test run could not start ({scenario}): "
+                         f"{(r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or ['no message'])[-1]}")
+
+
+def run_trial(src: Path, dst: Path, remove: list[dict], runner: Runner,
+              scenarios: tuple[str, ...] = SCENARIOS) -> dict:
+    """Make the copy, run the scenarios until one fails, always delete the copy."""
+    make_trimmed_copy(src, dst, remove)
+    try:
+        outcomes: dict[str, str] = {}
+        for name in scenarios:
+            outcomes[name] = runner(name, dst)
+            if outcomes[name] != "pass":
+                break
+        return outcomes
+    finally:
+        remove_copy(dst)
+
+
+def test_parts(part_id: str | None, all_passed: bool, game: Path, runner: Runner,
+               parts_path: Path = PARTS_FILE, results_path: Path = RESULTS_FILE,
+               scenarios: tuple[str, ...] = SCENARIOS) -> dict:
+    """Try one part, or every part recorded as passed, all removed together. Records and returns the result."""
+    parts = load_parts(parts_path)
+    if all_passed:
+        done = load_results(results_path)
+        chosen = [p for p in parts if done.get(p["id"], {}).get("passed")]
+        if not chosen:
+            raise TrimError("no part has passed yet; test the parts one by one first (--part <id>)")
+        key = ALL_PASSED
+    else:
+        chosen = [find_part(part_id, parts)]
+        key = chosen[0]["id"]
+    nbytes = sum(measure(game, p) for p in chosen)
+    dst = game.parent / COPY_NAME
+    outcomes = run_trial(game, dst, chosen, runner, scenarios)
+    return {key: record(results_path, key, outcomes, nbytes)}
+
+
+# ---------------------------------------------------------------- command line
+
+def _gb(n: int) -> str:
+    return f"{n / 1024 ** 3:.2f} GB"
+
+
+def main(argv: list[str] | None = None, runner: Runner = real_runner) -> int:
+    ap = argparse.ArgumentParser(prog="python -m tools.trim", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("test", help="run the regression games on a trimmed copy")
+    g = t.add_mutually_exclusive_group(required=True)
+    g.add_argument("--part", help="id of one part (see tools/trim_parts.json)")
+    g.add_argument("--all-passed", action="store_true", help="remove every part that passed, together")
+    g.add_argument("--clean", action="store_true", help="delete a leftover test copy")
+    sub.add_parser("measure", help="show the size of each part")
+    a = ap.parse_args(argv)
+    game = config.GAME_DIR
+    try:
+        if a.cmd == "measure":
+            for p in load_parts():
+                print(f"{p['id']:<15} {p['label']:<20} {_gb(measure(game, p))}")
+            return 0
+        if a.clean:
+            remove_copy(game.parent / COPY_NAME)
+            print("test copy deleted (or there was none)")
+            return 0
+        res = test_parts(a.part, a.all_passed, game, runner)
+    except HarnessProblem as e:
+        print(f"HARNESS ERROR: {e}")
+        return 2
+    except TrimError as e:
+        print(f"ERROR: {e}")
+        return 2
+    for key, e in res.items():
+        print(f"{key}: {'PASSED' if e['passed'] else 'FAILED'} ({_gb(e['bytes'])}) {e['scenarios']}")
+    return 0 if all(e["passed"] for e in res.values()) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

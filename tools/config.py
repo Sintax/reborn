@@ -6,6 +6,16 @@ MOD_PROJECT = REPO / "reborn" / "reborn.vcxproj"
 MOD_DLL = REPO / "reborn" / "x64" / "Release" / "reborn.dll"
 GAME_DIR = Path(os.environ.get("BB_GAME_DIR", r"C:\Users\djsin\Games\Battleborn"))
 WIN64 = GAME_DIR / "Binaries" / "Win64"
+
+
+def server_win64(default: Path = WIN64) -> Path:
+    """Where server processes start from. BB_SERVER_GAME_DIR (read at the moment of asking) is a
+    second game folder just for servers, used by the trim test (tools/trim.py); players keep
+    the normal folder. Without it the server starts from `default`."""
+    d = os.environ.get("BB_SERVER_GAME_DIR")
+    return Path(d) / "Binaries" / "Win64" if d else default
+
+
 PKG = Path(__file__).resolve().parent
 LOG_DIR = Path(os.environ["USERPROFILE"]) / "Documents" / "RebornLogs"
 # The game's own crash handler writes POPLAR-*.dmp here.

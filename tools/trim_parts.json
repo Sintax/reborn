@@ -1,0 +1,26 @@
+[
+  {
+    "id": "physics-debug",
+    "label": "Debug physics files",
+    "globs": [
+      "Binaries/Win64/*DEBUG_x64.dll",
+      "Binaries/Win64/*CHECKED_x64.dll",
+      "Binaries/Win64/*PROFILE_x64.dll"
+    ]
+  },
+  {
+    "id": "movies",
+    "label": "Movies",
+    "globs": ["PoplarGame/Movies/**"]
+  },
+  {
+    "id": "sound",
+    "label": "Sound",
+    "globs": ["**/*.pck", "PoplarGame/CookedPCConsole/English(US)/**"]
+  },
+  {
+    "id": "textures",
+    "label": "Texture caches",
+    "globs": ["**/*.tfc"]
+  }
+]
