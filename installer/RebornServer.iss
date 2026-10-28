@@ -31,6 +31,9 @@
 ;                         instead of run, and no desktop shortcut is made (the uninstaller too)
 ;   /FAILSTEP=firewall|vcredist|autostart   that step fails without running anything
 ;   /RUNTIMECHECK=<file>  decide "runtime missing" by this file instead of System32\msvcp110.dll
+;   /FIREWALLSHOW=<file>  netsh's answer about the current game-server rule, from a file (none: no rule)
+; The game servers' ports belong to the Control Panel after the first install: Setup keeps the
+; rule's ports and matchmaking's saved GamePorts, and opens 7777-7779 only when it has neither.
 
 #ifndef Generated
   #error Build this with python -m tools.installer --version 1.0.N (it passes /DGenerated=...)
@@ -101,7 +104,7 @@ Name: vcredist; Description: "Install the Visual C++ 2012 runtime the game needs
 Name: autostart; Description: "Start matchmaking when I sign in to Windows"
 Name: shortcut; Description: "Put ""Reborn Control Panel"" on the desktop"
 #if PartCount > 0
-Name: trim; Description: "Free up space: remove game files the server does not need"; GroupDescription: "Free up space (optional):"; Flags: unchecked
+Name: trim; Description: "Free up space: remove game files the server does not need (tick the parts below)"; GroupDescription: "Free up space (optional):"; Flags: unchecked
   #define I
   #sub EmitPartTask
 Name: "trim\{#PartIds[I]}"; Description: "{#PartLabels[I]} (about {#PartSizes[I]})"; Flags: unchecked dontinheritcheck
@@ -146,6 +149,7 @@ const
 
 type
   TPidList = array of Integer;
+  TPortList = array of Integer;
 
 var
   GameDirCandidates: TArrayOfString;
@@ -629,18 +633,202 @@ begin
   RunCommand(SchtasksExe, '/Delete /TN "' + TaskName + '" /F', Dry, Code);
 end;
 
+{ ---- the game servers' ports. After the first install the Control Panel owns them: it saves the
+  list in matchmaking\appsettings.json ("GamePorts") and opens those ports (plus any still in use)
+  in the "Battleborn Reborn server" rule. Setup never closes a port: it keeps the rule's ports and
+  the saved ones. Only with neither does it use the default 7777-7779. }
+
+procedure AddPort(var Ports: TPortList; const P: Integer);
+var
+  I, J, N: Integer;
+begin
+  if (P < 1) or (P > 65535) then
+    Exit;
+  N := GetArrayLength(Ports);
+  I := 0;
+  while (I < N) and (Ports[I] < P) do
+    I := I + 1;
+  if (I < N) and (Ports[I] = P) then
+    Exit;
+  SetArrayLength(Ports, N + 1);
+  for J := N downto I + 1 do
+    Ports[J] := Ports[J - 1];
+  Ports[I] := P;
+end;
+
+{ Adds a port list like "7777-7779,7781" (netsh's and OpenFirewall.bat's form). A part that is not
+  a port or a short range (such as "Any") is kept as written, in Raw. }
+procedure AddPortText(var Ports: TPortList; var Raw: String; Text: String);
+var
+  Item: String;
+  P, D, A, B, K: Integer;
+begin
+  Text := Text + ',';
+  while Text <> '' do
+  begin
+    P := Pos(',', Text);
+    Item := Trim(Copy(Text, 1, P - 1));
+    Text := Copy(Text, P + 1, Length(Text));
+    if Item = '' then
+      Continue;
+    D := Pos('-', Item);
+    A := -1;
+    B := -1;
+    if D > 0 then
+    begin
+      A := StrToIntDef(Trim(Copy(Item, 1, D - 1)), -1);
+      B := StrToIntDef(Trim(Copy(Item, D + 1, Length(Item))), -1);
+    end
+    else
+    begin
+      A := StrToIntDef(Item, -1);
+      B := A;
+    end;
+    if (A >= 1) and (B >= A) and (B <= 65535) and (B - A <= 1000) then
+    begin
+      for K := A to B do
+        AddPort(Ports, K);
+    end
+    else if Pos(',' + Lowercase(Item) + ',', ',' + Lowercase(Raw) + ',') = 0 then
+    begin
+      if Raw <> '' then
+        Raw := Raw + ',';
+      Raw := Raw + Item;
+    end;
+  end;
+end;
+
+{ The "GamePorts" list in matchmaking\appsettings.json, the panel's saved ports. Nothing is added
+  when the file or the list cannot be read. }
+procedure AddSavedPorts(const Win64: String; var Ports: TPortList);
+var
+  S: AnsiString;
+  T, Inner, Raw: String;
+  P, Q: Integer;
+begin
+  if not LoadStringFromFile(Win64 + '\matchmaking\appsettings.json', S) then
+    Exit;
+  T := String(S);
+  P := Pos('"gameports"', Lowercase(T));
+  if P = 0 then
+    Exit;
+  T := Copy(T, P + 11, Length(T));
+  P := Pos('[', T);
+  Q := Pos(']', T);
+  if (P = 0) or (Q < P) or (Trim(Copy(T, 1, P - 1)) <> ':') then
+    Exit;
+  Inner := Copy(T, P + 1, Q - P - 1);
+  Raw := '';
+  AddPortText(Ports, Raw, Inner);
+  if Raw <> '' then
+    Log('Some of the saved GamePorts are not ports: ' + Raw);
+  Log('The Control Panel''s saved game ports are read from matchmaking\appsettings.json');
+end;
+
+{ The current "Battleborn Reborn server" rule: is there one, and its ports (Readable: False when it
+  is there but its ports could not be read). Only reads; /FIREWALLSHOW=<file> (a test switch) gives
+  netsh's answer from a file instead (no file: no rule). }
+procedure ReadServerRule(var Found, Readable: Boolean; var Ports: TPortList; var Raw: String);
+var
+  Lines: TArrayOfString;
+  Output: TExecOutput;
+  Fake, Key: String;
+  I, P, Code: Integer;
+begin
+  Found := False;
+  Readable := False;
+  Fake := ExpandConstant('{param:FIREWALLSHOW|}');
+  if Fake <> '' then
+  begin
+    Log('Test switch /FIREWALLSHOW: the current rule is read from ' + Fake);
+    Found := LoadStringsFromFile(Fake, Lines);
+  end
+  else
+  begin
+    try
+      Found := ExecAndCaptureOutput(NetshExe, 'advfirewall firewall show rule name="' + RuleServer + '" verbose', '',
+        SW_SHOWNORMAL, ewWaitUntilTerminated, Code, Output) and (Code = 0);
+      Lines := Output.StdOut;
+    except
+      Log('Could not read the current firewall rule: ' + GetExceptionMessage);
+      Found := False;
+    end;
+  end;
+  if not Found then
+    Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    P := Pos(':', Lines[I]);
+    if P = 0 then
+      Continue;
+    Key := Trim(Copy(Lines[I], 1, P - 1));
+    if CompareText(Key, 'LocalPort') = 0 then
+    begin
+      Readable := True;
+      AddPortText(Ports, Raw, Copy(Lines[I], P + 1, Length(Lines[I])));
+    end;
+  end;
+end;
+
+function PortListText(const Ports: TPortList; const Raw: String): String;
+var
+  I: Integer;
+begin
+  if (Raw = '') and ((GetArrayLength(Ports) = 0) or ((GetArrayLength(Ports) = 3) and (Ports[0] = 7777) and
+     (Ports[1] = 7778) and (Ports[2] = 7779))) then
+  begin
+    Result := '7777-7779';
+    Exit;
+  end;
+  Result := '';
+  for I := 0 to GetArrayLength(Ports) - 1 do
+  begin
+    if Result <> '' then
+      Result := Result + ',';
+    Result := Result + IntToStr(Ports[I]);
+  end;
+  if Raw <> '' then
+  begin
+    if Result <> '' then
+      Result := Result + ',';
+    Result := Result + Raw;
+  end;
+end;
+
 { The two rules OpenFirewall.bat makes, with the same names and settings (the panel edits the first
-  by name). Old ones go first so a moved game folder gets rules for its new place. }
+  by name). Old ones go first so a moved game folder gets rules for its new place. The game
+  servers' rule keeps every port it had (see above); one whose ports cannot be read stays as it is. }
 function AddFirewallRules(const Win64: String): Boolean;
 var
   Code: Integer;
+  Found, Readable: Boolean;
+  Ports: TPortList;
+  Raw, List: String;
 begin
   Result := False;
   if ForcedToFail('firewall') then
     Exit;
-  DeleteFirewallRules(DryRun);
-  Result := RunCommand(NetshExe, 'advfirewall firewall add rule name="' + RuleServer + '" dir=in action=allow profile=any program="' +
-    Win64 + '\Serverborn.exe" protocol=UDP localport=7777-7779 edge=no', DryRun, Code) and (Code = 0);
+  Raw := '';
+  SetArrayLength(Ports, 0);
+  ReadServerRule(Found, Readable, Ports, Raw);
+  if Found and not Readable then
+  begin
+    Log('The game servers'' firewall rule is there but its ports could not be read; it is kept as it is');
+    Result := True;
+  end
+  else
+  begin
+    AddSavedPorts(Win64, Ports);
+    List := PortListText(Ports, Raw);
+    if Found then
+      Log('The game servers'' firewall rule is there; it keeps its ports and the saved ones: ' + List)
+    else
+      Log('No game servers'' firewall rule yet; it opens UDP ' + List);
+    RunCommand(NetshExe, 'advfirewall firewall delete rule name="' + RuleServer + '"', DryRun, Code);
+    Result := RunCommand(NetshExe, 'advfirewall firewall add rule name="' + RuleServer + '" dir=in action=allow profile=any program="' +
+      Win64 + '\Serverborn.exe" protocol=UDP localport=' + List + ' edge=no', DryRun, Code) and (Code = 0);
+  end;
+  RunCommand(NetshExe, 'advfirewall firewall delete rule name="' + RuleMatchmaking + '"', DryRun, Code);
   Result := RunCommand(NetshExe, 'advfirewall firewall add rule name="' + RuleMatchmaking + '" dir=in action=allow profile=any program="' +
     Win64 + '\matchmaking\gamecontroller.exe" protocol=TCP localport=5000 edge=no', DryRun, Code) and (Code = 0) and Result;
 end;
@@ -840,7 +1028,33 @@ begin
   end;
 end;
 
-{ Deletes the files under Root that match Joined. Linked folders are not followed. }
+{ Reborn's own folders and files and the owner's (Rel is relative to the game folder, '/'-separated):
+  a free-space part never removes these, whatever its patterns say. }
+function IsRebornOwn(const Rel: String; const IsDir: Boolean): Boolean;
+var
+  L, Name: String;
+begin
+  L := Lowercase(Rel);
+  Result := False;
+  if Copy(L, 1, 15) <> 'binaries/win64/' then
+    Exit;
+  Name := Copy(L, 16, Length(L));
+  if IsDir then
+  begin
+    Result := (Name = 'matchmaking') or (Name = 'controlpanel') or (Name = 'redist') or (Name = 'rebornversions') or
+      (Name = 'rebornsetup') or (Name = 'steam_settings') or (Name = 'rb_ids') or (Name = 'rb_backups');
+    Exit;
+  end;
+  if Pos('/', Name) > 0 then
+    Exit;   { a file in another folder of Win64: only the parts' patterns decide }
+  Result := (Copy(Name, 1, 6) = 'reborn') or (Copy(Name, 1, 11) = 'steamclient') or (Name = 'battleborn.exe') or
+    (Name = 'serverborn.exe') or (Name = 'dxgi.dll') or (Name = 'coldclientloader.ini') or
+    (Name = 'startmatchmaking.bat') or (Name = 'stopmatchmaking.bat') or (Name = 'openfirewall.bat') or
+    (Name = 'readme-server.txt');
+end;
+
+{ Deletes the files under Root that match Joined. Linked folders are not followed; Reborn's own
+  folders and files are skipped. }
 procedure RemoveMatching(const Root, Rel, Joined: String; var Count: Integer);
 var
   F: TFindRec;
@@ -877,6 +1091,8 @@ begin
       Sub := Names[I]
     else
       Sub := Rel + '/' + Names[I];
+    if IsRebornOwn(Sub, IsDir[I]) then
+      Continue;
     if IsDir[I] then
       RemoveMatching(Root, Sub, Joined, Count)
     else if MatchesAny(Sub, Joined) then
@@ -902,6 +1118,32 @@ begin
     Log('Could not write ' + RemovedPartsFile);
 end;
 
+{ True when the command line names this exact item in its /TASKS= or /MERGETASKS= list. }
+function ListNames(const Param, Item: String): Boolean;
+var
+  I: Integer;
+  Prefix, Value: String;
+begin
+  { The last /<Param>= counts, as it does for Setup itself. }
+  Prefix := '/' + Param + '=';
+  Value := '';
+  for I := 1 to ParamCount do
+    if CompareText(Copy(ParamStr(I), 1, Length(Prefix)), Prefix) = 0 then
+      Value := Copy(ParamStr(I), Length(Prefix) + 1, Length(ParamStr(I)));
+  Result := Pos(',' + Lowercase(Item) + ',', ',' + Lowercase(Value) + ',') > 0;
+end;
+
+{ Is free-space part Id chosen? From the command line only when /TASKS= or /MERGETASKS= names
+  trim\<id> itself: "trim" alone (or "*trim") never removes a part. }
+function PartChosen(const Id: String): Boolean;
+begin
+  Result := WizardIsTaskSelected('trim\' + Id);
+  if Result and (HasSwitchPrefix('/TASKS=') or HasSwitchPrefix('/MERGETASKS=')) then
+    Result := ListNames('TASKS', 'trim\' + Id) or ListNames('MERGETASKS', 'trim\' + Id);
+  if WizardIsTaskSelected('trim\' + Id) and not Result then
+    Log('Free-space part ' + Id + ' is ticked only through "trim"; it is not removed (name trim\' + Id + ' to remove it)');
+end;
+
 { The ticked free-space parts: their files go from the game folder, their ids into the record. }
 procedure RemoveChosenParts(const GameDir, Win64: String);
 var
@@ -910,7 +1152,7 @@ var
 begin
   GetParts(Ids, Globs);
   for I := 0 to GetArrayLength(Ids) - 1 do
-    if WizardIsTaskSelected('trim\' + Ids[I]) then
+    if PartChosen(Ids[I]) then
     begin
       Count := 0;
       RemoveMatching(RemoveBackslashUnlessRoot(GameDir), '', Globs[I], Count);
@@ -985,8 +1227,9 @@ end;
 <event('CurPageChanged')>
 procedure ShowProblems(CurPageID: Integer);
 begin
+  { Added under Setup's own text, so "restart to finish" (when the runtime needs it) stays. }
   if (CurPageID = wpFinished) and (Problems <> '') then
-    WizardForm.FinishedLabel.Caption := MsgFinishedProblems + #13#10#13#10 + Problems;
+    WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + MsgFinishedProblems + #13#10 + Problems;
 end;
 
 function NeedRestart(): Boolean;
