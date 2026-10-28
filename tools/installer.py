@@ -249,6 +249,29 @@ def stage(ver: str, server_zip: Path, player_zip: Path, stage_dir: Path, redist:
 
 # ---------------------------------------------------------------- building
 
+def loader_hashes(player_zip: Path) -> dict[str, str]:
+    """SHA-256 of each Steam loader file as it is inside the zip it is staged from."""
+    import hashlib
+    try:
+        with zipfile.ZipFile(player_zip) as z:
+            return {f: hashlib.sha256(z.read("files/" + f)).hexdigest().upper() for f in LOADER_FILES}
+    except (zipfile.BadZipFile, OSError, KeyError) as e:
+        raise InstallerError(f"could not read {player_zip}: {e}") from None
+
+
+def check_loader_intact(win64: Path, wanted: dict[str, str], out_dir: Path) -> None:
+    """Every staged loader file must still be there, unchanged (antivirus may quarantine it)."""
+    for f, sha in wanted.items():
+        try:
+            ok = sha256_upper(win64 / f) == sha
+        except OSError:
+            ok = False
+        if not ok:
+            raise InstallerError("Windows Defender (or another antivirus) removed the Steam loader while the "
+                                 f"installer was being built. Add an exclusion for {out_dir} in Windows "
+                                 "Security, then run the release again.")
+
+
 def setup_name(ver: str) -> str:
     return f"Reborn-Server-Setup-{ver}"
 
@@ -272,10 +295,13 @@ def build_installer(ver: str, server_zip: Path, player_zip: Path, out_dir: Path,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     exe = out_dir / (setup_name(ver) + ".exe")
-    stage_dir = Path(tempfile.mkdtemp(prefix="reborn-setup-stage-"))
+    # Staged next to the output, not in %TEMP%: Defender has quarantined the loader in temp folders.
+    stage_dir = Path(tempfile.mkdtemp(prefix=".stage-", dir=out_dir))
     try:
         gen = stage(ver, Path(server_zip), Path(player_zip), stage_dir, Path(redist), parts,
                     all_passed=parts_tested_together(parts, results))
+        wanted = loader_hashes(Path(player_zip))
+        check_loader_intact(stage_dir / "Win64", wanted, out_dir)
         cmd = [str(iscc), "/Q", f"/O{out_dir}", f"/F{setup_name(ver)}", f"/DGenerated={gen}"]
         if compression:
             cmd.append(f"/DCompression={compression}")
@@ -286,6 +312,11 @@ def build_installer(ver: str, server_zip: Path, player_zip: Path, out_dir: Path,
             raise InstallerError(ISCC_MISSING) from None
         except subprocess.TimeoutExpired:
             raise InstallerError(f"Inno Setup did not finish within {ISCC_TIMEOUT_S // 60} minutes") from None
+        try:
+            check_loader_intact(stage_dir / "Win64", wanted, out_dir)
+        except InstallerError:
+            exe.unlink(missing_ok=True)   # built without (or with a changed) loader: never keep it
+            raise
         if p.returncode != 0 or not exe.is_file():
             raise InstallerError(f"Inno Setup could not build the installer:\n{(p.stdout + p.stderr).strip()[-3000:]}")
     finally:
