@@ -22,6 +22,10 @@ namespace ControlPanel.Core
 		// The same, with extra environment variables for that program only (never on its command line).
 		int Run(string file, string args, IReadOnlyDictionary<string, string> environment, out string output);
 
+		// The same, with each argument kept separate (no quoting by the caller) and a time limit: a program
+		// still running after limit is stopped (-1, and output says so).
+		int Run(string file, IReadOnlyList<string> arguments, TimeSpan limit, out string output);
+
 		// Runs a program hidden, as administrator (Windows asks the owner), and waits. Its exit code,
 		// -1 when the owner said no, or another non-zero code when it could not run.
 		Task<int> RunElevated(string exe, string args);

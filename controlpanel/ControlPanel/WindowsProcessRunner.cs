@@ -23,7 +23,6 @@ namespace ControlPanel
 				using Process? p = Process.Start(new ProcessStartInfo
 				{
 					FileName = exe,
-					Arguments = args,
 					WorkingDirectory = workingDir,
 					UseShellExecute = true,
 					WindowStyle = minimized ? ProcessWindowStyle.Minimized : ProcessWindowStyle.Normal,
@@ -41,7 +40,13 @@ namespace ControlPanel
 
 		public int Run(string file, string args, out string output) => Run(file, args, new Dictionary<string, string>(), out output);
 
-		public int Run(string file, string args, IReadOnlyDictionary<string, string> environment, out string output)
+		public int Run(string file, string args, IReadOnlyDictionary<string, string> environment, out string output) =>
+			RunCore(file, info => info.Arguments = args, environment, RunLimit, out output);
+
+		public int Run(string file, IReadOnlyList<string> arguments, TimeSpan limit, out string output) =>
+			RunCore(file, info => { foreach (string a in arguments) info.ArgumentList.Add(a); }, new Dictionary<string, string>(), limit, out output);
+
+		private static int RunCore(string file, Action<ProcessStartInfo> arguments, IReadOnlyDictionary<string, string> environment, TimeSpan limit, out string output)
 		{
 			output = "";
 			// Only PATH's absolute folders: never Windows' own search, which looks next to the panel first.
@@ -58,7 +63,6 @@ namespace ControlPanel
 				var info = new ProcessStartInfo
 				{
 					FileName = program,
-					Arguments = args,
 					UseShellExecute = false,
 					CreateNoWindow = true,
 					RedirectStandardInput = true,    // closed at once: nothing can sit waiting for an answer
@@ -67,6 +71,7 @@ namespace ControlPanel
 					StandardOutputEncoding = System.Text.Encoding.UTF8,
 					StandardErrorEncoding = System.Text.Encoding.UTF8,
 				};
+				arguments(info);
 				foreach (var pair in environment) info.Environment[pair.Key] = pair.Value;
 				p = Process.Start(info);
 				if (p == null) return -1;
@@ -85,10 +90,10 @@ namespace ControlPanel
 					// Both streams are read at the same time, so a full one can't stall the other.
 					Task<string> stdout = p.StandardOutput.ReadToEndAsync();
 					Task<string> stderr = p.StandardError.ReadToEndAsync();
-					if (!p.WaitForExit(RunLimit))
+					if (!p.WaitForExit(limit))
 					{
 						try { p.Kill(entireProcessTree: true); } catch (Exception) { }
-						output = "It took longer than " + (int)RunLimit.TotalMinutes + " minutes and was stopped.";
+						output = "It took longer than " + (int)limit.TotalMinutes + " minutes and was stopped.";
 						return -1;
 					}
 					p.WaitForExit();
@@ -111,7 +116,6 @@ namespace ControlPanel
 				using Process? p = Process.Start(new ProcessStartInfo
 				{
 					FileName = exe,
-					Arguments = args,
 					UseShellExecute = true,
 					Verb = "runas",
 					WindowStyle = ProcessWindowStyle.Hidden,

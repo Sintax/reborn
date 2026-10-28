@@ -153,6 +153,39 @@ namespace ControlPanel.Tests
 			return exit;
 		}
 
+		// Every argument-list Run: the file, its separate arguments and the limit. OnRunList answers it
+		// (exit code and output); by default a program that cannot start (-1).
+		public List<(string File, string[] Arguments, TimeSpan Limit)> RanList { get; } = new();
+		public Func<string, string[], (int Exit, string Output)>? OnRunList { get; set; }
+
+		// A folder that looks like 7-Zip's (7z.exe and 7z.sfx; empty files) under root.
+		public static string FakeSevenZipFolder(string root)
+		{
+			string dir = Path.Combine(root, "fake-7zip");
+			Directory.CreateDirectory(dir);
+			File.WriteAllText(Path.Combine(dir, "7z.exe"), "");
+			File.WriteAllText(Path.Combine(dir, "7z.sfx"), "");
+			return dir;
+		}
+
+		// Makes the next 7-Zip packing runs "succeed": the temp file named in the arguments appears.
+		// onPack sees the arguments first (the staging folder still exists then).
+		public void AcceptPacking(Action<string[]>? onPack = null) => OnRunList = (_, args) =>
+		{
+			onPack?.Invoke(args);
+			File.WriteAllText(args[^2], "packed");   // the temp .exe: the second-last argument
+			return (0, "Everything is Ok");
+		};
+
+		public int Run(string file, IReadOnlyList<string> arguments, TimeSpan limit, out string output)
+		{
+			MaybeThrow();
+			string[] copy = arguments.ToArray();
+			lock (RanList) RanList.Add((file, copy, limit));
+			(int exit, output) = OnRunList?.Invoke(file, copy) ?? (-1, "");
+			return exit;
+		}
+
 		public Task<int> RunElevated(string exe, string args)
 		{
 			MaybeThrow();

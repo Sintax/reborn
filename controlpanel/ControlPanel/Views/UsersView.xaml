@@ -53,7 +53,7 @@
             <CheckBox Content="Require keys to join" IsChecked="{Binding RequireKeys, Mode=OneWay}" IsEnabled="{Binding HasUserList}"
                       Command="{Binding ToggleRequireKeysCommand}" FontWeight="SemiBold" />
             <TextBlock Style="{StaticResource NoteText}" Margin="28,2,0,0"
-                       Text="On: a player needs their name and their key (from their zip) to join. Off: a name is enough. Starting a game always needs &quot;Can create games&quot;." />
+                       Text="On: a player needs their name and their key (from their file) to join. Off: a name is enough. Starting a game always needs &quot;Can create games&quot;." />
             <TextBlock Text="{Binding NoListNote}" Style="{StaticResource NoteText}" Margin="28,4,0,0" FontWeight="SemiBold"
                        Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
                        Visibility="{Binding NoListNote, Converter={StaticResource TextToVisibility}}" />
@@ -80,7 +80,7 @@
                         <TextBlock Grid.Column="0" Text="Name" Style="{StaticResource HeaderCell}" />
                         <TextBlock Grid.Column="1" Text="Can create games" Style="{StaticResource HeaderCell}" />
                         <TextBlock Grid.Column="2" Text="Key made" Style="{StaticResource HeaderCell}" />
-                        <TextBlock Grid.Column="3" Text="Zip made" Style="{StaticResource HeaderCell}" />
+                        <TextBlock Grid.Column="3" Text="File made" Style="{StaticResource HeaderCell}" />
                         <TextBlock Grid.Column="4" Text="Last seen" Style="{StaticResource HeaderCell}" />
                     </Grid>
                     <ItemsControl ItemsSource="{Binding Users}">
@@ -105,23 +105,23 @@
                                         <CheckBox Grid.Column="1" IsChecked="{Binding CanCreateGames, Mode=OneWay}" Command="{Binding ToggleCreateCommand}"
                                                   AutomationProperties.Name="{Binding Name, StringFormat=Can create games: {0}}"
                                                   Margin="8,0" VerticalAlignment="Center"
-                                                  ToolTip="Can this player start new games? Changes at once; no new zip needed." />
+                                                  ToolTip="Can this player start new games? Changes at once; no new file needed." />
                                         <TextBlock Grid.Column="2" Text="{Binding KeyMadeText}" Style="{StaticResource Cell}" />
                                         <TextBlock Grid.Column="3" Text="{Binding ZipMadeText}" Style="{StaticResource Cell}" />
                                         <TextBlock Grid.Column="4" Text="{Binding LastSeenText}" Style="{StaticResource Cell}" />
                                         <StackPanel Grid.Column="5" Margin="8,0" VerticalAlignment="Center">
                                             <StackPanel Orientation="Horizontal">
                                                 <!-- Off on a "confirm name" row: the stored name is only a label until confirmed. -->
-                                                <Button Content="Make zip" Command="{Binding MakeZipCommand}" Margin="0,0,6,0"
-                                                        AutomationProperties.Name="{Binding Name, StringFormat=Make zip: {0}}"
+                                                <Button Content="Make file" Command="{Binding MakeZipCommand}" Margin="0,0,6,0"
+                                                        AutomationProperties.Name="{Binding Name, StringFormat=Make file: {0}}"
                                                         AutomationProperties.HelpText="{Binding MakeZipNote}"
                                                         ToolTipService.ShowOnDisabled="True"
-                                                        ToolTip="Make the zip to send this player (the game files plus their name and key). On a 'confirm name' row, confirm their name first." />
+                                                        ToolTip="Make the file to send this player (the game files plus their name and key). On a 'confirm name' row, confirm their name first." />
                                                 <Button Content="{Binding RenameLabel}" Command="{Binding RenameCommand}" Margin="0,0,6,0"
                                                         AutomationProperties.Name="{Binding Name, StringFormat=Rename: {0}}" />
                                                 <Button Content="New key" Command="{Binding NewKeyCommand}" Margin="0,0,6,0"
                                                         AutomationProperties.Name="{Binding Name, StringFormat=New key: {0}}"
-                                                        ToolTip="Replace their key. Their old zip stops working." />
+                                                        ToolTip="Replace their key. Their old file stops working." />
                                                 <Button Content="Remove" Command="{Binding RevokeCommand}"
                                                         AutomationProperties.Name="{Binding Name, StringFormat=Remove: {0}}"
                                                         ToolTip="Remove this player. Their key stops working at once." />
@@ -169,12 +169,12 @@
             </StackPanel>
         </Border>
 
-        <!-- Where the zips go. -->
+        <!-- Where the files go. -->
         <DockPanel Grid.Row="5" Margin="0,10,0,0">
-            <Button DockPanel.Dock="Right" Content="Open zip folder" Command="{Binding OpenZipFolderCommand}" Margin="12,0,0,0" />
+            <Button DockPanel.Dock="Right" Content="Open files folder" Command="{Binding OpenZipFolderCommand}" Margin="12,0,0,0" />
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="{Binding ZipFolder, StringFormat=Zips are saved in {0}}" Style="{StaticResource NoteText}" />
-                <TextBlock Text="{Binding LastZipPath, StringFormat=Last zip made: {0}}" Style="{StaticResource NoteText}"
+                <TextBlock Text="{Binding ZipFolder, StringFormat=Files are saved in {0}}" Style="{StaticResource NoteText}" />
+                <TextBlock Text="{Binding LastZipPath, StringFormat=Last file made: {0}}" Style="{StaticResource NoteText}"
                            Visibility="{Binding LastZipPath, Converter={StaticResource TextToVisibility}}" />
             </StackPanel>
         </DockPanel>

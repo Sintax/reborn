@@ -1,10 +1,10 @@
 # Battleborn Reborn: setup for {NAME}
 
-This zip lets you play Battleborn online again, on your host's server. Everything you need is
+This file lets you play Battleborn online again, on your host's server. Everything you need is
 inside, including your own server key and your player name. You do not need any address: the
 game already knows where the server is.
 
-Please don't share this zip. Your key is yours, and the host can switch it off.
+Please don't share this file. Your key is yours, and the host can switch it off.
 
 ## What you need first
 
@@ -13,8 +13,7 @@ Please don't share this zip. Your key is yours, and the host can switch it off.
 
 ## Easy setup: let Install.bat do it
 
-1. Right-click this zip and choose **Extract All**, then **Extract**. (Do not run anything from
-   inside the zip without extracting it.)
+1. Double-click Reborn-Mod-Installer_{NAME}.exe, choose a folder and press Extract. If Windows says it protected your PC, press More info, then Run anyway. Then open that folder and continue below.
 2. In the extracted folder, double-click **`Install.bat`**.
    - If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
    - When Windows asks **"Do you want to allow this app to make changes to your device?"**, click

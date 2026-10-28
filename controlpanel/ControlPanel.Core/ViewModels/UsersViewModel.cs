@@ -87,6 +87,9 @@ namespace ControlPanel.Core.ViewModels
 
 		public IRelayCommand OpenZipFolderCommand { get; }
 
+		// The folder with 7z.exe and 7z.sfx; null looks for 7-Zip (tests point it at a fake one).
+		public string? SevenZipDir { get; set; }
+
 		// The server's version (from matchmaking), put on top of the guide in each friend zip.
 		internal string ServerVersion { get; set; } = "";
 
@@ -169,7 +172,7 @@ namespace ControlPanel.Core.ViewModels
 			NewName = "";
 			NewCanCreate = false;
 			PreviewKey = null;
-			Message = $"{name} was added. Press Make zip on their row to make the zip to send them.";
+			Message = $"{name} was added. Press Make file on their row to make the file to send them.";
 			await ReloadAsync();
 		}
 
@@ -244,7 +247,7 @@ namespace ControlPanel.Core.ViewModels
 			ZipRecords.Forget(_paths.ZipRecordFile, old);   // a zip made before carries the old name
 			Message = row.ConfirmName
 				? $"Saved. From now on this key only works with the name {typed}. You can make their zip now."
-				: $"{old} is now {typed}. Press Make zip and send them the new zip: they can't join until they install it.";
+				: $"{old} is now {typed}. Press Make file and send them the new file: they can't join until they install it.";
 			await ReloadAsync();
 		}
 
@@ -273,7 +276,7 @@ namespace ControlPanel.Core.ViewModels
 				return;
 			}
 			ZipRecords.Forget(_paths.ZipRecordFile, row.Name);
-			Message = $"{row.Name} has a new key. Press Make zip to make their new zip, then send it to them.";
+			Message = $"{row.Name} has a new key. Press Make file to make their new file, then send it to them.";
 			await ReloadAsync();
 		}
 
@@ -310,7 +313,7 @@ namespace ControlPanel.Core.ViewModels
 			DateTime now = _clock.GetUtcNow().UtcDateTime;
 			// Off the window's thread: the installer zip can be large.
 			var (ok, message, path) = await Task.Run(() =>
-				FriendZip.Make(_paths.PlayerInstallerZip, name, key.Value!, _paths.ZipOutputDir, _paths.ZipRecordFile, now, ServerVersion));
+				FriendZip.Make(_paths.PlayerInstallerZip, name, key.Value!, _paths.ZipOutputDir, _runner, _paths.ZipRecordFile, now, ServerVersion, SevenZipDir));
 			Message = message;
 			if (!ok) return;
 			LastZipPath = path;
@@ -370,7 +373,7 @@ namespace ControlPanel.Core.ViewModels
 			}
 		}
 
-		// Why Make zip is off on such a row ("" when it is on): until the owner confirms the name, the
+		// Why Make file is off on such a row ("" when it is on): until the owner confirms the name, the
 		// stored name is only a label, and a zip would make it the player's in-game name.
 		public string MakeZipNote => ConfirmName ? ConfirmFirstNote : "";
 
