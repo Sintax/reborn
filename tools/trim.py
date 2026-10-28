@@ -18,12 +18,16 @@ import argparse
 import json
 import os
 import re
+import configparser
 import shutil
 import subprocess
 import sys
+import time
 from datetime import date
 from pathlib import Path
 from typing import Callable
+
+import psutil
 
 from . import config
 
@@ -37,6 +41,9 @@ ALL_PASSED = "all-passed"
 # Folders (relative to the game folder) a running game may write into: these are real copies, so
 # nothing the test server writes can reach the real game files through a shared hard link.
 REAL_COPY_DIRS = ("Binaries/Win64", "Engine/Config", "Gearbox/Config", "PoplarGame/Config", "WillowGame/Config")
+# Small settings-like files a game may rewrite (shader caches, manifests, ini files): real copies too.
+# Whatever this list gets wrong, run_trial's before-and-after check of the real files catches.
+REAL_COPY_SUFFIXES = (".bin", ".ini", ".txt", ".xml", ".json", ".int", ".usf", ".bak", ".cfg", ".log")
 # Inside Win64: the runner's own working folders (several GB of loader copies and old DLLs). The
 # runner makes what it needs again, so the copy leaves them out; they never count as game files.
 SKIPPED_DIRS = ("Binaries/Win64/rb_ids", "Binaries/Win64/rb_backups")
@@ -149,9 +156,39 @@ def _nearest_existing(p: Path) -> Path:
     return p
 
 
+def _is_real_copy(rel: str) -> bool:
+    return any(_under(rel, f) for f in REAL_COPY_DIRS) or rel.lower().endswith(REAL_COPY_SUFFIXES)
+
+
+def snapshot_linked(src: Path, remove: list[dict]) -> dict[str, tuple[int, int]]:
+    """(size, modified time) of every real game file the copy will share by hard link. A running
+    game that writes into such a file changes the real file too; this is how that is noticed."""
+    hit = _matcher(remove)
+    snap = {}
+    for rel, is_dir in walk_game(src):
+        if is_dir or hit(rel) or _is_real_copy(rel):
+            continue
+        st = os.stat(Path(src) / rel)
+        snap[rel] = (st.st_size, st.st_mtime_ns)
+    return snap
+
+
+def changed_files(src: Path, snap: dict[str, tuple[int, int]]) -> list[str]:
+    out = []
+    for rel, was in snap.items():
+        try:
+            st = os.stat(Path(src) / rel)
+        except OSError:
+            out.append(rel)
+            continue
+        if (st.st_size, st.st_mtime_ns) != was:
+            out.append(rel)
+    return out
+
+
 def make_trimmed_copy(src: Path, dst: Path, remove: list[dict]) -> None:
-    """Copy `src` to `dst`. Binaries\\Win64 (and the small Config folders) are real copies, every
-    other file is a hard link, and files matched by `remove` are left out."""
+    """Copy `src` to `dst`. Binaries\\Win64, the small Config folders and settings-like files (.bin, .ini ...) are
+    real copies, every other file is a hard link, and files matched by `remove` are left out."""
     src, dst = Path(src), Path(dst)
     if not (src / "Binaries" / "Win64" / "Battleborn.exe").is_file():
         raise TrimError(f"{src} is not a Battleborn folder (Binaries\\Win64\\Battleborn.exe is missing)")
@@ -162,8 +199,8 @@ def make_trimmed_copy(src: Path, dst: Path, remove: list[dict]) -> None:
         raise TrimError(f"{dst} is on a different drive than the game folder; the test copy has to be on "
                         "the same drive so it can share files instead of using another 40 GB.")
     hit = _matcher(remove)
+    dst.mkdir(parents=True)   # outside the try: if someone else made it meanwhile, it is not ours to delete
     try:
-        dst.mkdir(parents=True)
         for rel, is_dir in walk_game(src):
             if is_dir:
                 (dst / rel).mkdir(exist_ok=True)
@@ -171,7 +208,7 @@ def make_trimmed_copy(src: Path, dst: Path, remove: list[dict]) -> None:
             if hit(rel):
                 continue
             s, d = src / rel, dst / rel
-            if any(_under(rel, f) for f in REAL_COPY_DIRS):
+            if _is_real_copy(rel):
                 shutil.copy2(s, d)
             else:
                 os.link(s, d)
@@ -181,19 +218,48 @@ def make_trimmed_copy(src: Path, dst: Path, remove: list[dict]) -> None:
         raise
 
 
+DELETE_TRIES = 5
+DELETE_WAIT_S = 1.0
+
+
+def _delete_contents(dst: Path) -> list[str]:
+    """Delete everything in dst except the marker; return what could not be deleted."""
+    errors: list[str] = []
+    for child in dst.iterdir():
+        if child.name == MARKER:
+            continue
+        try:
+            if child.is_dir() and not _is_link(str(child)):
+                shutil.rmtree(child, onexc=lambda fn, path, exc: errors.append(f"{path}: {exc}"))
+            else:
+                child.unlink()
+        except OSError as e:
+            errors.append(f"{child}: {e}")
+    return errors
+
+
 def remove_copy(dst: Path, force: bool = False) -> None:
     """Delete a test copy. Only a folder carrying our marker is ever deleted (`force` is for a copy
     whose marker was not written yet). Deleting removes the extra names of hard-linked files only;
-    the files in the real game folder stay. Attributes are never changed: they are shared."""
+    the files in the real game folder stay. Attributes are never changed: they are shared.
+    A file still in use (a game slow to exit) is retried for a few seconds. The marker goes last,
+    so a copy that could not be deleted can still be cleaned with --clean later."""
     dst = Path(dst)
     if not dst.exists():
         return
     if not force and not (dst / MARKER).is_file():
         raise TrimError(f"{dst} is not a trim test copy (no marker file); not deleting it")
-    errors: list[str] = []
-    shutil.rmtree(dst, onexc=lambda fn, path, exc: errors.append(f"{path}: {exc}"))
+    for attempt in range(DELETE_TRIES):
+        errors = _delete_contents(dst)
+        if not errors:
+            break
+        if attempt < DELETE_TRIES - 1:
+            time.sleep(DELETE_WAIT_S)
     if errors:
-        raise TrimError(f"could not fully delete {dst}: {errors[0]}")
+        raise TrimError(f"could not fully delete {dst}: {errors[0]}. Close any game still running, "
+                        "then run: python -m tools.trim test --clean")
+    (dst / MARKER).unlink(missing_ok=True)
+    dst.rmdir()
 
 
 # ---------------------------------------------------------------- results
@@ -235,27 +301,84 @@ def record(results_path: Path, key: str, scenarios: dict, nbytes: int, commit: s
 Runner = Callable[[str, Path], str]   # (scenario name, server game folder) -> outcome kind ("pass" ...)
 
 
-def real_runner(scenario: str, server_game: Path) -> str:
+SERVER_POLL_S = 0.5
+
+
+def server_exes() -> list[str]:
+    """Full path of every running Serverborn.exe."""
+    out = []
+    for p in psutil.process_iter(["name", "exe"]):
+        if p.info["name"] == "Serverborn.exe" and p.info["exe"]:
+            out.append(p.info["exe"])
+    return out
+
+
+def _inside(path: str | Path, folder: Path) -> bool:
+    a, b = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(folder))
+    return a == b or a.startswith(b + os.sep)
+
+
+def _loader_records_copy(copy: Path) -> bool:
+    """The launcher's own record: a server identity in the copy that points at the copy's Serverborn.exe."""
+    for ini in (copy / "Binaries" / "Win64" / "rb_ids").glob("*/ColdClientLoader.ini"):
+        cp = configparser.ConfigParser(interpolation=None)
+        cp.optionxform = str
+        try:
+            cp.read(ini, encoding="utf-8")
+            exe = cp["SteamClient"]["Exe"]
+        except (configparser.Error, KeyError, OSError):
+            continue
+        if exe.lower().endswith("serverborn.exe") and _inside(exe, copy):
+            return True
+    return False
+
+
+def check_server_location(copy: Path, seen: list[str], scenario: str) -> None:
+    """A pass only counts when the server really ran from the trimmed copy. Seen running servers
+    must all be inside the copy; a run too short to be seen must at least have been launched from it."""
+    outside = [p for p in seen if not _inside(p, copy)]
+    if outside:
+        raise HarnessProblem(f"the test server for {scenario} ran from {outside[0]}, not from the "
+                             f"trimmed copy {copy}; the result would say nothing about the removed files")
+    if not seen and not _loader_records_copy(copy):
+        raise HarnessProblem(f"could not confirm that the test server for {scenario} ran from the "
+                             f"trimmed copy {copy}; no result recorded")
+
+
+def real_runner(scenario: str, server_game: Path, popen=subprocess.Popen, list_servers=server_exes,
+                interval: float = SERVER_POLL_S) -> str:
     """Run one regression game with the server started from `server_game`; players use the normal folder."""
     env = {**os.environ, "BB_SERVER_GAME_DIR": str(server_game)}
-    r = subprocess.run([sys.executable, "-m", "debugloop.run", scenario], cwd=config.REPO, env=env,
-                       capture_output=True, text=True)
-    sys.stdout.write(r.stdout[-2000:])
-    if r.returncode == 0:
-        return "pass"
-    if r.returncode == 1:
-        start = r.stdout.find("{")
+    proc = popen([sys.executable, "-m", "debugloop.run", scenario], cwd=config.REPO, env=env,
+                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    seen: list[str] = []
+    while True:
         try:
-            return str(json.loads(r.stdout[start:])["outcome"]["kind"])
-        except (ValueError, KeyError, TypeError):
-            return "fail"
-    raise HarnessProblem(f"the test run could not start ({scenario}): "
-                         f"{(r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or ['no message'])[-1]}")
+            out, err = proc.communicate(timeout=interval)
+            break
+        except subprocess.TimeoutExpired:
+            seen.extend(p for p in list_servers() if p not in seen)
+    out = out or ""
+    sys.stdout.write(out[-2000:])
+    last = (out.strip().splitlines() or (err or "").strip().splitlines() or ["no message"])[-1]
+    if proc.returncode not in (0, 1):
+        raise HarnessProblem(f"the test run could not start ({scenario}): {last}")
+    check_server_location(server_game, seen, scenario)
+    if proc.returncode == 0:
+        return "pass"
+    start = out.find("{")
+    try:
+        return str(json.loads(out[start:])["outcome"]["kind"])
+    except (ValueError, KeyError, TypeError):
+        raise HarnessProblem(f"the test run for {scenario} stopped without a result (a fault in the "
+                             f"test tool, not a verdict on the part): {last}") from None
 
 
 def run_trial(src: Path, dst: Path, remove: list[dict], runner: Runner,
               scenarios: tuple[str, ...] = SCENARIOS) -> dict:
-    """Make the copy, run the scenarios until one fails, always delete the copy."""
+    """Make the copy, run the scenarios until one fails, always delete the copy. If a real game file
+    changed while the games ran (written through a shared link), nothing counts: HarnessProblem."""
+    snap = snapshot_linked(src, remove)
     make_trimmed_copy(src, dst, remove)
     try:
         outcomes: dict[str, str] = {}
@@ -263,9 +386,19 @@ def run_trial(src: Path, dst: Path, remove: list[dict], runner: Runner,
             outcomes[name] = runner(name, dst)
             if outcomes[name] != "pass":
                 break
+        changed = changed_files(src, snap)
+        if changed:
+            more = f" (and {len(changed) - 1} more)" if len(changed) > 1 else ""
+            raise HarnessProblem(
+                f"the real game file {changed[0]}{more} changed while the test ran: the test server wrote "
+                "into a file it shares with the real game folder. No result was recorded. Use Verify "
+                "integrity of game files in Steam to repair the game, and make that file a real copy.")
         return outcomes
     finally:
-        remove_copy(dst)
+        try:
+            remove_copy(dst)
+        except TrimError as e:
+            print(f"WARNING: {e}")   # the verdict stands; the copy is cleaned later with --clean
 
 
 def test_parts(part_id: str | None, all_passed: bool, game: Path, runner: Runner,
@@ -282,7 +415,7 @@ def test_parts(part_id: str | None, all_passed: bool, game: Path, runner: Runner
     else:
         chosen = [find_part(part_id, parts)]
         key = chosen[0]["id"]
-    nbytes = sum(measure(game, p) for p in chosen)
+    nbytes = sum(os.path.getsize(game / rel) for rel in matching_files(game, chosen))
     dst = game.parent / COPY_NAME
     outcomes = run_trial(game, dst, chosen, runner, scenarios)
     return {key: record(results_path, key, outcomes, nbytes)}
@@ -321,6 +454,10 @@ def main(argv: list[str] | None = None, runner: Runner = real_runner) -> int:
         return 2
     except TrimError as e:
         print(f"ERROR: {e}")
+        return 2
+    except OSError as e:
+        print(f"ERROR: could not make or delete the test copy: {e}. The test copy needs a drive that "
+              "keeps hard links (NTFS) with enough free space.")
         return 2
     for key, e in res.items():
         print(f"{key}: {'PASSED' if e['passed'] else 'FAILED'} ({_gb(e['bytes'])}) {e['scenarios']}")

@@ -1,6 +1,7 @@
 import configparser
 import ctypes
 import hashlib
+import os
 import shutil
 import subprocess
 import time
@@ -168,10 +169,17 @@ DEPLOYED_FILES = ("reborn.dll", "reborn.pdb")
 def prepare_server_folder(player_win64: Path, server_win64: Path) -> None:
     """A server folder other than the players' (BB_SERVER_GAME_DIR) must run the same mod build as
     the players and have its own Serverborn.exe, exactly as the players' folder gets from deploy."""
+    def unshare(p: Path) -> None:
+        # A hard-linked file shares its bytes with another folder: replace it, never write into it.
+        if p.exists() and os.stat(p).st_nlink > 1:
+            p.unlink()
+
     for f in DEPLOYED_FILES:
         src, dst = player_win64 / f, server_win64 / f
         if src.exists() and _sha(src) != _sha(dst):
+            unshare(dst)
             shutil.copy2(src, dst)
+    unshare(server_win64 / "Serverborn.exe")
     deploy.ensure_serverborn(server_win64)
 
 
@@ -191,6 +199,7 @@ class RealLauncher:
         exe = "Serverborn.exe" if role == "server" else "Battleborn.exe"
         win64 = self.win64_for(role)
         if win64 != self.win64:
+            print(f"{name}: server starts from {win64} (BB_SERVER_GAME_DIR)")
             prepare_server_folder(self.win64, win64)
         d = ensure_identity(name, exe, args, win64)
         loader = subprocess.Popen([str(d / "steamclient_loader_x64.exe")], cwd=d)
