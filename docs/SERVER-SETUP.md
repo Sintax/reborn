@@ -22,12 +22,14 @@ keep it private and never post it anywhere public.
    find it, press Browse and pick the main Battleborn folder (the one that has `Binaries`
    inside it). It will not install into a folder that is not Battleborn.
 4. **Pick your options** on the page with the tick boxes (all are optional):
-   - **Open Windows Firewall** for the server and matchmaking. Ticked.
-   - **Install the Visual C++ 2012 runtime** (a Microsoft add-on the game needs). Ticked only
+   - **Let players through Windows Firewall (UDP 7777-7779 and TCP 5000).** Ticked. On a
+     server that already has Reborn, it keeps the ports you set in the Control Panel.
+   - **Install the Visual C++ 2012 runtime the game needs** (a Microsoft add-on). Ticked only
      if this machine does not have it yet.
-   - **Start matchmaking when you sign in to Windows.** Ticked.
-   - **Put a Reborn Control Panel icon on the desktop.** Ticked.
-   - **Free up space.** Each part is unticked, with its size next to it. Ticking one deletes
+   - **Start matchmaking when I sign in to Windows.** Ticked.
+   - **Put "Reborn Control Panel" on the desktop.** Ticked.
+   - **Free up space: remove game files the server does not need (tick the parts below).**
+     Shown only when there are parts to offer. Each part is unticked, with its size next to it. Ticking one deletes
      those game files. A server does not need them, and we tested that games still run
      without them. **Removed files only come back by copying the game again** (in Steam:
      Verify integrity of game files). If the page says "Tested one at a time", do not tick
@@ -38,7 +40,8 @@ keep it private and never post it anywhere public.
    new versions without `gh`. You can leave it empty and add it later. The token is kept
    safe for your Windows user only and is never shown again.
 6. If the installer could not do something (for example open the firewall), the last page
-   says what and what to run by hand. The install still finishes.
+   lists each step that did not work and what to run by hand. The install still finishes,
+   and the other steps still run.
 7. If Windows Defender removes `steamclient_loader_x64.exe`, allow it in Windows Security.
    Loaders like this are often flagged even though they are harmless.
 8. **Open the hosting company's firewall too.** On the company's website (its control
@@ -51,7 +54,8 @@ older installer than what is on the server, it asks first (the default answer is
 
 **Uninstalling:** use Windows' Apps list. It asks **Also delete users and keys?** The
 default is **No**, so your user list and keys stay unless you say Yes. Files removed to save
-space are not put back.
+space are not put back. The copies of the Steam loader that matchmaking made for each game
+server (the `rb_ids` folder) are removed too.
 
 ## Without the installer
 
