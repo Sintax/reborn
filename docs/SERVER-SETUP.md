@@ -9,22 +9,63 @@ not need a graphics card.
 
 ## One-time setup
 
+The easy way is the server installer, one file named `Reborn-Server-Setup-1.0.N.exe`
+(`1.0.N` is the version number). The owner gives it to you. It holds the Steam loader, so
+keep it private and never post it anywhere public.
+
 1. **Disk space.** Make sure the drive you install to has at least 50 GB free.
 2. **Install Battleborn with Steam** on that machine. Sign in to Steam, find Battleborn in
    your library, and install it. When it is done, **close Steam completely** (right-click
    the Steam icon by the clock, then Exit). The server uses its own small loader, and a
    running Steam can get in its way.
-3. **Copy the server kit** (`Reborn-ServerKit-<version>.zip`) to the machine.
-4. **Unzip it into the game's `Binaries\Win64` folder.** In Steam that is: right-click
-   Battleborn, Manage, Browse local files, then `Binaries`, then `Win64`. You should see
-   `Battleborn.exe` there. Say yes to replacing files.
-5. If Windows Defender removes `steamclient_loader_x64.exe`, allow it in Windows Security.
+3. **Run `Reborn-Server-Setup-1.0.N.exe`.** It looks for the game by itself. If it can't
+   find it, press Browse and pick the main Battleborn folder (the one that has `Binaries`
+   inside it). It will not install into a folder that is not Battleborn.
+4. **Pick your options** on the page with the tick boxes (all are optional):
+   - **Open Windows Firewall** for the server and matchmaking. Ticked.
+   - **Install the Visual C++ 2012 runtime** (a Microsoft add-on the game needs). Ticked only
+     if this machine does not have it yet.
+   - **Start matchmaking when you sign in to Windows.** Ticked.
+   - **Put a Reborn Control Panel icon on the desktop.** Ticked.
+   - **Free up space.** Each part is unticked, with its size next to it. Ticking one deletes
+     those game files. A server does not need them, and we tested that games still run
+     without them. **Removed files only come back by copying the game again** (in Steam:
+     Verify integrity of game files). If the page says "Tested one at a time", do not tick
+     several parts together unless you are happy to test that yourself.
+5. **GitHub access (only on a server that does not have the GitHub program, `gh`).** The
+   installer skips this page when `gh` is already signed in. Otherwise it asks for a
+   read-only token for the owner's private builds, so the panel's **Updates** tab can fetch
+   new versions without `gh`. You can leave it empty and add it later. The token is kept
+   safe for your Windows user only and is never shown again.
+6. If the installer could not do something (for example open the firewall), the last page
+   says what and what to run by hand. The install still finishes.
+7. If Windows Defender removes `steamclient_loader_x64.exe`, allow it in Windows Security.
    Loaders like this are often flagged even though they are harmless.
-6. **Double-click `OpenFirewall.bat`** and say yes when Windows asks for administrator
-   rights. This lets players through Windows Firewall.
-7. **Open the hosting company's firewall too.** On the company's website (its control
+8. **Open the hosting company's firewall too.** On the company's website (its control
    panel), allow incoming **UDP ports 7777 to 7779** and **TCP port 5000**.
    This step can't be done from inside the machine.
+
+**Updating later:** use the Control Panel's **Updates** tab as before. Running a newer
+installer over an old one also works and keeps your users, keys and settings. If you run an
+older installer than what is on the server, it asks first (the default answer is No).
+
+**Uninstalling:** use Windows' Apps list. It asks **Also delete users and keys?** The
+default is **No**, so your user list and keys stay unless you say Yes. Files removed to save
+space are not put back.
+
+## Without the installer
+
+The old way still works.
+
+1. Do steps 1 and 2 above (disk space, Battleborn from Steam, close Steam).
+2. **Copy the server kit** (`Reborn-ServerKit-<version>.zip`) to the machine.
+3. **Unzip it into the game's `Binaries\Win64` folder.** In Steam that is: right-click
+   Battleborn, Manage, Browse local files, then `Binaries`, then `Win64`. You should see
+   `Battleborn.exe` there. Say yes to replacing files.
+4. If Windows Defender removes `steamclient_loader_x64.exe`, allow it in Windows Security.
+5. **Double-click `OpenFirewall.bat`** and say yes when Windows asks for administrator
+   rights. This lets players through Windows Firewall.
+6. **Open the hosting company's firewall too** (step 8 above).
 
 ## Matchmaking: games players can see and join from the menu
 
