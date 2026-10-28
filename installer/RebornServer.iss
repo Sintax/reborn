@@ -12,6 +12,10 @@
 ;   exit code 6   this server already has a newer Reborn; add /ALLOWOLDER to install this one anyway
 ;   exit code 7   the folder has no Binaries\Win64\Battleborn.exe, or a server would not stop
 ;   /STEAMPATH=<folder>  tests only: look for the game in this Steam folder only (no registry, no D:\)
+; Silent uninstall:  unins000.exe /VERYSILENT /SUPPRESSMSGBOXES  keeps users and keys;
+;   add /DELETEUSERS to delete them too (the same as answering Yes).
+; Only matchmaking and game servers inside the chosen folder are stopped; same-named programs
+; elsewhere, or ones whose folder Windows will not tell, are left alone.
 ;
 ; Later parts add to this file (keep these places):
 ;   [Tasks]/[Run] and the finished page: firewall rules, VC++ runtime (Redist\vcredist_x64.exe),
@@ -89,6 +93,7 @@ const
   ExitPanelOpen = 5;
   ExitOlder = 6;
   StopWaitMs = 20000;
+  ProcessQueryLimited = $1000;   { PROCESS_QUERY_LIMITED_INFORMATION }
   AttrDirectory = $10;
   DeployedFile = 'reborn-deployed.txt';
   RemovedPartsFile = 'reborn-removed-parts.txt';
@@ -103,6 +108,12 @@ var
 
 procedure ExitProcess(ExitCode: Cardinal);
   external 'ExitProcess@kernel32.dll stdcall';
+function OpenProcess(DesiredAccess: Cardinal; InheritHandle: Boolean; ProcessId: Cardinal): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function QueryFullProcessImageName(Process: THandle; Flags: Cardinal; ExeName: String; var Size: Cardinal): Boolean;
+  external 'QueryFullProcessImageNameW@kernel32.dll stdcall';
+function CloseHandle(Handle: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
 
 { ---------------------------------------------------------------- small helpers }
 
@@ -319,12 +330,34 @@ begin
   Result := Pos(Lowercase(AddBackslash(Folder)), Lowercase(Path)) = 1;
 end;
 
-{ Running copies of ExeName inside Folder (or whose place cannot be read). False if Windows
-  could not list them. }
+{ Where process Pid's program file is, or '' when Windows will not say. Asks only for the
+  limited query right, which works for the same user's programs whether or not they run as admin. }
+function ProcessPath(const Pid: Cardinal): String;
+var
+  H: THandle;
+  Buf: String;
+  Size: Cardinal;
+begin
+  Result := '';
+  H := OpenProcess(ProcessQueryLimited, False, Pid);
+  if H = 0 then
+    Exit;
+  try
+    Size := 1024;
+    Buf := StringOfChar(#0, Size);
+    if QueryFullProcessImageName(H, 0, Buf, Size) then
+      Result := Copy(Buf, 1, Size);
+  finally
+    CloseHandle(H);
+  end;
+end;
+
+{ Running copies of ExeName inside Folder. A copy elsewhere, or one whose place Windows will
+  not tell, is not ours and is left alone. False if Windows could not list the programs. }
 function FindOurs(const ExeName, Folder: String; var Pids: TPidList): Boolean;
 var
   Locator, Service, Procs, Proc: Variant;
-  I, N: Integer;
+  I, N, Pid: Integer;
   Path: String;
 begin
   SetArrayLength(Pids, 0);
@@ -332,18 +365,19 @@ begin
   try
     Locator := CreateOleObject('WbemScripting.SWbemLocator');
     Service := Locator.ConnectServer('.', 'root\CIMV2');
-    Procs := Service.ExecQuery('SELECT ProcessId, ExecutablePath FROM Win32_Process WHERE Name = ''' + ExeName + '''');
+    Procs := Service.ExecQuery('SELECT ProcessId FROM Win32_Process WHERE Name = ''' + ExeName + '''');
     for I := 0 to Procs.Count - 1 do
     begin
       Proc := Procs.ItemIndex(I);
-      Path := '';
-      if not VarIsNull(Proc.ExecutablePath) then
-        Path := Proc.ExecutablePath;
-      if (Path = '') or InFolder(Path, Folder) then
+      Pid := Proc.ProcessId;
+      Path := ProcessPath(Pid);
+      if Path = '' then
+        Log(Format('%s (process %d): its folder cannot be read; leaving it alone', [ExeName, Pid]))
+      else if InFolder(Path, Folder) then
       begin
         N := GetArrayLength(Pids);
         SetArrayLength(Pids, N + 1);
-        Pids[N] := Proc.ProcessId;
+        Pids[N] := Pid;
       end;
     end;
   except
@@ -352,50 +386,63 @@ begin
   end;
 end;
 
-function IsRunning(const ExeName, Folder: String): Boolean;
+{ 1 when a copy of ExeName runs inside Folder, 0 when none does, -1 when Windows could not list them. }
+function RunningState(const ExeName, Folder: String): Integer;
 var
   Pids: TPidList;
 begin
-  FindOurs(ExeName, Folder, Pids);
-  Result := GetArrayLength(Pids) > 0;
+  if not FindOurs(ExeName, Folder, Pids) then
+    Result := -1
+  else if GetArrayLength(Pids) > 0 then
+    Result := 1
+  else
+    Result := 0;
 end;
 
-procedure StopProgram(const ExeName, Folder: String);
+{ False when Windows could not list the programs (then nothing is stopped). }
+function StopProgram(const ExeName, Folder: String): Boolean;
 var
   Pids: TPidList;
   I, Code: Integer;
 begin
-  if FindOurs(ExeName, Folder, Pids) then
+  Result := FindOurs(ExeName, Folder, Pids);
+  if not Result then
+    Exit;
+  for I := 0 to GetArrayLength(Pids) - 1 do
   begin
-    for I := 0 to GetArrayLength(Pids) - 1 do
-    begin
-      Log(Format('Stopping %s (process %d)', [ExeName, Pids[I]]));
-      Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /pid ' + IntToStr(Pids[I]), '', SW_HIDE, ewWaitUntilTerminated, Code);
-    end;
-  end
-  else
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im ' + ExeName, '', SW_HIDE, ewWaitUntilTerminated, Code);
+    Log(Format('Stopping %s (process %d)', [ExeName, Pids[I]]));
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /pid ' + IntToStr(Pids[I]), '', SW_HIDE, ewWaitUntilTerminated, Code);
+  end;
 end;
 
-{ Stops matchmaking and the game servers of this folder; waits up to 20 seconds for them to go. }
+{ Stops matchmaking and the game servers of this folder (never copies elsewhere); waits up to
+  20 seconds for them to go. False when one still runs or the programs could not be listed. }
 function StopServers(const Win64: String): Boolean;
 var
-  Waited: Integer;
+  Waited, A, B: Integer;
 begin
-  StopProgram('gamecontroller.exe', Win64);
-  StopProgram('Serverborn.exe', Win64);
+  Result := False;
+  if not (StopProgram('gamecontroller.exe', Win64) and StopProgram('Serverborn.exe', Win64)) then
+    Exit;
   Waited := 0;
-  while (IsRunning('gamecontroller.exe', Win64) or IsRunning('Serverborn.exe', Win64)) and (Waited < StopWaitMs) do
-  begin
+  repeat
+    A := RunningState('gamecontroller.exe', Win64);
+    B := RunningState('Serverborn.exe', Win64);
+    if (A < 0) or (B < 0) then
+      Exit;
+    if (A = 0) and (B = 0) then
+    begin
+      Result := True;
+      Exit;
+    end;
     Sleep(500);
     Waited := Waited + 500;
-  end;
-  Result := not (IsRunning('gamecontroller.exe', Win64) or IsRunning('Serverborn.exe', Win64));
+  until Waited > StopWaitMs;
 end;
 
 function PanelOpen(const Win64: String): Boolean;
 begin
-  Result := IsRunning('ControlPanel.exe', Win64);
+  Result := RunningState('ControlPanel.exe', Win64) > 0;
 end;
 
 { ---------------------------------------------------------------- files }
@@ -405,8 +452,14 @@ begin
   Result := (CompareText(Name, 'appsettings.json') = 0) or (CompareText(Name, 'admin-token.txt') = 0);
 end;
 
-{ Empties the matchmaking folder; with KeepOwners its appsettings.json and admin-token.txt stay. }
-procedure ClearMatchmaking(const Dir: String; const KeepOwners: Boolean);
+function IsLogFile(const Name: String): Boolean;
+begin
+  Result := CompareText(ExtractFileExt(Name), '.log') = 0;
+end;
+
+{ Empties the matchmaking folder; with KeepOwners its appsettings.json and admin-token.txt stay,
+  with KeepLogs its *.log files (the owner's history) stay. }
+procedure ClearMatchmaking(const Dir: String; const KeepOwners, KeepLogs: Boolean);
 var
   F: TFindRec;
   Names: TArrayOfString;
@@ -432,7 +485,7 @@ begin
   for I := 0 to N - 1 do
     if IsDir[I] then
       DelTree(AddBackslash(Dir) + Names[I], True, True, True)
-    else if not (KeepOwners and IsOwnersMatchmakingFile(Names[I])) then
+    else if not ((KeepOwners and IsOwnersMatchmakingFile(Names[I])) or (KeepLogs and IsLogFile(Names[I]))) then
       DeleteFile(AddBackslash(Dir) + Names[I]);
 end;
 
@@ -507,7 +560,7 @@ begin
   begin
     { Matchmaking is replaced as a whole (no files of an older release linger); the owner's stay. }
     if DirExists(Win64 + '\matchmaking') then
-      ClearMatchmaking(Win64 + '\matchmaking', True);
+      ClearMatchmaking(Win64 + '\matchmaking', True, True);
   end
   else if CurStep = ssPostInstall then
   begin
@@ -541,11 +594,16 @@ begin
   Win64 := Win64Of(ExpandConstant('{app}'));
   if CurUninstallStep = usUninstall then
   begin
-    StopServers(Win64);
-    DeleteUsers := SuppressibleMsgBox(MsgDeleteUsers, mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
+    if not StopServers(Win64) then
+      Log('Matchmaking or a game server of this folder did not stop (or the running programs could not be listed); files they hold stay');
+    { /DELETEUSERS answers yes without asking (scripted uninstalls); otherwise the owner is asked, No by default. }
+    if HasSwitch('/DELETEUSERS') then
+      DeleteUsers := True
+    else
+      DeleteUsers := SuppressibleMsgBox(MsgDeleteUsers, mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
     UninstallPartsRemoved := FileExists(Win64 + '\' + RemovedPartsFile);
     DeleteFile(Win64 + '\' + RemovedPartsFile);
-    ClearMatchmaking(Win64 + '\matchmaking', not DeleteUsers);
+    ClearMatchmaking(Win64 + '\matchmaking', not DeleteUsers, False);
     RemoveDir(Win64 + '\matchmaking');   { only goes when empty }
     if DeleteUsers then
     begin
