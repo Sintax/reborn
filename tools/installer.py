@@ -104,6 +104,19 @@ def offered_parts(results_path: Path = TRIM_RESULTS, parts_path: Path = TRIM_PAR
     return out
 
 
+def parts_tested_together(parts: list[dict], results_path: Path = TRIM_RESULTS) -> bool:
+    """True when the "all removed together" test passed with exactly the patterns of the offered
+    parts. Otherwise the parts page says they were tested one at a time."""
+    if not parts:
+        return False
+    r = trim.load_results(results_path).get(trim.ALL_PASSED)
+    wanted = sorted(g for p in parts for g in p["globs"])
+    return isinstance(r, dict) and r.get("passed") is True and sorted(r.get("globs") or []) == wanted
+
+
+PART_ID = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
+
+
 def size_text(nbytes: int) -> str:
     if nbytes >= 1024 ** 3:
         return f"{nbytes / 1024 ** 3:.1f} GB"
@@ -116,23 +129,38 @@ def _iss_string(value: str, what: str) -> str:
     return f'"{value}"'
 
 
-def generated_iss(ver: str, stage: Path, parts: list[dict]) -> str:
+def generated_iss(ver: str, stage: Path, parts: list[dict], all_passed: bool = False) -> str:
     """The include the .iss needs: the version, where the staged files are, and the offered parts
     as PartCount plus PartId<n>, PartLabel<n>, PartGlobs<n> ('|' between patterns), PartBytes<n>
-    and PartSize<n> (n from 1)."""
+    and PartSize<n> (n from 1); the same as arrays from 0 (PartIds, PartLabels, PartGlobsA,
+    PartSizes) for the .iss loops; PartsAllPassed 1 when they were also tested all together."""
     lines = [f"; Written by tools/installer.py for release {ver}. Not in git.",
              f"#define AppVersion {_iss_string(ver, 'the version')}",
              f"#define StageDir {_iss_string(str(stage), 'the staging folder')}",
-             f"#define PartCount {len(parts)}"]
-    for n, p in enumerate(parts, start=1):
+             f"#define PartCount {len(parts)}",
+             f"#define PartsAllPassed {1 if parts and all_passed else 0}"]
+    for p in parts:
+        # The id becomes a task name (trim\<id>) and, with the patterns, a Pascal string.
+        if not PART_ID.match(p["id"]):
+            raise InstallerError(f"the part id {p['id']!r} must be lower-case letters, digits and '-'")
         for g in p["globs"]:
             if "|" in g:
                 raise InstallerError(f"the pattern {g!r} of part {p['id']} has a '|', which the installer uses between patterns")
+            if "'" in g:
+                raise InstallerError(f"the pattern {g!r} of part {p['id']} has a ', which the installer cannot hold")
+    for n, p in enumerate(parts, start=1):
         lines += [f"#define PartId{n} {_iss_string(p['id'], 'the part id')}",
                   f"#define PartLabel{n} {_iss_string(p['label'], 'the part label')}",
                   f"#define PartGlobs{n} {_iss_string('|'.join(p['globs']), 'the part patterns')}",
                   f"#define PartBytes{n} \"{int(p['bytes'])}\"",
                   f"#define PartSize{n} \"{size_text(int(p['bytes']))}\""]
+    if parts:
+        for arr in ("PartIds", "PartLabels", "PartGlobsA", "PartSizes"):
+            lines.append(f"#dim {arr}[{len(parts)}]")
+        for i in range(len(parts)):
+            n = i + 1
+            lines += [f"#define PartIds[{i}] PartId{n}", f"#define PartLabels[{i}] PartLabel{n}",
+                      f"#define PartGlobsA[{i}] PartGlobs{n}", f"#define PartSizes[{i}] PartSize{n}"]
     return "\n".join(lines) + "\n"
 
 
@@ -202,7 +230,7 @@ def stage_loader(player_zip: Path, win64: Path, loader_dir: Path) -> None:
 
 
 def stage(ver: str, server_zip: Path, player_zip: Path, stage_dir: Path, redist: Path,
-          parts: list[dict], appsettings: Path = DEFAULT_APPSETTINGS) -> Path:
+          parts: list[dict], appsettings: Path = DEFAULT_APPSETTINGS, all_passed: bool = False) -> Path:
     """Lay out everything the .iss installs under stage_dir; returns the generated include."""
     win64 = stage_dir / "Win64"
     win64.mkdir(parents=True)
@@ -215,7 +243,7 @@ def stage(ver: str, server_zip: Path, player_zip: Path, stage_dir: Path, redist:
     (stage_dir / "Redist").mkdir()
     shutil.copyfile(redist, stage_dir / "Redist" / "vcredist_x64.exe")
     gen = stage_dir / "generated.iss"
-    gen.write_text(generated_iss(ver, stage_dir, parts), encoding="utf-8")
+    gen.write_text(generated_iss(ver, stage_dir, parts, all_passed), encoding="utf-8")
     return gen
 
 
@@ -246,7 +274,8 @@ def build_installer(ver: str, server_zip: Path, player_zip: Path, out_dir: Path,
     exe = out_dir / (setup_name(ver) + ".exe")
     stage_dir = Path(tempfile.mkdtemp(prefix="reborn-setup-stage-"))
     try:
-        gen = stage(ver, Path(server_zip), Path(player_zip), stage_dir, Path(redist), parts)
+        gen = stage(ver, Path(server_zip), Path(player_zip), stage_dir, Path(redist), parts,
+                    all_passed=parts_tested_together(parts, results))
         cmd = [str(iscc), "/Q", f"/O{out_dir}", f"/F{setup_name(ver)}", f"/DGenerated={gen}"]
         if compression:
             cmd.append(f"/DCompression={compression}")

@@ -17,17 +17,29 @@
 ; Only matchmaking and game servers inside the chosen folder are stopped; same-named programs
 ; elsewhere, or ones whose folder Windows will not tell, are left alone.
 ;
-; Later parts add to this file (keep these places):
-;   [Tasks]/[Run] and the finished page: firewall rules, VC++ runtime (Redist\vcredist_x64.exe),
-;   matchmaking at sign-in, the desktop shortcut, the free-space parts (PartCount ... from Generated).
-;   Extra event handlers: use event attributes, e.g. <event('CurStepChanged')>, so the ones here stay.
+; Options (task names for /TASKS= or /MERGETASKS=):
+;   firewall    let players through Windows Firewall (the two rules OpenFirewall.bat makes)   ticked
+;   vcredist    install the Visual C++ 2012 runtime                     ticked only when it is missing
+;   autostart   start matchmaking when the installing user signs in (a scheduled task)        ticked
+;   shortcut    "Reborn Control Panel" on the desktop                                          ticked
+;   trim\<id>   free-space parts (only parts that passed the regression games)               unticked
+; A step that fails does not stop Setup: the last page (and the log) says what to run by hand.
+; The uninstaller removes the firewall rules and the scheduled task only if Setup made them.
+;
+; Test switches (inert unless given; they never change the PC):
+;   /DRYRUN               firewall, runtime and scheduled-task commands are written to the log
+;                         instead of run, and no desktop shortcut is made (the uninstaller too)
+;   /FAILSTEP=firewall|vcredist|autostart   that step fails without running anything
+;   /RUNTIMECHECK=<file>  decide "runtime missing" by this file instead of System32\msvcp110.dll
 
 #ifndef Generated
   #error Build this with python -m tools.installer --version 1.0.N (it passes /DGenerated=...)
 #endif
 #include Generated
-; Generated defines: AppVersion, StageDir, PartCount, and per part n (from 1): PartId<n>,
-; PartLabel<n>, PartGlobs<n> (patterns joined with |), PartBytes<n>, PartSize<n> (e.g. "3.2 GB").
+; Generated defines: AppVersion, StageDir, PartCount, PartsAllPassed (1 when the parts offered were
+; also tested all removed together), and per part n (from 1): PartId<n>, PartLabel<n>, PartGlobs<n>
+; (patterns joined with |), PartBytes<n>, PartSize<n> (e.g. "3.2 GB"); the same values as arrays
+; from 0 (PartIds, PartLabels, PartGlobsA, PartSizes) when PartCount > 0.
 
 #ifndef Compression
   #define Compression "lzma2"
@@ -62,6 +74,10 @@ SolidCompression=yes
 WizardStyle=modern
 SetupLogging=yes
 ShowLanguageDialog=no
+; Every run starts from the recommended choices; a free-space part is never ticked by itself.
+UsePreviousTasks=no
+; The shortcut goes on the desktop of the owner who runs Setup (as tools/vm.py makes it).
+UsedUserAreasWarning=no
 
 [Messages]
 WizardSelectDir=Pick the Battleborn folder
@@ -76,8 +92,25 @@ Source: "{#StageDir}\Win64\*"; DestDir: "{app}\Binaries\Win64"; Flags: ignorever
 Source: "{#StageDir}\loader\steam_settings\configs.main.ini"; DestDir: "{app}\Binaries\Win64\steam_settings"; Flags: onlyifdoesntexist
 ; Matchmaking's settings (which games run) belong to the owner: only a first install gets the default.
 Source: "{#StageDir}\defaults\appsettings.json"; DestDir: "{app}\Binaries\Win64\matchmaking"; Flags: onlyifdoesntexist uninsneveruninstall
-; The Visual C++ 2012 runtime the game needs. Running it is a later part; it is here to run by hand.
+; The Visual C++ 2012 runtime the game needs (the vcredist option runs it; it stays to run by hand).
 Source: "{#StageDir}\Redist\vcredist_x64.exe"; DestDir: "{app}\Binaries\Win64\Redist"; Flags: ignoreversion
+
+[Tasks]
+Name: firewall; Description: "Let players through Windows Firewall (UDP 7777-7779 and TCP 5000)"
+Name: vcredist; Description: "Install the Visual C++ 2012 runtime the game needs"
+Name: autostart; Description: "Start matchmaking when I sign in to Windows"
+Name: shortcut; Description: "Put ""Reborn Control Panel"" on the desktop"
+#if PartCount > 0
+Name: trim; Description: "Free up space: remove game files the server does not need"; GroupDescription: "Free up space (optional):"; Flags: unchecked
+  #define I
+  #sub EmitPartTask
+Name: "trim\{#PartIds[I]}"; Description: "{#PartLabels[I]} (about {#PartSizes[I]})"; Flags: unchecked dontinheritcheck
+  #endsub
+  #for {I = 0; I < PartCount; I++} EmitPartTask
+#endif
+
+[Icons]
+Name: "{userdesktop}\Reborn Control Panel"; Filename: "{app}\Binaries\Win64\ControlPanel\ControlPanel.exe"; WorkingDir: "{app}\Binaries\Win64\ControlPanel"; Comment: "Battleborn Reborn Control Panel"; Tasks: shortcut; Check: MakeShortcut
 
 [Code]
 const
@@ -97,6 +130,19 @@ const
   AttrDirectory = $10;
   DeployedFile = 'reborn-deployed.txt';
   RemovedPartsFile = 'reborn-removed-parts.txt';
+  { What Setup made that the uninstaller must remove (one name per line), next to the uninstaller. }
+  MadeFile = 'RebornSetup\reborn-setup-made.txt';
+  MsgFailFirewall = 'The firewall rules could not be added. Run OpenFirewall.bat in Binaries\Win64 once.';
+  MsgFailRuntime = 'The Visual C++ 2012 runtime did not install. Run Binaries\Win64\Redist\vcredist_x64.exe.';
+  MsgFailAutostart = 'Matchmaking will not start by itself. Start it with StartMatchmaking.bat.';
+  MsgFinishedProblems = 'Reborn is installed, but some steps did not work:';
+  MsgPartsWarning = 'Removed files only come back by copying the game again (in Steam: Verify integrity of game files).';
+  MsgPartsOneAtATime = 'Tested one at a time.';
+  RuleServer = 'Battleborn Reborn server';
+  RuleMatchmaking = 'Battleborn Reborn matchmaking';
+  TaskName = 'Battleborn Reborn matchmaking';
+  RuntimeDll = 'msvcp110.dll';
+  AttrReparsePoint = $400;
 
 type
   TPidList = array of Integer;
@@ -105,6 +151,10 @@ var
   GameDirCandidates: TArrayOfString;
   OlderAllowedFor: String;          { the folder the owner said yes to the older version for }
   UninstallPartsRemoved: Boolean;
+  Problems: String;                 { what failed, one line each, for the last page }
+  RestartWanted: Boolean;
+  UninstallMade: String;            { the made-file's lines, read before anything is removed }
+  RuntimeDefaultDone: Boolean;
 
 procedure ExitProcess(ExitCode: Cardinal);
   external 'ExitProcess@kernel32.dll stdcall';
@@ -489,6 +539,487 @@ begin
       DeleteFile(AddBackslash(Dir) + Names[I]);
 end;
 
+{ ---------------------------------------------------------------- options: commands }
+
+function HasSwitchPrefix(const Prefix: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(Copy(ParamStr(I), 1, Length(Prefix)), Prefix) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+{ /DRYRUN: a test switch. The commands that change Windows are logged, never run. }
+function DryRun: Boolean;
+begin
+  Result := HasSwitch('/DRYRUN');
+end;
+
+function MakeShortcut: Boolean;
+begin
+  Result := not DryRun;
+  if not Result then
+    Log('Dry run (/DRYRUN): no desktop shortcut made');
+end;
+
+{ /FAILSTEP=<step>: a test switch. That step fails without running anything. }
+function FailStepIs(const Step: String): Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:FAILSTEP|}'), Step) = 0;
+end;
+
+function ForcedToFail(const Step: String): Boolean;
+begin
+  Result := FailStepIs(Step);
+  if Result then
+    Log('Step ' + Step + ' forced to fail (/FAILSTEP); nothing was run');
+end;
+
+{ Runs Exe with Params and waits; False when it could not start. With Dry, it is only logged. }
+function RunCommand(const Exe, Params: String; const Dry: Boolean; var Code: Integer): Boolean;
+begin
+  if Dry then
+  begin
+    Log('Dry run, not running: ' + ExtractFileName(Exe) + ' ' + Params);
+    Code := 0;
+    Result := True;
+    Exit;
+  end;
+  Log('Running: ' + ExtractFileName(Exe) + ' ' + Params);
+  Result := Exec(Exe, Params, '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if Result then
+    Log(Format('Exit code %d', [Code]))
+  else
+    Log('Could not start it: ' + SysErrorMessage(Code));
+end;
+
+function NetshExe: String;
+begin
+  Result := ExpandConstant('{sys}\netsh.exe');
+end;
+
+function SchtasksExe: String;
+begin
+  Result := ExpandConstant('{sys}\schtasks.exe');
+end;
+
+procedure AddProblem(const Msg: String);
+begin
+  Log('Problem: ' + Msg);
+  Problems := Problems + Msg + #13#10;
+end;
+
+procedure DeleteFirewallRules(const Dry: Boolean);
+var
+  Code: Integer;
+begin
+  RunCommand(NetshExe, 'advfirewall firewall delete rule name="' + RuleServer + '"', Dry, Code);
+  RunCommand(NetshExe, 'advfirewall firewall delete rule name="' + RuleMatchmaking + '"', Dry, Code);
+end;
+
+procedure DeleteSignInTask(const Dry: Boolean);
+var
+  Code: Integer;
+begin
+  RunCommand(SchtasksExe, '/Delete /TN "' + TaskName + '" /F', Dry, Code);
+end;
+
+{ The two rules OpenFirewall.bat makes, with the same names and settings (the panel edits the first
+  by name). Old ones go first so a moved game folder gets rules for its new place. }
+function AddFirewallRules(const Win64: String): Boolean;
+var
+  Code: Integer;
+begin
+  Result := False;
+  if ForcedToFail('firewall') then
+    Exit;
+  DeleteFirewallRules(DryRun);
+  Result := RunCommand(NetshExe, 'advfirewall firewall add rule name="' + RuleServer + '" dir=in action=allow profile=any program="' +
+    Win64 + '\Serverborn.exe" protocol=UDP localport=7777-7779 edge=no', DryRun, Code) and (Code = 0);
+  Result := RunCommand(NetshExe, 'advfirewall firewall add rule name="' + RuleMatchmaking + '" dir=in action=allow profile=any program="' +
+    Win64 + '\matchmaking\gamecontroller.exe" protocol=TCP localport=5000 edge=no', DryRun, Code) and (Code = 0) and Result;
+end;
+
+{ The file whose absence means "the runtime is missing": msvcp110.dll in the 64-bit System32
+  (Setup runs in 64-bit mode, so the sys constant is that folder). /RUNTIMECHECK=<file> replaces it in tests. }
+function RuntimeCheckFile: String;
+begin
+  Result := ExpandConstant('{param:RUNTIMECHECK|}');
+  if Result = '' then
+    Result := ExpandConstant('{sys}\' + RuntimeDll);
+end;
+
+function RuntimeMissing: Boolean;
+begin
+  Result := not FileExists(RuntimeCheckFile);
+end;
+
+function InstallRuntime(const Win64: String): Boolean;
+var
+  Code: Integer;
+begin
+  Result := False;
+  if ForcedToFail('vcredist') then
+    Exit;
+  if not RunCommand(Win64 + '\Redist\vcredist_x64.exe', '/install /quiet /norestart', DryRun, Code) then
+    Exit;
+  { 1638: a newer one is there already; 3010: it works after a restart. }
+  Result := (Code = 0) or (Code = 1638) or (Code = 3010);
+  if Code = 3010 then
+    RestartWanted := True;
+end;
+
+function InstallingUser: String;
+var
+  Domain: String;
+begin
+  Domain := GetEnv('USERDOMAIN');
+  if Domain = '' then
+    Domain := GetComputerNameString;
+  Result := Domain + '\' + GetUserNameString;
+end;
+
+{ Starts StartMatchmaking.bat whenever the user who ran Setup signs in, with full rights. }
+function AddSignInTask(const Win64: String): Boolean;
+var
+  Code: Integer;
+begin
+  Result := False;
+  if ForcedToFail('autostart') then
+    Exit;
+  Result := RunCommand(SchtasksExe, '/Create /TN "' + TaskName + '" /TR "\"' + Win64 + '\StartMatchmaking.bat\"" /SC ONLOGON /RU "' +
+    InstallingUser + '" /IT /RL HIGHEST /F', DryRun, Code) and (Code = 0);
+end;
+
+{ Notes that Setup made Name, so the uninstaller removes it. A dry run notes "<name> (dry run)":
+  then the uninstaller only logs the removal, even without /DRYRUN. }
+procedure NoteMade(const Win64, Name: String);
+var
+  Lines: TArrayOfString;
+  Entry: String;
+  I: Integer;
+begin
+  Entry := Name;
+  if DryRun then
+    Entry := Name + ' (dry run)';
+  if LoadStringsFromFile(Win64 + '\' + MadeFile, Lines) then
+    for I := 0 to GetArrayLength(Lines) - 1 do
+      if CompareText(Trim(Lines[I]), Entry) = 0 then
+        Exit;
+  if not SaveStringToFile(Win64 + '\' + MadeFile, Entry + #13#10, True) then
+    Log('Could not write ' + MadeFile);
+end;
+
+function MadeHas(const Entry: String): Boolean;
+begin
+  Result := Pos(#10 + Lowercase(Entry) + #13#10, #10 + Lowercase(UninstallMade)) > 0;
+end;
+
+{ ---------------------------------------------------------------- options: free-space parts }
+
+function PartCountValue: Integer;
+begin
+  Result := {#PartCount};
+end;
+
+function PartsTestedTogether: Boolean;
+begin
+  Result := {#PartsAllPassed} <> 0;
+end;
+
+{ The part ids and their patterns (one '|'-joined string per part), in the parts list's order. }
+procedure GetParts(var Ids, Globs: TArrayOfString);
+begin
+  SetArrayLength(Ids, PartCountValue);
+  SetArrayLength(Globs, PartCountValue);
+#if PartCount > 0
+  #sub EmitPartCode
+  Ids[{#I}] := '{#PartIds[I]}';
+  Globs[{#I}] := '{#PartGlobsA[I]}';
+  #endsub
+  #for {I = 0; I < PartCount; I++} EmitPartCode
+#endif
+end;
+
+{ Does Path ('/'-separated, lower case) match glob G (lower case) from positions PI and SI? The
+  same rules as tools/trim.py: '**/' is any number of folders (none too), '**' anything, '*' and
+  '?' stay inside one name. }
+function GlobFrom(const G, S: String; PI, SI: Integer): Boolean;
+var
+  K: Integer;
+begin
+  if PI > Length(G) then
+  begin
+    Result := SI > Length(S);
+    Exit;
+  end;
+  Result := False;
+  if (Copy(G, PI, 3) = '**/') then
+  begin
+    if GlobFrom(G, S, PI + 3, SI) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    for K := SI to Length(S) do
+      if (S[K] = '/') and GlobFrom(G, S, PI + 3, K + 1) then
+      begin
+        Result := True;
+        Exit;
+      end;
+  end
+  else if Copy(G, PI, 2) = '**' then
+  begin
+    for K := SI to Length(S) + 1 do
+      if GlobFrom(G, S, PI + 2, K) then
+      begin
+        Result := True;
+        Exit;
+      end;
+  end
+  else if G[PI] = '*' then
+  begin
+    K := SI;
+    while True do
+    begin
+      if GlobFrom(G, S, PI + 1, K) then
+      begin
+        Result := True;
+        Exit;
+      end;
+      if (K > Length(S)) or (S[K] = '/') then
+        Exit;
+      K := K + 1;
+    end;
+  end
+  else if G[PI] = '?' then
+    Result := (SI <= Length(S)) and (S[SI] <> '/') and GlobFrom(G, S, PI + 1, SI + 1)
+  else
+    Result := (SI <= Length(S)) and (S[SI] = G[PI]) and GlobFrom(G, S, PI + 1, SI + 1);
+end;
+
+function CleanGlob(G: String): String;
+begin
+  StringChangeEx(G, '\', '/', True);
+  while (G <> '') and (G[1] = '/') do
+    G := Copy(G, 2, Length(G));
+  Result := Lowercase(G);
+end;
+
+{ True when Rel matches one of the '|'-joined patterns. }
+function MatchesAny(const Rel, Joined: String): Boolean;
+var
+  Rest, G: String;
+  P: Integer;
+begin
+  Result := False;
+  Rest := Joined;
+  while Rest <> '' do
+  begin
+    P := Pos('|', Rest);
+    if P = 0 then
+    begin
+      G := Rest;
+      Rest := '';
+    end
+    else
+    begin
+      G := Copy(Rest, 1, P - 1);
+      Rest := Copy(Rest, P + 1, Length(Rest));
+    end;
+    if (G <> '') and GlobFrom(CleanGlob(G), Lowercase(Rel), 1, 1) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+{ Deletes the files under Root that match Joined. Linked folders are not followed. }
+procedure RemoveMatching(const Root, Rel, Joined: String; var Count: Integer);
+var
+  F: TFindRec;
+  Names: TArrayOfString;
+  IsDir: TArrayOfBoolean;
+  I, N: Integer;
+  Sub, Dir: String;
+begin
+  N := 0;
+  Dir := Root;
+  if Rel <> '' then
+  begin
+    Dir := Root + '\' + Rel;
+    StringChangeEx(Dir, '/', '\', True);
+  end;
+  if FindFirst(Dir + '\*', F) then
+  try
+    repeat
+      if (F.Name <> '.') and (F.Name <> '..') and ((F.Attributes and AttrReparsePoint) = 0) then
+      begin
+        SetArrayLength(Names, N + 1);
+        SetArrayLength(IsDir, N + 1);
+        Names[N] := F.Name;
+        IsDir[N] := (F.Attributes and AttrDirectory) <> 0;
+        N := N + 1;
+      end;
+    until not FindNext(F);
+  finally
+    FindClose(F);
+  end;
+  for I := 0 to N - 1 do
+  begin
+    if Rel = '' then
+      Sub := Names[I]
+    else
+      Sub := Rel + '/' + Names[I];
+    if IsDir[I] then
+      RemoveMatching(Root, Sub, Joined, Count)
+    else if MatchesAny(Sub, Joined) then
+    begin
+      if DeleteFile(Dir + '\' + Names[I]) then
+        Count := Count + 1
+      else
+        Log('Could not remove ' + Sub);
+    end;
+  end;
+end;
+
+procedure NoteRemovedPart(const Win64, Id: String);
+var
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  if LoadStringsFromFile(Win64 + '\' + RemovedPartsFile, Lines) then
+    for I := 0 to GetArrayLength(Lines) - 1 do
+      if CompareText(Trim(Lines[I]), Id) = 0 then
+        Exit;
+  if not SaveStringToFile(Win64 + '\' + RemovedPartsFile, Id + #13#10, True) then
+    Log('Could not write ' + RemovedPartsFile);
+end;
+
+{ The ticked free-space parts: their files go from the game folder, their ids into the record. }
+procedure RemoveChosenParts(const GameDir, Win64: String);
+var
+  Ids, Globs: TArrayOfString;
+  I, Count: Integer;
+begin
+  GetParts(Ids, Globs);
+  for I := 0 to GetArrayLength(Ids) - 1 do
+    if WizardIsTaskSelected('trim\' + Ids[I]) then
+    begin
+      Count := 0;
+      RemoveMatching(RemoveBackslashUnlessRoot(GameDir), '', Globs[I], Count);
+      Log(Format('Free-space part %s: removed %d files', [Ids[I], Count]));
+      NoteRemovedPart(Win64, Ids[I]);
+    end;
+end;
+
+{ ---------------------------------------------------------------- options: the wizard }
+
+{ The runtime is ticked only when it is missing, unless the command line chose for it. Done once,
+  when the options list exists (it is filled when its page comes up, silent installs too). }
+procedure ApplyRuntimeDefault();
+begin
+  if RuntimeDefaultDone then
+    Exit;
+  RuntimeDefaultDone := True;
+  if RuntimeMissing then
+    Log('The Visual C++ 2012 runtime is missing (' + RuntimeCheckFile + ' is not there): vcredist starts ticked')
+  else
+    Log('The Visual C++ 2012 runtime is there (' + RuntimeCheckFile + '): vcredist starts unticked');
+  if HasSwitchPrefix('/TASKS=') or
+     (HasSwitchPrefix('/MERGETASKS=') and (Pos('vcredist', Lowercase(ExpandConstant('{param:MERGETASKS|}'))) > 0)) then
+    Exit;
+  if RuntimeMissing then
+    WizardSelectTasks('vcredist')
+  else
+    WizardSelectTasks('!vcredist');
+end;
+
+<event('CurPageChanged')>
+procedure RuntimeDefaultOnPage(CurPageID: Integer);
+begin
+  if CurPageID = wpSelectTasks then
+    ApplyRuntimeDefault();
+end;
+
+<event('NextButtonClick')>
+function RuntimeDefaultOnNext(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = wpSelectTasks then
+    ApplyRuntimeDefault();
+end;
+
+procedure InitializeWizard();
+var
+  Note: TNewStaticText;
+  Text: String;
+  Space: Integer;
+begin
+  if PartCountValue > 0 then
+  begin
+    Text := MsgPartsWarning;
+    if not PartsTestedTogether then
+      Text := Text + ' ' + MsgPartsOneAtATime;
+    Note := TNewStaticText.Create(WizardForm);
+    Note.Parent := WizardForm.TasksList.Parent;
+    Note.AutoSize := False;
+    Note.WordWrap := True;
+    Note.Left := WizardForm.TasksList.Left;
+    Note.Width := WizardForm.TasksList.Width;
+    Note.Height := ScaleY(44);
+    Space := Note.Height + ScaleY(8);
+    WizardForm.TasksList.Height := WizardForm.TasksList.Height - Space;
+    Note.Top := WizardForm.TasksList.Top + WizardForm.TasksList.Height + ScaleY(8);
+    Note.Anchors := [akLeft, akRight, akBottom];
+    Note.Caption := Text;
+  end;
+end;
+
+<event('CurPageChanged')>
+procedure ShowProblems(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and (Problems <> '') then
+    WizardForm.FinishedLabel.Caption := MsgFinishedProblems + #13#10#13#10 + Problems;
+end;
+
+function NeedRestart(): Boolean;
+begin
+  Result := RestartWanted;
+end;
+
+{ After the files: the chosen options. A failed one is noted for the last page; Setup goes on. }
+procedure RunOptions(const GameDir, Win64: String);
+begin
+  Log('Chosen options: ' + WizardSelectedTasks(False));
+  if DryRun then
+    Log('Dry run (/DRYRUN): firewall, runtime and scheduled-task commands are only logged');
+  if WizardIsTaskSelected('firewall') then
+  begin
+    if not FailStepIs('firewall') then
+      NoteMade(Win64, 'firewall');
+    if not AddFirewallRules(Win64) then
+      AddProblem(MsgFailFirewall);
+  end;
+  if WizardIsTaskSelected('vcredist') then
+    if not InstallRuntime(Win64) then
+      AddProblem(MsgFailRuntime);
+  if WizardIsTaskSelected('autostart') then
+  begin
+    if not FailStepIs('autostart') then
+      NoteMade(Win64, 'autostart');
+    if not AddSignInTask(Win64) then
+      AddProblem(MsgFailAutostart);
+  end;
+  RemoveChosenParts(GameDir, Win64);
+end;
+
 { ---------------------------------------------------------------- Setup }
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -571,19 +1102,53 @@ begin
     { The same record the panel and its updater keep: the version, then a line break. }
     if not SaveStringToFile(Win64 + '\' + DeployedFile, '{#AppVersion}' + #10, False) then
       Log('Could not write ' + DeployedFile);
+    RunOptions(ExpandConstant('{app}'), Win64);
   end;
 end;
 
 { ---------------------------------------------------------------- Uninstall }
 
 function InitializeUninstall(): Boolean;
+var
+  S: AnsiString;
 begin
   Result := True;
   if PanelOpen(Win64Of(ExpandConstant('{app}'))) then
   begin
     SuppressibleMsgBox(MsgUninstallPanelOpen, mbError, MB_OK, IDOK);
     Result := False;
+    Exit;
   end;
+  UninstallMade := '';
+  if LoadStringFromFile(Win64Of(ExpandConstant('{app}')) + '\' + MadeFile, S) then
+    UninstallMade := String(S);
+  StringChangeEx(UninstallMade, #13#10, #10, True);
+  StringChangeEx(UninstallMade, #10, #13#10, True);
+  if (UninstallMade <> '') and (Copy(UninstallMade, Length(UninstallMade) - 1, 2) <> #13#10) then
+    UninstallMade := UninstallMade + #13#10;
+end;
+
+{ Removes the firewall rules and the sign-in task, but only the ones Setup made. One a test made
+  with /DRYRUN is only logged, so a test never removes the owner's real rules. }
+procedure RemoveMadeThings();
+var
+  Dry: Boolean;
+begin
+  if MadeHas('firewall') or MadeHas('firewall (dry run)') then
+  begin
+    Dry := DryRun or not MadeHas('firewall');
+    DeleteFirewallRules(Dry);
+  end
+  else
+    Log('Setup made no firewall rules; leaving the firewall alone');
+  if MadeHas('autostart') or MadeHas('autostart (dry run)') then
+  begin
+    Dry := DryRun or not MadeHas('autostart');
+    DeleteSignInTask(Dry);
+  end
+  else
+    Log('Setup made no sign-in task; leaving the scheduled tasks alone');
+  DeleteFile(Win64Of(ExpandConstant('{app}')) + '\' + MadeFile);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -601,6 +1166,7 @@ begin
       DeleteUsers := True
     else
       DeleteUsers := SuppressibleMsgBox(MsgDeleteUsers, mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
+    RemoveMadeThings();
     UninstallPartsRemoved := FileExists(Win64 + '\' + RemovedPartsFile);
     DeleteFile(Win64 + '\' + RemovedPartsFile);
     ClearMatchmaking(Win64 + '\matchmaking', not DeleteUsers, False);
