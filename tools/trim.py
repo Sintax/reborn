@@ -286,9 +286,12 @@ def _commit() -> str:
         return "unknown"
 
 
-def record(results_path: Path, key: str, scenarios: dict, nbytes: int, commit: str | None = None) -> dict:
+def record(results_path: Path, key: str, scenarios: dict, nbytes: int, commit: str | None = None,
+           globs: list[str] | None = None) -> dict:
+    """`globs` are the file patterns that were left out in this test. The installer offers a part
+    only while its patterns in trim_parts.json are still exactly these: a changed part needs a new test."""
     entry = {"passed": bool(scenarios) and all(k == "pass" for k in scenarios.values()),
-             "bytes": nbytes, "scenarios": dict(scenarios),
+             "bytes": nbytes, "scenarios": dict(scenarios), "globs": list(globs or []),
              "commit": commit or _commit(), "date": date.today().isoformat()}
     results = load_results(results_path)
     results[key] = entry
@@ -418,7 +421,8 @@ def test_parts(part_id: str | None, all_passed: bool, game: Path, runner: Runner
     nbytes = sum(os.path.getsize(game / rel) for rel in matching_files(game, chosen))
     dst = game.parent / COPY_NAME
     outcomes = run_trial(game, dst, chosen, runner, scenarios)
-    return {key: record(results_path, key, outcomes, nbytes)}
+    globs = [g for p in chosen for g in p["globs"]]
+    return {key: record(results_path, key, outcomes, nbytes, globs=globs)}
 
 
 # ---------------------------------------------------------------- command line
