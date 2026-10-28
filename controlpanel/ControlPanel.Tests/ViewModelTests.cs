@@ -403,7 +403,7 @@ namespace ControlPanel.Tests
 			await kaz.RenameCommand.ExecuteAsync(null);
 			string rename = Assert.Single(t.Dialogs.Questions);
 			Assert.Contains("Kaz", rename);
-			Assert.Contains("new zip", rename);
+			Assert.Contains("new file", rename);
 			Assert.Contains("in a game now, they'll be dropped", rename);
 			Assert.Empty(t.Api.Writes);
 

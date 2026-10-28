@@ -92,7 +92,7 @@ namespace ControlPanel
 					Task<string> stderr = p.StandardError.ReadToEndAsync();
 					if (!p.WaitForExit(limit))
 					{
-						try { p.Kill(entireProcessTree: true); } catch (Exception) { }
+						try { p.Kill(entireProcessTree: true); p.WaitForExit(5000); } catch (Exception) { }   // wait so its files are released
 						output = "It took longer than " + (int)limit.TotalMinutes + " minutes and was stopped.";
 						return -1;
 					}

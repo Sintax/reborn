@@ -196,6 +196,13 @@ namespace ControlPanel.Tests
 				}
 
 			Assert.Equal(expected.Keys, made.Keys);
+			// The laptop zip's guide says "zip" (package.py swaps those lines); the panel's file keeps the doc's exe wording.
+			string panelGuide = new UTF8Encoding(false).GetString(made["README-Kaz.txt"]);
+			string zipGuide = new UTF8Encoding(false).GetString(expected["README-Kaz.txt"]);
+			Assert.Contains("Double-click Reborn-Mod-Installer_Kaz.exe", panelGuide);
+			Assert.DoesNotContain("Double-click Reborn-Mod-Installer_Kaz.exe", zipGuide);
+			Assert.Contains("Right-click this zip and choose **Extract All**", zipGuide);
+			expected.Remove("README-Kaz.txt");
 			foreach (string name in expected.Keys)
 				Assert.True(expected[name].AsSpan().SequenceEqual(made[name]), name + " differs from tools/package.py's");
 

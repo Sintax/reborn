@@ -132,8 +132,23 @@ def friend_steamid(name: str) -> int:
     return launch.STEAMID_BASE + zlib.crc32(("friend:" + name).encode()) % 100000
 
 
+# docs/FRIEND-SETUP.md is written for the panel's self-unpacking .exe. A laptop friend zip swaps
+# these lines back to talk about a zip (the panel keeps the text exactly as the doc has it).
+ZIP_GUIDE_SWAPS = (
+    ("1. Double-click Reborn-Mod-Installer_{NAME}.exe, choose a folder and press Extract. If Windows says it protected "
+     "your PC, press More info, then Run anyway. Then open that folder and continue below.\n",
+     "1. Right-click this zip and choose **Extract All**, then **Extract**. (Do not run anything from\n"
+     "   inside the zip without extracting it.)\n"),
+    ("This file lets you", "This zip lets you"),
+    ("Please don't share this file.", "Please don't share this zip."),
+)
+
+
 def friend_readme(name: str, version: str) -> str:
-    doc = (config.REPO / "docs" / "FRIEND-SETUP.md").read_text(encoding="utf-8").replace("{NAME}", name)
+    doc = (config.REPO / "docs" / "FRIEND-SETUP.md").read_text(encoding="utf-8")
+    for exe_text, zip_text in ZIP_GUIDE_SWAPS:
+        doc = doc.replace(exe_text, zip_text)
+    doc = doc.replace("{NAME}", name)
     return f"Battleborn Reborn {version}\r\n\r\n" + doc.replace("\n", "\r\n")
 
 

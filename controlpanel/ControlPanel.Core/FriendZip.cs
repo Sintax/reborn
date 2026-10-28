@@ -37,11 +37,12 @@ namespace ControlPanel.Core
 		}
 
 		// Packs the friend's files into <outDir>\Reborn-Mod-Installer_<name>.exe: a self-unpacking 7-Zip file
-		// (no password). The files
-		// are first laid out in a staging folder under outDir, which is deleted on every path. The file is
-		// built under a temp name and moved over the old one only when 7-Zip succeeded. Then the date is
-		// recorded in recordFile (when given). version goes on top of the guide (the server's version, as
-		// matchmaking reports it). The message is plain text for the owner and never contains the key. sevenZipDir: the folder with 7z.exe and 7z.sfx (null: look for 7-Zip with findSevenZip, or the usual places).
+		// (no password). The files are first laid out in a staging folder under outDir, which is deleted on
+		// every path. The file is built under a temp name and moved over the old one only when 7-Zip
+		// succeeded. Then the date is recorded in recordFile (when given). version goes on top of the guide
+		// (the server's version, as matchmaking reports it). The message is plain text for the owner and
+		// never contains the key. sevenZipDir: the folder with 7z.exe and 7z.sfx (null: look for 7-Zip with
+		// findSevenZip, or in the usual places).
 		public static (bool ok, string message, string? path) Make(string baseZip, string name, string key, string outDir,
 			IProcessRunner runner, string? recordFile = null, DateTime? nowUtc = null, string version = "", string? sevenZipDir = null,
 			TimeSpan? limit = null, Func<string?>? findSevenZip = null)
