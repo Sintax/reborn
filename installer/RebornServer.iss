@@ -23,6 +23,10 @@
 ;   autostart   start matchmaking when the installing user signs in (a scheduled task)        ticked
 ;   shortcut    "Reborn Control Panel" on the desktop                                          ticked
 ;   trim\<id>   free-space parts (only parts that passed the regression games)               unticked
+; GitHub access (a wizard page): a server without a signed-in gh can keep a read-only token for the private
+;   builds repo, so the Control Panel can fetch updates. The page is skipped when `gh auth status` works. The
+;   token is handed to ControlPanel.exe --save-github-token through a temp file, run as the user who started
+;   Setup, and the file is deleted afterwards. The token is never logged or put on a command line.
 ; A step that fails does not stop Setup: the last page (and the log) says what to run by hand.
 ; The uninstaller removes the firewall rules and the scheduled task only if Setup made them.
 ;
@@ -32,6 +36,8 @@
 ;   /FAILSTEP=firewall|vcredist|autostart   that step fails without running anything
 ;   /RUNTIMECHECK=<file>  decide "runtime missing" by this file instead of System32\msvcp110.dll
 ;   /FIREWALLSHOW=<file>  netsh's answer about the current game-server rule, from a file (none: no rule)
+;   /GHTOKENFILE=<file>   the GitHub token comes from this file instead of the page (which is then skipped);
+;                         a silent install without it asks for none. /FAILSTEP=token makes the hand-over fail.
 ; The game servers' ports belong to the Control Panel after the first install: Setup keeps the
 ; rule's ports and matchmaking's saved GamePorts, and opens 7777-7779 only when it has neither.
 
@@ -138,6 +144,11 @@ const
   MsgFailFirewall = 'The firewall rules could not be added. Run OpenFirewall.bat in Binaries\Win64 once.';
   MsgFailRuntime = 'The Visual C++ 2012 runtime did not install. Run Binaries\Win64\Redist\vcredist_x64.exe.';
   MsgFailAutostart = 'Matchmaking will not start by itself. Start it with StartMatchmaking.bat.';
+  MsgFailToken = 'The GitHub token was not saved. Run Setup again to add it.';
+  MsgTokenTitle = 'GitHub access';
+  MsgTokenDescription = 'Reborn updates come from a private page on GitHub.';
+  MsgTokenLabel = 'Read-only token for Sintax/reborn-builds (you can leave this empty and add it later)';
+  TokenTempName = 'reborn-github-token.tmp';
   MsgFinishedProblems = 'Reborn is installed, but some steps did not work:';
   MsgPartsWarning = 'Removed files only come back by copying the game again (in Steam: Verify integrity of game files).';
   MsgPartsOneAtATime = 'Tested one at a time.';
@@ -159,6 +170,8 @@ var
   RestartWanted: Boolean;
   UninstallMade: String;            { the made-file's lines, read before anything is removed }
   RuntimeDefaultDone: Boolean;
+  TokenPage: TInputQueryWizardPage;
+  GhState: Integer;                 { 0 not asked yet, 1 gh is signed in, 2 it is not }
 
 procedure ExitProcess(ExitCode: Cardinal);
   external 'ExitProcess@kernel32.dll stdcall';
@@ -1161,6 +1174,101 @@ begin
     end;
 end;
 
+{ ---------------------------------------------------------------- GitHub access }
+
+{ Whether gh is signed in for the user who started Setup (asked once). Only reads. }
+function GhSignedIn: Boolean;
+var
+  Code: Integer;
+begin
+  if GhState = 0 then
+  begin
+    GhState := 2;
+    if ExecAsOriginalUser(ExpandConstant('{cmd}'), '/C gh auth status >nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+      GhState := 1;
+    if GhState = 1 then
+      Log('gh is signed in: the GitHub access page is skipped')
+    else
+      Log('gh is not signed in (or not installed): the GitHub access page is shown');
+  end;
+  Result := GhState = 1;
+end;
+
+{ The token to keep: from /GHTOKENFILE= (tests), else what was typed on the page. Never logged. }
+function TokenText: String;
+var
+  Raw: AnsiString;
+  FromFile: String;
+begin
+  Result := '';
+  FromFile := ExpandConstant('{param:GHTOKENFILE|}');
+  if FromFile <> '' then
+  begin
+    if LoadStringFromFile(FromFile, Raw) then
+      Result := Trim(String(Raw));
+    Exit;
+  end;
+  if (TokenPage <> nil) and not WizardSilent then
+    Result := Trim(TokenPage.Values[0]);
+end;
+
+{ Hands the token to the Control Panel through a temp file (never a command line or the log), run as
+  the user who started Setup so it is kept for that user. The temp file is deleted whatever happens. }
+procedure SaveGitHubToken(const Win64: String);
+var
+  Token, Tmp, Panel: String;
+  Code: Integer;
+  Ok: Boolean;
+begin
+  Token := TokenText;
+  if Token = '' then
+  begin
+    Log('GitHub access: no token given, nothing saved');
+    Exit;
+  end;
+  Tmp := ExpandConstant('{tmp}\' + TokenTempName);
+  Panel := Win64 + '\ControlPanel\ControlPanel.exe';
+  Ok := False;
+  try
+    if ForcedToFail('token') then
+      Ok := False
+    else if not SaveStringToFile(Tmp, Token, False) then
+      Log('GitHub access: could not write the hand-over file')
+    else if DryRun then
+    begin
+      Log('Dry run (/DRYRUN), not running: ControlPanel.exe --save-github-token <hand-over file>');
+      Ok := True;
+    end
+    else
+    begin
+      Log('Running as the user who started Setup: ControlPanel.exe --save-github-token <hand-over file>');
+      if ExecAsOriginalUser(Panel, '--save-github-token "' + Tmp + '"', ExtractFilePath(Panel), SW_HIDE, ewWaitUntilTerminated, Code) then
+      begin
+        Log(Format('Exit code %d', [Code]));
+        Ok := Code = 0;
+      end
+      else
+        Log('Could not start it: ' + SysErrorMessage(Code));
+    end;
+  finally
+    DeleteFile(Tmp);
+    if FileExists(Tmp) then
+      Log('GitHub access: the hand-over file could not be deleted')
+    else
+      Log('GitHub access: the hand-over file is gone');
+    Token := '';
+  end;
+  if not Ok then
+    AddProblem(MsgFailToken);
+end;
+
+<event('ShouldSkipPage')>
+function SkipTokenPage(PageID: Integer): Boolean;
+begin
+  Result := (TokenPage <> nil) and (PageID = TokenPage.ID) and
+            (HasSwitchPrefix('/GHTOKENFILE=') or WizardSilent or GhSignedIn);
+end;
+
 { ---------------------------------------------------------------- options: the wizard }
 
 { The runtime is ticked only when it is missing, unless the command line chose for it. Done once,
@@ -1204,6 +1312,8 @@ var
   Text: String;
   Space: Integer;
 begin
+  TokenPage := CreateInputQueryPage(wpSelectTasks, MsgTokenTitle, MsgTokenDescription, MsgTokenLabel);
+  TokenPage.Add('Token:', True);
   if PartCountValue > 0 then
   begin
     Text := MsgPartsWarning;
@@ -1260,6 +1370,7 @@ begin
     if not AddSignInTask(Win64) then
       AddProblem(MsgFailAutostart);
   end;
+  SaveGitHubToken(Win64);
   RemoveChosenParts(GameDir, Win64);
 end;
 

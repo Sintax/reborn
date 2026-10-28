@@ -39,7 +39,9 @@ namespace ControlPanel
 		// A program that never ends (gh stuck on a dead connection) is stopped after this long.
 		public static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(30);
 
-		public int Run(string file, string args, out string output)
+		public int Run(string file, string args, out string output) => Run(file, args, new Dictionary<string, string>(), out output);
+
+		public int Run(string file, string args, IReadOnlyDictionary<string, string> environment, out string output)
 		{
 			output = "";
 			// Only PATH's absolute folders: never Windows' own search, which looks next to the panel first.
@@ -47,13 +49,13 @@ namespace ControlPanel
 				Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD");
 			if (program == null)
 			{
-				output = file + " was not found.";
+				output = file + ProgramPath.NotFoundSuffix;
 				return -1;
 			}
 			Process? p = null;
 			try
 			{
-				p = Process.Start(new ProcessStartInfo
+				var info = new ProcessStartInfo
 				{
 					FileName = program,
 					Arguments = args,
@@ -64,7 +66,9 @@ namespace ControlPanel
 					RedirectStandardError = true,
 					StandardOutputEncoding = System.Text.Encoding.UTF8,
 					StandardErrorEncoding = System.Text.Encoding.UTF8,
-				});
+				};
+				foreach (var pair in environment) info.Environment[pair.Key] = pair.Value;
+				p = Process.Start(info);
 				if (p == null) return -1;
 			}
 			catch (Exception)

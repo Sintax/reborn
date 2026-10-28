@@ -5,6 +5,9 @@ namespace ControlPanel.Core
 	// the panel's folder first.
 	public static class ProgramPath
 	{
+		// What a runner says (after the program name) when Find found nothing.
+		public const string NotFoundSuffix = " was not found.";
+
 		// file: a bare name ("gh", tried with each PATHEXT ending), a name with its ending ("gh.exe"),
 		// or a full path (used if it exists). A relative path with folders in it is never used.
 		public static string? Find(string file, string pathVariable, string pathExt)

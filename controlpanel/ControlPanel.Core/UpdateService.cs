@@ -2,6 +2,8 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Reborn.Update;
@@ -24,7 +26,8 @@ namespace ControlPanel.Core
 	// From is gone); MarkPath is the mark's full path, the file the owner then deletes by hand.
 	public sealed record UnfinishedUpdate(string From, string To, bool CanRollBack = true, string MarkPath = "");
 
-	// Server updates from the private builds repo on GitHub, through the gh program (signed in on the VM).
+	// Server updates from the private builds repo on GitHub, through the gh program (signed in on the VM),
+// or, on a server without gh, straight from GitHub's web interface with the kept read-only token.
 	// Nothing here changes the installed server: the swap is RebornUpdater.exe's job.
 	public sealed partial class UpdateService
 	{
@@ -47,15 +50,23 @@ namespace ControlPanel.Core
 		private readonly IProcessRunner _runner;
 		private readonly string _publicKey;
 		private readonly string _gh;
+		private readonly HttpClient _http;
+		private readonly Func<string?> _token;
+
+		// Redirects are followed by hand: the token goes to GitHub, never on to the file host it points at.
+		private static readonly Lazy<HttpClient> DefaultHttp = new(() =>
+			new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(30) });
 
 		// publicKey: the release signing key (UpdateKey.PublicKey unless a test gives its own).
 		// tempDir: where the check downloads to and the updater is copied to (%TEMP% unless given).
-		public UpdateService(PanelPaths paths, IProcessRunner runner, string? publicKey = null, string? tempDir = null, string gh = "gh")
+		public UpdateService(PanelPaths paths, IProcessRunner runner, string? publicKey = null, string? tempDir = null, string gh = "gh", HttpClient? http = null, Func<string?>? token = null)
 		{
 			_paths = paths;
 			_runner = runner;
 			_publicKey = publicKey ?? UpdateKey.PublicKey;
 			_gh = gh;
+			_http = http ?? DefaultHttp.Value;
+			_token = token ?? (() => GitHubToken.Load());
 			TempDir = Path.GetFullPath(tempDir ?? Path.GetTempPath()).TrimEnd('\\', '/');
 		}
 
@@ -84,7 +95,7 @@ namespace ControlPanel.Core
 			{
 				Directory.CreateDirectory(dir);
 				string args = $"release download --repo {Repo} --pattern {ManifestFile} --pattern {SignatureFile} --dir \"{dir}\" --clobber";
-				var (exit, output) = await RunAsync(args);
+				var (exit, output) = await RunAsync(args, null, new[] { ManifestFile, SignatureFile }, dir);
 				if (exit != 0) return Problem(NothingToGet(output) ? NoSignedUpdateText : NoGitHubText);
 
 				string manifestPath = Path.Combine(dir, ManifestFile), sigPath = Path.Combine(dir, SignatureFile);
@@ -121,7 +132,7 @@ namespace ControlPanel.Core
 				TryDeleteDirectory(staging);   // whatever an earlier attempt left
 				Directory.CreateDirectory(staging);
 				string args = $"release download {manifest.Version} --repo {Repo} --pattern \"{manifest.Zip}\" --dir \"{staging}\" --clobber";
-				var (exit, _) = await RunAsync(args);
+				var (exit, _) = await RunAsync(args, manifest.Version, new[] { manifest.Zip }, staging);
 				if (exit != 0) return Failed(staging, NoGitHubText);
 
 				string zip = Path.Combine(staging, manifest.Zip);
@@ -272,11 +283,81 @@ namespace ControlPanel.Core
 		private static string? Text(JsonElement root, string name) =>
 			root.TryGetProperty(name, out JsonElement e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
 
-		private Task<(int Exit, string Output)> RunAsync(string args) => Task.Run(() =>
+		// Runs gh (with the kept token as GH_TOKEN when there is one). A server with no gh but a token gets the
+		// same files straight from GitHub instead. tag: the release (null: the newest), names: the files wanted.
+		private Task<(int Exit, string Output)> RunAsync(string args, string? tag, string[] names, string dir) => Task.Run(async () =>
 		{
-			int exit = _runner.Run(_gh, args, out string output);
-			return (exit, output ?? "");
+			string? token = _token();
+			var env = new Dictionary<string, string>();
+			if (token != null) env["GH_TOKEN"] = token;
+			int exit = _runner.Run(_gh, args, env, out string output);
+			output ??= "";
+			if (exit == -1 && output.EndsWith(ProgramPath.NotFoundSuffix, StringComparison.Ordinal) && token != null)
+				return await FetchOverHttpAsync(token, tag, names, dir);
+			return (exit, output);
 		});
+
+		private const string ApiRoot = "https://api.github.com/repos/" + Repo + "/releases/";
+
+		// GitHub's REST interface: the release's asset list, then each wanted asset by name. Exit 0 when all
+		// were saved into dir. The token only ever goes into the Authorization header of the requests to GitHub's
+		// own address. Messages never carry it.
+		private async Task<(int Exit, string Output)> FetchOverHttpAsync(string token, string? tag, string[] names, string dir)
+		{
+			try
+			{
+				if (tag != null && !IsSafeVersionName(tag)) return (1, "release not found");
+				string url = ApiRoot + (tag == null ? "latest" : "tags/" + Uri.EscapeDataString(tag));
+				using HttpResponseMessage release = await SendAsync(url, "application/vnd.github+json", token);
+				if (release.StatusCode == HttpStatusCode.NotFound) return (1, "release not found");
+				if (!release.IsSuccessStatusCode) return (1, $"GitHub answered {(int)release.StatusCode}.");
+
+				var assets = new Dictionary<string, string>(StringComparer.Ordinal);
+				using (JsonDocument doc = JsonDocument.Parse(await release.Content.ReadAsStringAsync()))
+				{
+					if (doc.RootElement.TryGetProperty("assets", out JsonElement list) && list.ValueKind == JsonValueKind.Array)
+						foreach (JsonElement a in list.EnumerateArray())
+							if (Text(a, "name") is string n && Text(a, "url") is string u) assets[n] = u;
+				}
+				foreach (string name in names)
+					if (Path.GetFileName(name) != name || !assets.ContainsKey(name)) return (1, "no assets match");
+
+				foreach (string name in names)
+				{
+					string next = assets[name];
+					HttpResponseMessage response = await SendAsync(next, "application/octet-stream", token);
+					try
+					{
+						// Asset requests answer with a redirect to the file host: follow it without the token.
+						for (int hops = 0; (int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is Uri to && hops < 5; hops++)
+						{
+							string target = new Uri(new Uri(next), to).AbsoluteUri;
+							response.Dispose();
+							response = await SendAsync(target, "application/octet-stream", null);
+						}
+						if (!response.IsSuccessStatusCode) return (1, $"GitHub answered {(int)response.StatusCode}.");
+						await using FileStream file = File.Create(Path.Combine(dir, name));
+						await response.Content.CopyToAsync(file);
+					}
+					finally { response.Dispose(); }
+				}
+				return (0, "");
+			}
+			catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or JsonException)
+			{
+				return (1, "");
+			}
+		}
+
+		private Task<HttpResponseMessage> SendAsync(string url, string accept, string? token)
+		{
+			var request = new HttpRequestMessage(HttpMethod.Get, url);
+			request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(accept));
+			request.Headers.UserAgent.ParseAdd("BattlebornRebornControlPanel");
+			request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
+			if (token != null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+			return _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+		}
 
 		// gh reached GitHub but the release has nothing to download (an old-style release, or none at all).
 		private static bool NothingToGet(string output) =>

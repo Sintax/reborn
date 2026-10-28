@@ -23,9 +23,12 @@ namespace ControlPanel.Tests
 		public int Players { get; set; }
 
 		public byte[]? ManifestBytes { get; set; }
+		public string PublishedVersion { get; private set; } = "";
 		public string? Sig { get; set; }
 		public byte[]? Zip { get; set; }
 		public int GhExit { get; set; }
+		public string? Token { get; set; }   // the kept GitHub token (null: none); the real file is never read
+		public FakeGitHub GitHub { get; } = new();
 		public string GhOutput { get; set; } = "";
 
 		public UpdateRig()
@@ -33,7 +36,8 @@ namespace ControlPanel.Tests
 			TempDir = Path.Combine(T.Root, "temp");
 			Directory.CreateDirectory(TempDir);
 			T.App.ExePath = Path.Combine(T.Win64, "ControlPanel", "ControlPanel.exe");
-			Service = new UpdateService(T.Paths, T.Runner, PublicKeyOf(Key), TempDir);
+			Service = new UpdateService(T.Paths, T.Runner, PublicKeyOf(Key), TempDir, http: new HttpClient(GitHub), token: () => Token);
+			GitHub.Rig = this;
 			Vm = new UpdatesViewModel(Service, T.Dialogs, T.App, () => Players, Clock);
 			T.Runner.OnRun = Gh;
 		}
@@ -47,6 +51,7 @@ namespace ControlPanel.Tests
 			string? sha256 = null, long? size = null)
 		{
 			Zip = zip ?? MakeZip();
+			PublishedVersion = version;
 			string json = JsonSerializer.Serialize(new
 			{
 				version,
@@ -107,6 +112,47 @@ namespace ControlPanel.Tests
 		{
 			Key.Dispose();
 			T.Dispose();
+		}
+	}
+
+	// GitHub's web interface, pretended: the newest release and the one tagged with the published version,
+	// each with update.json, its signature and the zip. Every request is kept (the token as sent).
+	public sealed class FakeGitHub : HttpMessageHandler
+	{
+		public sealed record Seen(string Url, string? Accept, string? Authorization);
+
+		public UpdateRig? Rig { get; set; }
+		public List<Seen> Requests { get; } = new();
+		public bool Down { get; set; }
+		public bool NoRelease { get; set; }
+
+		protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel)
+		{
+			string url = request.RequestUri!.AbsoluteUri;
+			Requests.Add(new Seen(url, request.Headers.Accept.ToString(), request.Headers.Authorization?.ToString()));
+			if (Down) throw new HttpRequestException("offline");
+			if (NoRelease) return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+			const string root = "https://api.github.com/repos/Sintax/reborn-builds/releases/";
+			if (url == root + "latest" || url.StartsWith(root + "tags/"))
+			{
+				string version = Rig!.PublishedVersion;
+				string Asset(string name, int id) => $"{{\"name\":\"{name}\",\"url\":\"{root}assets/{id}\"}}";
+				string json = "{\"assets\":[" + Asset("update.json", 1) + "," + Asset("update.json.sig", 2) + "," + Asset($"Reborn-Server-Update-{version}.zip", 3) + "]}";
+				return Task.FromResult(new HttpResponseMessage { Content = new StringContent(json) });
+			}
+			// Assets answer with a redirect to the file host, as GitHub does.
+			if (url.StartsWith(root + "assets/"))
+			{
+				var redirect = new HttpResponseMessage(System.Net.HttpStatusCode.Found);
+				redirect.Headers.Location = new Uri("https://files.example.test/" + url[(root.Length + 7)..]);
+				return Task.FromResult(redirect);
+			}
+			if (url.StartsWith("https://files.example.test/"))
+			{
+				byte[]? body = url.EndsWith("/1") ? Rig!.ManifestBytes : url.EndsWith("/2") ? System.Text.Encoding.UTF8.GetBytes(Rig!.Sig ?? "") : Rig!.Zip;
+				return Task.FromResult(new HttpResponseMessage { Content = new ByteArrayContent(body ?? Array.Empty<byte>()) });
+			}
+			return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
 		}
 	}
 
@@ -186,6 +232,95 @@ namespace ControlPanel.Tests
 			r.Publish("1.0.4", signer: other);
 			await r.Vm.CheckCommand.ExecuteAsync(null);
 			Assert.Null(r.Vm.Available);
+		}
+
+		private const string DummyToken = "ghp_DUMMY_not_a_real_token_0123456789";
+
+		[Fact]
+		public async Task check_uses_http_when_gh_is_missing_and_a_token_exists()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			r.Token = DummyToken;
+			r.T.Runner.OnRun = (file, _) => (-1, file + ProgramPath.NotFoundSuffix);   // gh is not installed
+
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+
+			Assert.Equal("1.0.3", r.Vm.Available);
+			Assert.Equal(UpdateService.ReadyText, r.Vm.Status);
+			Assert.Equal("https://api.github.com/repos/Sintax/reborn-builds/releases/latest", r.GitHub.Requests[0].Url);
+			Assert.Equal("Bearer " + DummyToken, r.GitHub.Requests[0].Authorization);
+			// The asset request carries the token and asks for the file itself; the file host never gets the token.
+			var asset = r.GitHub.Requests.First(x => x.Url.EndsWith("/assets/1"));
+			Assert.Equal("application/octet-stream", asset.Accept);
+			Assert.Equal("Bearer " + DummyToken, asset.Authorization);
+			Assert.All(r.GitHub.Requests.Where(x => x.Url.StartsWith("https://files.example.test/")), x => Assert.Null(x.Authorization));
+			// The token never reached a command line.
+			Assert.DoesNotContain(r.T.Runner.Ran, line => line.Contains(DummyToken));
+			Assert.Empty(Directory.GetFileSystemEntries(r.TempDir));
+
+			// The download comes the same way, from the release with that tag.
+			await r.Vm.UpdateNowCommand.ExecuteAsync(null);
+			Assert.Contains(r.GitHub.Requests, x => x.Url == "https://api.github.com/repos/Sintax/reborn-builds/releases/tags/1.0.3");
+			Assert.Contains(r.GitHub.Requests, x => x.Url.EndsWith("/assets/3"));
+			Assert.Contains(r.T.App.ExePath, r.T.Runner.StartedWith.Select(s => s.Args).FirstOrDefault(a => a.Contains("--panel")) ?? "");
+		}
+
+		[Fact]
+		public async Task check_sets_GH_TOKEN_for_gh()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			r.Token = DummyToken;
+
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+
+			Assert.Equal("1.0.3", r.Vm.Available);
+			Assert.Empty(r.GitHub.Requests);   // gh was there: the web interface was not needed
+			var env = Assert.Single(r.T.Runner.Environments);
+			Assert.Equal(DummyToken, env["GH_TOKEN"]);
+			Assert.DoesNotContain(r.T.Runner.Ran, line => line.Contains(DummyToken));
+
+			// No token: gh runs as it always did, with nothing added.
+			r.Token = null;
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Empty(r.T.Runner.Environments.Last());
+		}
+
+		[Fact]
+		public async Task no_gh_no_token_says_cant_reach()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			r.T.Runner.OnRun = (file, _) => (-1, file + ProgramPath.NotFoundSuffix);
+
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+
+			Assert.Equal(UpdateService.NoGitHubText, r.Vm.Status);
+			Assert.Empty(r.GitHub.Requests);
+		}
+
+		[Fact]
+		public async Task http_failures_say_cant_reach_or_nothing_signed_and_never_show_the_token()
+		{
+			using var r = new UpdateRig();
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			r.Token = DummyToken;
+			r.T.Runner.OnRun = (file, _) => (-1, file + ProgramPath.NotFoundSuffix);
+
+			r.GitHub.Down = true;
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal(UpdateService.NoGitHubText, r.Vm.Status);
+
+			r.GitHub.Down = false;
+			r.GitHub.NoRelease = true;
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal(UpdateService.NoSignedUpdateText, r.Vm.Status);
+			Assert.DoesNotContain(DummyToken, r.Vm.Status);
 		}
 
 		[Fact]

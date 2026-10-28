@@ -14,6 +14,13 @@ namespace ControlPanel
 		{
 			base.OnStartup(e);
 
+			// The installer's hand-over of the GitHub token: no window, nothing shown.
+			if (GitHubToken.SwitchFile(e.Args) is string tokenFile)
+			{
+				Shutdown(GitHubToken.SaveFromFile(tokenFile));
+				return;
+			}
+
 			// Nothing that goes wrong may close the panel: say it plainly and carry on.
 			DispatcherUnhandledException += OnUnhandled;
 			TaskScheduler.UnobservedTaskException += (_, args) => args.SetObserved();

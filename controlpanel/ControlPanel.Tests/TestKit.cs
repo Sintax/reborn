@@ -140,10 +140,15 @@ namespace ControlPanel.Tests
 		public List<string> Ran { get; } = new();
 		public Func<string, string, (int Exit, string Output)>? OnRun { get; set; }
 
-		public int Run(string file, string args, out string output)
+		// The environment every Run was given (empty when none).
+		public List<IReadOnlyDictionary<string, string>> Environments { get; } = new();
+
+		public int Run(string file, string args, out string output) => Run(file, args, new Dictionary<string, string>(), out output);
+
+		public int Run(string file, string args, IReadOnlyDictionary<string, string> environment, out string output)
 		{
 			MaybeThrow();
-			lock (Ran) Ran.Add(file + " " + args);
+			lock (Ran) { Ran.Add(file + " " + args); Environments.Add(environment); }
 			(int exit, output) = OnRun?.Invoke(file, args) ?? (-1, "");
 			return exit;
 		}
@@ -242,7 +247,7 @@ namespace ControlPanel.Tests
 
 		public MainViewModel Main(TimeProvider? clock = null, UpdateService? updates = null) =>
 			new(Client(), Paths, Clipboard, Runner, Dialogs, Memory, App, clock,
-				updates ?? new UpdateService(Paths, Runner, tempDir: Path.Combine(Root, "temp")));
+				updates ?? new UpdateService(Paths, Runner, tempDir: Path.Combine(Root, "temp"), token: () => null));
 
 		public void Dispose()
 		{
