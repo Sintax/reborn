@@ -34,6 +34,8 @@
 ;   /DRYRUN               firewall, runtime and scheduled-task commands are written to the log
 ;                         instead of run, and no desktop shortcut is made (the uninstaller too)
 ;   /FAILSTEP=firewall|vcredist|autostart   that step fails without running anything
+;   /FAILSTEP=crash-<step>  that step (firewall, vcredist, autostart, shortcut, token, trim) stops with an
+;                         error before running anything; the later steps must still run
 ;   /RUNTIMECHECK=<file>  decide "runtime missing" by this file instead of System32\msvcp110.dll
 ;   /FIREWALLSHOW=<file>  netsh's answer about the current game-server rule, from a file (none: no rule)
 ;   /GHTOKENFILE=<file>   the GitHub token comes from this file instead of the page (which is then skipped);
@@ -145,6 +147,8 @@ const
   MsgFailRuntime = 'The Visual C++ 2012 runtime did not install. Run Binaries\Win64\Redist\vcredist_x64.exe.';
   MsgFailAutostart = 'Matchmaking will not start by itself. Start it with StartMatchmaking.bat.';
   MsgFailToken = 'The GitHub token was not saved. Run Setup again to add it.';
+  MsgFailShortcut = 'The desktop shortcut was not made. Start the panel from Binaries\Win64\ControlPanel\ControlPanel.exe.';
+  MsgFailParts = 'Removing the free-space parts stopped part-way; some of their files may still be there.';
   MsgTokenTitle = 'GitHub access';
   MsgTokenDescription = 'Reborn updates come from a private page on GitHub.';
   MsgTokenLabel = 'Read-only token for Sintax/reborn-builds (you can leave this empty and add it later)';
@@ -597,6 +601,14 @@ begin
     Log('Step ' + Step + ' forced to fail (/FAILSTEP); nothing was run');
 end;
 
+{ /FAILSTEP=crash-<step>: a test switch. That step stops with an error (as a failing Windows call
+  would) before it runs anything. }
+procedure CrashIfForced(const Step: String);
+begin
+  if FailStepIs('crash-' + Step) then
+    RaiseException('step ' + Step + ' forced to stop with an error (/FAILSTEP)');
+end;
+
 { Runs Exe with Params and waits; False when it could not start. With Dry, it is only logged. }
 function RunCommand(const Exe, Params: String; const Dry: Boolean; var Code: Integer): Boolean;
 begin
@@ -783,6 +795,61 @@ begin
   end;
 end;
 
+function AllDigits(const S: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := (S <> '') and (Length(S) <= 5);
+  for I := 1 to Length(S) do
+    if (S[I] < '0') or (S[I] > '9') then
+      Result := False;
+end;
+
+{ True when every entry of Raw (as AddPortText keeps it) is a plain port or range netsh takes back,
+  such as a wide range "7777-9999". False for words like "Any" or "RPC": netsh would refuse them. }
+function RawPortsWellFormed(const Raw: String): Boolean;
+var
+  Text, Item: String;
+  P, D, A, B: Integer;
+begin
+  Result := True;
+  Text := Raw + ',';
+  while Text <> '' do
+  begin
+    P := Pos(',', Text);
+    Item := Trim(Copy(Text, 1, P - 1));
+    Text := Copy(Text, P + 1, Length(Text));
+    if Item = '' then
+      Continue;
+    D := Pos('-', Item);
+    if D > 0 then
+    begin
+      if not (AllDigits(Trim(Copy(Item, 1, D - 1))) and AllDigits(Trim(Copy(Item, D + 1, Length(Item))))) then
+      begin
+        Result := False;
+        Exit;
+      end;
+      A := StrToIntDef(Trim(Copy(Item, 1, D - 1)), -1);
+      B := StrToIntDef(Trim(Copy(Item, D + 1, Length(Item))), -1);
+    end
+    else
+    begin
+      if not AllDigits(Item) then
+      begin
+        Result := False;
+        Exit;
+      end;
+      A := StrToIntDef(Item, -1);
+      B := A;
+    end;
+    if not ((A >= 1) and (B >= A) and (B <= 65535)) then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
 function PortListText(const Ports: TPortList; const Raw: String): String;
 var
   I: Integer;
@@ -821,12 +888,20 @@ begin
   Result := False;
   if ForcedToFail('firewall') then
     Exit;
+  CrashIfForced('firewall');
   Raw := '';
   SetArrayLength(Ports, 0);
   ReadServerRule(Found, Readable, Ports, Raw);
   if Found and not Readable then
   begin
     Log('The game servers'' firewall rule is there but its ports could not be read; it is kept as it is');
+    Result := True;
+  end
+  else if Found and not RawPortsWellFormed(Raw) then
+  begin
+    { netsh would refuse these ports when the rule is added again, after the old one was deleted:
+      the server would be left with no rule at all. }
+    Log('The game servers'' firewall rule has ports Setup cannot write back (' + Raw + '); it is kept as it is');
     Result := True;
   end
   else
@@ -867,6 +942,7 @@ begin
   Result := False;
   if ForcedToFail('vcredist') then
     Exit;
+  CrashIfForced('vcredist');
   if not RunCommand(Win64 + '\Redist\vcredist_x64.exe', '/install /quiet /norestart', DryRun, Code) then
     Exit;
   { 1638: a newer one is there already; 3010: it works after a restart. }
@@ -893,6 +969,7 @@ begin
   Result := False;
   if ForcedToFail('autostart') then
     Exit;
+  CrashIfForced('autostart');
   Result := RunCommand(SchtasksExe, '/Create /TN "' + TaskName + '" /TR "\"' + Win64 + '\StartMatchmaking.bat\"" /SC ONLOGON /RU "' +
     InstallingUser + '" /IT /RL HIGHEST /F', DryRun, Code) and (Code = 0);
 end;
@@ -1161,11 +1238,22 @@ end;
 procedure RemoveChosenParts(const GameDir, Win64: String);
 var
   Ids, Globs: TArrayOfString;
-  I, Count: Integer;
+  Picked: TArrayOfBoolean;
+  I, Count, Chosen: Integer;
 begin
+  CrashIfForced('trim');
   GetParts(Ids, Globs);
+  SetArrayLength(Picked, GetArrayLength(Ids));
+  Chosen := 0;
   for I := 0 to GetArrayLength(Ids) - 1 do
-    if PartChosen(Ids[I]) then
+  begin
+    Picked[I] := PartChosen(Ids[I]);
+    if Picked[I] then
+      Chosen := Chosen + 1;
+  end;
+  Log(Format('Removing game files to save space: %d of %d parts chosen', [Chosen, GetArrayLength(Ids)]));
+  for I := 0 to GetArrayLength(Ids) - 1 do
+    if Picked[I] then
     begin
       Count := 0;
       RemoveMatching(RemoveBackslashUnlessRoot(GameDir), '', Globs[I], Count);
@@ -1230,6 +1318,7 @@ begin
   Panel := Win64 + '\ControlPanel\ControlPanel.exe';
   Ok := False;
   try
+    CrashIfForced('token');
     if ForcedToFail('token') then
       Ok := False
     else if not SaveStringToFile(Tmp, Token, False) then
@@ -1336,10 +1425,26 @@ end;
 
 <event('CurPageChanged')>
 procedure ShowProblems(CurPageID: Integer);
+var
+  OldHeight, Grown: Integer;
 begin
-  { Added under Setup's own text, so "restart to finish" (when the runtime needs it) stays. }
+  { Added under Setup's own text, so "restart to finish" (when the runtime needs it) stays first.
+    Setup sized the label for its own text and put the restart choice right under it: the label
+    grows to fit the new lines, and whatever sits under it moves down by as much. }
   if (CurPageID = wpFinished) and (Problems <> '') then
+  begin
+    OldHeight := WizardForm.FinishedLabel.Height;
     WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + MsgFinishedProblems + #13#10 + Problems;
+    WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
+    Grown := WizardForm.FinishedLabel.Height - OldHeight;
+    if Grown > 0 then
+    begin
+      WizardForm.YesRadio.Top := WizardForm.YesRadio.Top + Grown;
+      WizardForm.NoRadio.Top := WizardForm.NoRadio.Top + Grown;
+      WizardForm.RunList.Top := WizardForm.RunList.Top + Grown;
+    end;
+    Log(Format('Finished page: the problem list was added; the text grew by %d pixels', [Grown]));
+  end;
 end;
 
 function NeedRestart(): Boolean;
@@ -1347,31 +1452,77 @@ begin
   Result := RestartWanted;
 end;
 
-{ After the files: the chosen options. A failed one is noted for the last page; Setup goes on. }
+{ The desktop shortcut is made by Setup itself (the Icons section, before the options run); this
+  only checks that it is there. }
+function ShortcutThere: Boolean;
+begin
+  CrashIfForced('shortcut');
+  Result := True;
+  if DryRun then
+  begin
+    Log('Dry run (/DRYRUN): the desktop shortcut is not checked');
+    Exit;
+  end;
+  Result := FileExists(ExpandConstant('{userdesktop}\Reborn Control Panel.lnk'));
+  if not Result then
+    Log('The desktop shortcut is not there: ' + ExpandConstant('{userdesktop}\Reborn Control Panel.lnk'));
+end;
+
+{ A step that stopped with an error: noted for the last page with Windows' reason. }
+procedure AddCrashProblem(const Msg: String);
+begin
+  AddProblem(Msg + ' (' + GetExceptionMessage + ')');
+end;
+
+{ After the files: the chosen options. A failed one is noted for the last page; Setup goes on.
+  Each step runs on its own: one that stops with an error never keeps the later ones from running. }
 procedure RunOptions(const GameDir, Win64: String);
 begin
   Log('Chosen options: ' + WizardSelectedTasks(False));
   if DryRun then
     Log('Dry run (/DRYRUN): firewall, runtime and scheduled-task commands are only logged');
   if WizardIsTaskSelected('firewall') then
-  begin
-    if not FailStepIs('firewall') then
-      NoteMade(Win64, 'firewall');
-    if not AddFirewallRules(Win64) then
-      AddProblem(MsgFailFirewall);
-  end;
+    try
+      if not FailStepIs('firewall') then
+        NoteMade(Win64, 'firewall');
+      if not AddFirewallRules(Win64) then
+        AddProblem(MsgFailFirewall);
+    except
+      AddCrashProblem(MsgFailFirewall);
+    end;
   if WizardIsTaskSelected('vcredist') then
-    if not InstallRuntime(Win64) then
-      AddProblem(MsgFailRuntime);
+    try
+      if not InstallRuntime(Win64) then
+        AddProblem(MsgFailRuntime);
+    except
+      AddCrashProblem(MsgFailRuntime);
+    end;
   if WizardIsTaskSelected('autostart') then
-  begin
-    if not FailStepIs('autostart') then
-      NoteMade(Win64, 'autostart');
-    if not AddSignInTask(Win64) then
-      AddProblem(MsgFailAutostart);
+    try
+      if not FailStepIs('autostart') then
+        NoteMade(Win64, 'autostart');
+      if not AddSignInTask(Win64) then
+        AddProblem(MsgFailAutostart);
+    except
+      AddCrashProblem(MsgFailAutostart);
+    end;
+  if WizardIsTaskSelected('shortcut') then
+    try
+      if not ShortcutThere then
+        AddProblem(MsgFailShortcut);
+    except
+      AddCrashProblem(MsgFailShortcut);
+    end;
+  try
+    SaveGitHubToken(Win64);
+  except
+    AddCrashProblem(MsgFailToken);
   end;
-  SaveGitHubToken(Win64);
-  RemoveChosenParts(GameDir, Win64);
+  try
+    RemoveChosenParts(GameDir, Win64);
+  except
+    AddCrashProblem(MsgFailParts);
+  end;
 end;
 
 { ---------------------------------------------------------------- Setup }
@@ -1533,6 +1684,8 @@ begin
     end;
     DelTree(Win64 + '\ControlPanel', True, True, True);
     DelTree(Win64 + '\RebornVersions', True, True, True);
+    { Matchmaking's per-server copies of the Steam loader (one folder per game server it ran). }
+    DelTree(Win64 + '\rb_ids', True, True, True);
     DeleteFile(Win64 + '\Serverborn.exe');
     DeleteFile(Win64 + '\' + DeployedFile);
   end

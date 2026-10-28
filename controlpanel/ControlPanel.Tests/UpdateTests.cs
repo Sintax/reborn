@@ -31,12 +31,14 @@ namespace ControlPanel.Tests
 		public FakeGitHub GitHub { get; } = new();
 		public string GhOutput { get; set; } = "";
 
-		public UpdateRig()
+		// httpLimit, httpStall: the web route's limits (the real ones unless a test wants short ones).
+		public UpdateRig(TimeSpan? httpLimit = null, TimeSpan? httpStall = null)
 		{
 			TempDir = Path.Combine(T.Root, "temp");
 			Directory.CreateDirectory(TempDir);
 			T.App.ExePath = Path.Combine(T.Win64, "ControlPanel", "ControlPanel.exe");
-			Service = new UpdateService(T.Paths, T.Runner, PublicKeyOf(Key), TempDir, http: new HttpClient(GitHub), token: () => Token);
+			Service = new UpdateService(T.Paths, T.Runner, PublicKeyOf(Key), TempDir, http: new HttpClient(GitHub) { Timeout = Timeout.InfiniteTimeSpan },
+				token: () => Token, httpLimit: httpLimit, httpStall: httpStall);
 			GitHub.Rig = this;
 			Vm = new UpdatesViewModel(Service, T.Dialogs, T.App, () => Players, Clock);
 			T.Runner.OnRun = Gh;
@@ -125,11 +127,21 @@ namespace ControlPanel.Tests
 		public List<Seen> Requests { get; } = new();
 		public bool Down { get; set; }
 		public bool NoRelease { get; set; }
+		public bool NeverAnswers { get; set; }         // the connection opens, but no answer ever comes
+		public SlowBody.Kind? Files { get; set; }      // the file host's bodies stall or trickle (null: normal)
 
-		protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel)
+		protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel)
 		{
 			string url = request.RequestUri!.AbsoluteUri;
 			Requests.Add(new Seen(url, request.Headers.Accept.ToString(), request.Headers.Authorization?.ToString()));
+			if (NeverAnswers) await Task.Delay(Timeout.Infinite, cancel);
+			if (Files is SlowBody.Kind kind && url.StartsWith("https://files.example.test/"))
+				return new HttpResponseMessage { Content = new StreamContent(new SlowBody(kind)) };
+			return await Answer(url);
+		}
+
+		private Task<HttpResponseMessage> Answer(string url)
+		{
 			if (Down) throw new HttpRequestException("offline");
 			if (NoRelease) return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
 			const string root = "https://api.github.com/repos/Sintax/reborn-builds/releases/";
@@ -154,6 +166,39 @@ namespace ControlPanel.Tests
 			}
 			return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
 		}
+	}
+
+	// A download body that never finishes: Stalls sends one byte and then nothing; Trickles sends one byte
+	// every 20 ms forever (always moving, never done).
+	public sealed class SlowBody : Stream
+	{
+		public enum Kind { Stalls, Trickles }
+
+		private readonly Kind _kind;
+		private bool _sentFirst;
+
+		public SlowBody(Kind kind) => _kind = kind;
+
+		public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancel = default)
+		{
+			if (!_sentFirst) _sentFirst = true;
+			else await Task.Delay(_kind == Kind.Stalls ? Timeout.Infinite : 20, cancel);
+			buffer.Span[0] = (byte)'x';
+			return 1;
+		}
+
+		public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancel) =>
+			ReadAsync(buffer.AsMemory(offset, count), cancel).AsTask();
+		public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+		public override bool CanRead => true;
+		public override bool CanSeek => false;
+		public override bool CanWrite => false;
+		public override long Length => throw new NotSupportedException();
+		public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+		public override void Flush() { }
+		public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+		public override void SetLength(long value) => throw new NotSupportedException();
+		public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 	}
 
 	public class UpdateTests
@@ -321,6 +366,65 @@ namespace ControlPanel.Tests
 			await r.Vm.CheckCommand.ExecuteAsync(null);
 			Assert.Equal(UpdateService.NoSignedUpdateText, r.Vm.Status);
 			Assert.DoesNotContain(DummyToken, r.Vm.Status);
+		}
+
+		private static UpdateRig WebOnly(TimeSpan httpLimit, TimeSpan httpStall)
+		{
+			var r = new UpdateRig(httpLimit, httpStall);
+			r.Deployed("1.0.2\n");
+			r.Publish("1.0.3");
+			r.Token = DummyToken;
+			r.T.Runner.OnRun = (file, _) => (-1, file + ProgramPath.NotFoundSuffix);   // gh is not installed
+			return r;
+		}
+
+		[Fact]
+		public async Task http_download_that_stops_moving_times_out()
+		{
+			using var r = WebOnly(TimeSpan.FromMinutes(5), TimeSpan.FromMilliseconds(300));
+
+			// A file whose bytes stop coming.
+			r.GitHub.Files = SlowBody.Kind.Stalls;
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal(UpdateService.TimedOutText, r.Vm.Status);
+			Assert.Null(r.Vm.Available);
+			Assert.False(r.Vm.Busy);
+			Assert.Empty(Directory.GetFileSystemEntries(r.TempDir));   // the half file is gone
+
+			// GitHub never answers at all.
+			r.GitHub.Files = null;
+			r.GitHub.NeverAnswers = true;
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal(UpdateService.TimedOutText, r.Vm.Status);
+
+			// The same while downloading the zip: staging is cleaned up and nothing is started.
+			r.GitHub.NeverAnswers = false;
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal("1.0.3", r.Vm.Available);
+			r.GitHub.Files = SlowBody.Kind.Stalls;
+			await r.Vm.UpdateNowCommand.ExecuteAsync(null);
+			Assert.Equal(UpdateService.TimedOutText, r.Vm.Status);
+			Assert.False(Directory.Exists(r.StagingDir));
+			Assert.Empty(r.T.Runner.StartedWith);
+			Assert.Equal(0, r.T.App.Closed);
+			Assert.DoesNotContain(DummyToken, r.Vm.Status);
+		}
+
+		[Fact]
+		public async Task http_download_that_never_ends_hits_the_overall_limit()
+		{
+			// Bytes keep coming (so the no-progress limit never trips), but the whole thing takes too long.
+			using var r = WebOnly(TimeSpan.FromMilliseconds(500), TimeSpan.FromMinutes(5));
+			r.GitHub.Files = SlowBody.Kind.Trickles;
+			var watch = System.Diagnostics.Stopwatch.StartNew();
+			await r.Vm.CheckCommand.ExecuteAsync(null);
+			Assert.Equal(UpdateService.TimedOutText, r.Vm.Status);
+			Assert.True(watch.Elapsed < TimeSpan.FromSeconds(30));
+			Assert.Empty(Directory.GetFileSystemEntries(r.TempDir));
+
+			// The real limits match gh's route.
+			Assert.Equal(TimeSpan.FromMinutes(30), UpdateService.HttpLimit);
+			Assert.True(UpdateService.HttpStallLimit > TimeSpan.Zero && UpdateService.HttpStallLimit < UpdateService.HttpLimit);
 		}
 
 		[Fact]

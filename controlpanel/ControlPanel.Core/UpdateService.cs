@@ -45,6 +45,13 @@ namespace ControlPanel.Core
 		public const string ReadyText = "It's signed and ready. Update now installs it and restarts the server.";
 		public const string MismatchText = "The downloaded file isn't the one the signed update describes, so it was not used. Nothing was changed.";
 		public const string NoServerFilesText = "The downloaded update has no server files in it, so it was not used. Nothing was changed.";
+		public const string TimedOutText = "The download from GitHub took too long or stopped moving, so it was not used. Nothing was changed.";
+
+		// The web route's limits (gh's route has the same 30 minutes, in the process runner): all of it, and
+		// how long the connection may go without a single byte arriving.
+		public static readonly TimeSpan HttpLimit = TimeSpan.FromMinutes(30);
+		public static readonly TimeSpan HttpStallLimit = TimeSpan.FromMinutes(2);
+		private const string TimedOutOutput = "timed out (web download)";
 
 		private readonly PanelPaths _paths;
 		private readonly IProcessRunner _runner;
@@ -52,15 +59,21 @@ namespace ControlPanel.Core
 		private readonly string _gh;
 		private readonly HttpClient _http;
 		private readonly Func<string?> _token;
+		private readonly TimeSpan _httpLimit;
+		private readonly TimeSpan _httpStall;
 
 		// Redirects are followed by hand: the token goes to GitHub, never on to the file host it points at.
 		private static readonly Lazy<HttpClient> DefaultHttp = new(() =>
-			new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(30) });
+			new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan });   // the limits are HttpLimit and HttpStallLimit
 
 		// publicKey: the release signing key (UpdateKey.PublicKey unless a test gives its own).
 		// tempDir: where the check downloads to and the updater is copied to (%TEMP% unless given).
-		public UpdateService(PanelPaths paths, IProcessRunner runner, string? publicKey = null, string? tempDir = null, string gh = "gh", HttpClient? http = null, Func<string?>? token = null)
+		// httpLimit, httpStall: the web route's limits (HttpLimit and HttpStallLimit unless a test gives its own).
+		public UpdateService(PanelPaths paths, IProcessRunner runner, string? publicKey = null, string? tempDir = null, string gh = "gh", HttpClient? http = null, Func<string?>? token = null,
+			TimeSpan? httpLimit = null, TimeSpan? httpStall = null)
 		{
+			_httpLimit = httpLimit ?? HttpLimit;
+			_httpStall = httpStall ?? HttpStallLimit;
 			_paths = paths;
 			_runner = runner;
 			_publicKey = publicKey ?? UpdateKey.PublicKey;
@@ -96,7 +109,7 @@ namespace ControlPanel.Core
 				Directory.CreateDirectory(dir);
 				string args = $"release download --repo {Repo} --pattern {ManifestFile} --pattern {SignatureFile} --dir \"{dir}\" --clobber";
 				var (exit, output) = await RunAsync(args, null, new[] { ManifestFile, SignatureFile }, dir);
-				if (exit != 0) return Problem(NothingToGet(output) ? NoSignedUpdateText : NoGitHubText);
+				if (exit != 0) return Problem(TimedOut(output) ? TimedOutText : NothingToGet(output) ? NoSignedUpdateText : NoGitHubText);
 
 				string manifestPath = Path.Combine(dir, ManifestFile), sigPath = Path.Combine(dir, SignatureFile);
 				if (!File.Exists(manifestPath) || !File.Exists(sigPath)) return Problem(NoSignedUpdateText);
@@ -132,8 +145,8 @@ namespace ControlPanel.Core
 				TryDeleteDirectory(staging);   // whatever an earlier attempt left
 				Directory.CreateDirectory(staging);
 				string args = $"release download {manifest.Version} --repo {Repo} --pattern \"{manifest.Zip}\" --dir \"{staging}\" --clobber";
-				var (exit, _) = await RunAsync(args, manifest.Version, new[] { manifest.Zip }, staging);
-				if (exit != 0) return Failed(staging, NoGitHubText);
+				var (exit, output) = await RunAsync(args, manifest.Version, new[] { manifest.Zip }, staging);
+				if (exit != 0) return Failed(staging, TimedOut(output) ? TimedOutText : NoGitHubText);
 
 				string zip = Path.Combine(staging, manifest.Zip);
 				if (!File.Exists(zip) || new FileInfo(zip).Length != manifest.Size) return Failed(staging, MismatchText);
@@ -301,19 +314,27 @@ namespace ControlPanel.Core
 
 		// GitHub's REST interface: the release's asset list, then each wanted asset by name. Exit 0 when all
 		// were saved into dir. The token only ever goes into the Authorization header of the requests to GitHub's
-		// own address. Messages never carry it.
+		// own address. Messages never carry it. It all stops after _httpLimit, or when nothing arrives for
+		// _httpStall (waiting for an answer or for the next bytes of a file).
 		private async Task<(int Exit, string Output)> FetchOverHttpAsync(string token, string? tag, string[] names, string dir)
 		{
+			using var overall = new CancellationTokenSource(_httpLimit);
+			using var stall = CancellationTokenSource.CreateLinkedTokenSource(overall.Token);
+			CancellationToken Moving()
+			{
+				stall.CancelAfter(_httpStall);   // starts the no-progress clock again
+				return stall.Token;
+			}
 			try
 			{
 				if (tag != null && !IsSafeVersionName(tag)) return (1, "release not found");
 				string url = ApiRoot + (tag == null ? "latest" : "tags/" + Uri.EscapeDataString(tag));
-				using HttpResponseMessage release = await SendAsync(url, "application/vnd.github+json", token);
+				using HttpResponseMessage release = await SendAsync(url, "application/vnd.github+json", token, Moving());
 				if (release.StatusCode == HttpStatusCode.NotFound) return (1, "release not found");
 				if (!release.IsSuccessStatusCode) return (1, $"GitHub answered {(int)release.StatusCode}.");
 
 				var assets = new Dictionary<string, string>(StringComparer.Ordinal);
-				using (JsonDocument doc = JsonDocument.Parse(await release.Content.ReadAsStringAsync()))
+				using (JsonDocument doc = JsonDocument.Parse(await release.Content.ReadAsStringAsync(Moving())))
 				{
 					if (doc.RootElement.TryGetProperty("assets", out JsonElement list) && list.ValueKind == JsonValueKind.Array)
 						foreach (JsonElement a in list.EnumerateArray())
@@ -325,7 +346,7 @@ namespace ControlPanel.Core
 				foreach (string name in names)
 				{
 					string next = assets[name];
-					HttpResponseMessage response = await SendAsync(next, "application/octet-stream", token);
+					HttpResponseMessage response = await SendAsync(next, "application/octet-stream", token, Moving());
 					try
 					{
 						// Asset requests answer with a redirect to the file host: follow it without the token.
@@ -333,36 +354,45 @@ namespace ControlPanel.Core
 						{
 							string target = new Uri(new Uri(next), to).AbsoluteUri;
 							response.Dispose();
-							response = await SendAsync(target, "application/octet-stream", null);
+							response = await SendAsync(target, "application/octet-stream", null, Moving());
 						}
 						if (!response.IsSuccessStatusCode) return (1, $"GitHub answered {(int)response.StatusCode}.");
 						await using FileStream file = File.Create(Path.Combine(dir, name));
-						await response.Content.CopyToAsync(file);
+						await using Stream body = await response.Content.ReadAsStreamAsync(Moving());
+						byte[] buffer = new byte[81920];
+						for (int n; (n = await body.ReadAsync(buffer, Moving())) > 0;)
+							await file.WriteAsync(buffer.AsMemory(0, n), overall.Token);
 					}
 					finally { response.Dispose(); }
 				}
 				return (0, "");
 			}
-			catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or JsonException)
+			catch (OperationCanceledException)
+			{
+				return (1, TimedOutOutput);   // one of the limits above (nothing else here is ever cancelled)
+			}
+			catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or JsonException)
 			{
 				return (1, "");
 			}
 		}
 
-		private Task<HttpResponseMessage> SendAsync(string url, string accept, string? token)
+		private Task<HttpResponseMessage> SendAsync(string url, string accept, string? token, CancellationToken cancel)
 		{
 			var request = new HttpRequestMessage(HttpMethod.Get, url);
 			request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(accept));
 			request.Headers.UserAgent.ParseAdd("BattlebornRebornControlPanel");
 			request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
 			if (token != null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-			return _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+			return _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
 		}
 
 		// gh reached GitHub but the release has nothing to download (an old-style release, or none at all).
 		private static bool NothingToGet(string output) =>
 			output.Contains("no assets match", StringComparison.OrdinalIgnoreCase)
 			|| output.Contains("release not found", StringComparison.OrdinalIgnoreCase);
+
+		private static bool TimedOut(string output) => output == TimedOutOutput;
 
 		private static UpdateCheck Problem(string message) => new(CheckOutcome.Problem, null, message);
 
