@@ -9,12 +9,14 @@ In order, it:
      dxgi, matchmaking (with .NET inside), the Control Panel, the updater and the player installer zip;
   4. makes the player update (the two DLLs plus a signed list of them) that matchmaking offers players;
   5. makes the server update zip Reborn-Server-Update-1.0.N.zip (everything under Win64/);
-  6. writes update.json, which describes that zip, and signs it;
-  7. uploads it all as release 1.0.N, marked latest.
+  6. builds the server installer Reborn-Server-Setup-1.0.N.exe (needs Inno Setup and the Visual C++
+     runtime file; both are checked in step 1, before anything is built);
+  7. writes update.json, which describes the server zip, and signs it;
+  8. uploads it all as release 1.0.N, marked latest.
 The developer version header is put back at the end, whether it worked or not.
 
 The release holds the Steam loader (inside the player installer zip), so it goes only to the private
-builds repo. The files of the last release stay in dist/private/release/ for a look. The VM installs the
+builds repo (the setup exe holds it too). The files of the last release stay in dist/private/release/ for a look. The VM installs the
 first numbered release with python -m tools.vm update (that also puts in the Control Panel's Updates tab
 and its updater); later ones with the panel's Update now.
 """
@@ -224,6 +226,25 @@ def make_server_zip(out: Path, ver: str, mod: dict[str, Path], player_zip: Path,
     return out
 
 
+def check_installer_tools() -> None:
+    """Inno Setup and the runtime installer must be here before anything is built or uploaded."""
+    from . import installer   # here, not at the top: installer.py imports this module
+    try:
+        if installer.find_iscc() is None:
+            raise installer.InstallerError(installer.ISCC_MISSING)
+        installer.check_redist(installer.REDIST)
+    except installer.InstallerError as e:
+        raise ReleaseError(f"{e} Nothing was built or uploaded.") from None
+
+
+def build_server_installer(ver: str, assets: Path, zip_path: Path, player_zip: Path) -> Path:
+    from . import installer
+    try:
+        return installer.build_installer(ver, zip_path, player_zip, assets)
+    except installer.InstallerError as e:
+        raise ReleaseError(f"the server installer could not be built: {e}") from None
+
+
 def server_zip_name(ver: str) -> str:
     return f"Reborn-Server-Update-{ver}.zip"
 
@@ -233,18 +254,19 @@ def server_zip_name(ver: str) -> str:
 def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
     notes = check_notes(notes)
     try:
-        say("Step 1 of 7: checking the code is committed and on GitHub, and the signing key is here.")
+        say("Step 1 of 8: checking the code is committed and on GitHub, and the signing key is here.")
         vm.check_pushed()
         commit = vm.git("rev-parse", "HEAD")
         check_key(key_path)
         existing_tags()   # gh signed in and the builds repo reachable: found now, not after the tests
+        check_installer_tools()   # likewise Inno Setup and the runtime file
 
-        say("Step 2 of 7: running every test. This takes a few minutes.")
+        say("Step 2 of 8: running every test. This takes a few minutes.")
         run_suites()
 
         build = version.next_build(existing_tags())   # asked again: the tests took minutes
         ver = version.version_string(build)
-        say(f"Step 3 of 7: building release {ver}.")
+        say(f"Step 3 of 8: building release {ver}.")
         if OUT.exists():
             shutil.rmtree(OUT)
         assets = OUT / "assets"
@@ -257,14 +279,17 @@ def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
         updater_exe = publish_updater()
         player_zip = vm.build_player_zip(ver)   # after the mod build: the zip holds those DLLs
 
-        say("Step 4 of 7: making the player update.")
+        say("Step 4 of 8: making the player update.")
         player_update = make_player_update(OUT / vm.PLAYER_UPDATE_DIR, ver, build, notes, mod, key_path)
 
-        say("Step 5 of 7: making the server update zip.")
+        say("Step 5 of 8: making the server update zip.")
         zip_path = make_server_zip(assets / server_zip_name(ver), ver, mod, player_zip, matchmaking,
                                    player_update, panel_exe, updater_exe)
 
-        say("Step 6 of 7: writing and signing update.json.")
+        say("Step 6 of 8: building the server installer.")
+        setup_exe = build_server_installer(ver, assets, zip_path, player_zip)
+
+        say("Step 7 of 8: writing and signing update.json.")
         update = {"version": ver, "build": build, "notes": notes, "commit": commit,
                   "zip": zip_path.name, "sha256": sha256(zip_path), "size": zip_path.stat().st_size}
         write_signed(assets / UPDATE_JSON, json_bytes(update), key_path)
@@ -279,9 +304,10 @@ def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
         zip_folder(player_update, assets / vm.PLAYER_UPDATE_ZIP, player_update_names())
         (assets / COMMIT_ASSET).write_bytes((commit + "\n").encode("ascii"))
 
-        say(f"Step 7 of 7: uploading release {ver} to {BUILDS_REPO}.")
+        say(f"Step 8 of 8: uploading release {ver} to {BUILDS_REPO}.")
         files = [UPDATE_JSON, UPDATE_JSON + ".sig", zip_path.name, *vm.MOD_FILES, vm.PANEL_EXE,
-                 vm.UPDATER_EXE, vm.PLAYER_ZIP_ASSET, vm.PLAYER_UPDATE_ZIP, COMMIT_ASSET]
+                 vm.UPDATER_EXE, vm.PLAYER_ZIP_ASSET, vm.PLAYER_UPDATE_ZIP, COMMIT_ASSET,
+                 setup_exe.name]
         p = run(["gh", "release", "create", ver, *(str(assets / f) for f in files), "--repo", BUILDS_REPO,
                  "--title", ver, "--notes", notes, "--latest"])
         if p.returncode != 0:
