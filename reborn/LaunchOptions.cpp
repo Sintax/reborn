@@ -77,6 +77,7 @@ namespace LaunchOptions {
             else if (key == L"-rbhangsecs") { if (ToInt(val, 5, 3600, n)) o.hangSeconds = n; else o.errors.push_back(a); }
             else if (key == L"-rbtesthang") o.testHang = true;
             else if (key == L"-rbtestcrash") o.testCrash = true;
+            else if (key == L"-rbdumpgear") o.dumpGear = true;
             else o.unknown.push_back(a);
         }
         LocalFree(argv);

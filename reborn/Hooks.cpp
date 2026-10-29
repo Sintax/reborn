@@ -11,6 +11,7 @@
 #include "Diagnostics.hpp"
 #include "DebugServer.hpp"
 #include "Autopilot.hpp"
+#include "GearDump.hpp"
 #include "GameState.hpp"
 #include "LaunchOptions.hpp"
 #include "CharSelect.hpp"
@@ -1199,6 +1200,7 @@ namespace Hooks {
         Diagnostics::NoteTick();
         DebugServer::Pump();
         Autopilot::Tick(DeltaTime);
+        GearDump::Tick(DeltaTime);
         Engine::PumpGameThreadTasks(DeltaTime);
 
         if (!Globals::amServer) {

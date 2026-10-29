@@ -34,6 +34,7 @@ namespace LaunchOptions {
         int hangSeconds = 60;
         bool testHang = false;        // freeze the game thread 20 s after play starts
         bool testCrash = false;       // null write 20 s after play starts
+        bool dumpGear = false;        // write every gear piece's stat data to gear-stats.json (GearDump.cpp)
         std::vector<std::wstring> errors;
         std::vector<std::wstring> unknown;
     };
