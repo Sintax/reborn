@@ -40,15 +40,40 @@ namespace SDKUtils {
     // a placeholder controller while connecting, swaps in the one the server replicates, and the
     // old one stays in GObjects (pending kill) until garbage collection frees it. Null when there
     // is no live local controller.
+    //
+    // The ULocalPlayer itself lives for the whole session, so it is remembered with its GObjects
+    // slot and checked against that slot on each call: walking every object
+    // cost ~0.5 ms a call and this runs many times a frame (run 20261029-030612: ~11 ms of a
+    // client's frame). Its Actor is read fresh every time, since the controller does get swapped.
+    // With no local player (the dedicated server), the full walk is retried at most every 500 ms.
     inline APoplarPlayerController* GetLocalPlayerController() {
         const uint64_t pendingKill = 0x2000000000000000; // RF_PendingKill
-        for (ULocalPlayer* lp : GetAllOfClass<ULocalPlayer>()) {
-            if (!lp || (lp->ObjectFlags & pendingKill)) continue;
-            if (lp->GetFullName().find("Default__") != std::string::npos) continue;
-            APlayerController* pc = lp->Actor;
-            if (pc && !(pc->ObjectFlags & pendingKill) && pc->IsA(APoplarPlayerController::StaticClass()))
-                return reinterpret_cast<APoplarPlayerController*>(pc);
+        static ULocalPlayer* cached = nullptr;
+        static int32_t cachedSlot = -1;
+        static uint64_t nextSearchMs = 0;
+
+        TArray<UObject*>* objects = UObject::GObjObjects();
+        bool valid = cached && cachedSlot >= 0 && cachedSlot < objects->size()
+            && objects->at(cachedSlot) == cached && !(cached->ObjectFlags & pendingKill);
+        if (!valid) {
+            cached = nullptr;
+            const uint64_t now = GetTickCount64();
+            if (now < nextSearchMs) return nullptr;
+            nextSearchMs = now + 500;
+            UClass* lpClass = ULocalPlayer::StaticClass();
+            for (int i = 0; i < objects->size(); i++) {
+                UObject* obj = objects->at(i);
+                if (!obj || !obj->IsA(lpClass) || (obj->ObjectFlags & pendingKill)) continue;
+                if (obj->GetFullName().find("Default__") != std::string::npos) continue;
+                cached = reinterpret_cast<ULocalPlayer*>(obj);
+                cachedSlot = i;
+                break;
+            }
+            if (!cached) return nullptr;
         }
+        APlayerController* pc = cached->Actor;
+        if (pc && !(pc->ObjectFlags & pendingKill) && pc->IsA(APoplarPlayerController::StaticClass()))
+            return reinterpret_cast<APoplarPlayerController*>(pc);
         return nullptr;
     }
 

@@ -147,10 +147,105 @@ namespace CharSelect {
     }
 
     APoplarGameReplicationInfo* LevelGRI() {
+        // Fast path: the world's own GRI, reached through a live controller. The full object walk
+        // below cost ~10 ms each call (run 20261029-030612) and is kept only as the fallback.
+        AWorldInfo* wi = nullptr;
+        if (APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController())
+            wi = pc->WorldInfo;
+        if (!wi && Globals::amServer) {
+            for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+                if (!sp.Connection) continue;
+                APlayerController* a = sp.Connection->Actor;
+                if (a && !(a->ObjectFlags & kPendingKill) && a->WorldInfo) { wi = a->WorldInfo; break; }
+            }
+        }
+        if (wi && !(wi->ObjectFlags & kPendingKill)) {
+            AGameReplicationInfo* g = wi->GRI;
+            if (g && !(g->ObjectFlags & kPendingKill) && g->IsA(APoplarGameReplicationInfo::StaticClass())
+                && g->Outer && g->Outer->IsA(ULevel::StaticClass()))
+                return reinterpret_cast<APoplarGameReplicationInfo*>(g);
+        }
+
         APoplarGameReplicationInfo* gri = nullptr;
         for (APoplarGameReplicationInfo* g : SDKUtils::GetAllOfClass<APoplarGameReplicationInfo>())
             if (g && !(g->ObjectFlags & kPendingKill) && g->Outer && g->Outer->IsA(ULevel::StaticClass())) gri = g;
         return gri;
+    }
+
+    // [INTRO] client, on change: the hero intro as this client sees it. The coordinator registers
+    // itself in PoplarGlobals.CharacterIntroCoordinator (GWorld+0x1a8 is the PoplarGlobals the
+    // game's own coordinator code uses, battleborn+0x1358cb0), so no object walk is needed.
+    // Client state machine (Ghidra, table built at battleborn+0x13572f0): LoadingData tick
+    // +0x1357a90 waits for the local select movie (bMovieAndManagerReady) and, per player, an
+    // initialized entry whose stand-in has its meshes; entries are initialized by +0x1357770 from
+    // PoplarGlobals.AssignedStandInSets[1] (the intro stand-ins placed in the map).
+    static void LogClientIntro(APoplarPlayerController* pc) {
+        UWorld* world = Globals::GetGWorld();
+        if (!world) return;
+        UObject* g = *reinterpret_cast<UObject**>(reinterpret_cast<uintptr_t>(world) + 0x1a8);
+        if (!g || !g->IsA(UPoplarGlobals::StaticClass())) return;
+        UPoplarGlobals* pg = reinterpret_cast<UPoplarGlobals*>(g);
+        APoplarCharacterIntroCoordinator* c = pg->CharacterIntroCoordinator;
+        char line[1200];
+        int n = snprintf(line, sizeof line, "[INTRO] client: coordinator %s", c ? (c->ObjectFlags & kPendingKill ? "dying" : "yes") : "none");
+        uintptr_t cb = reinterpret_cast<uintptr_t>(c);
+        if (c && !(c->ObjectFlags & kPendingKill)) {
+            UPoplarCharacterIntroDefinition* def = c->CharacterIntroDefinition;
+            n += snprintf(line + n, sizeof line - n, " (state %d, wants %d, %d players, elapsed %.0f, hero %d, def %s, role %d)",
+                (int)c->CurrentState, (int)c->DesiredState, c->NumPlayersToIntroduce, c->ElapsedTime, c->CurrentCharacterIndex,
+                def ? def->GetName().c_str() : "none", (int)c->Role);
+            for (int i = 0; i < 10 && i < c->NumPlayersToIntroduce + 2; i++) {
+                uintptr_t e = cb + 0x240 + i * 0x30;
+                UObject* pri = *reinterpret_cast<UObject**>(e);
+                UObject* taunt = *reinterpret_cast<UObject**>(e + 0x8);
+                UObject* nameId = *reinterpret_cast<UObject**>(e + 0x10);
+                UObject* standIn = *reinterpret_cast<UObject**>(e + 0x20);
+                uint32_t init = *reinterpret_cast<uint32_t*>(e + 0x28) & 1;
+                if (!pri && !taunt && !nameId && !standIn && !init) continue;
+                bool meshes = standIn && *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(standIn) + 0x380) && *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(standIn) + 0x338);
+                n += snprintf(line + n, sizeof line - n, "; [%d] pri %s taunt %s hero %s standin %s meshes %s init %u", i,
+                    pri ? "yes" : "none", taunt ? taunt->GetName().c_str() : "none", nameId ? nameId->GetName().c_str() : "none",
+                    standIn ? standIn->GetName().c_str() : "none", meshes ? "yes" : "no", init);
+            }
+        }
+        int registered = pg->RegisteredStandIns.ArrayCount;
+        int introSlots = 0;
+        for (int i = 0; i < 10; i++) if (pg->AssignedStandInSets[1].AssignedStandIns[i].StandIn) introSlots++;
+        UPoplarCharacterSelectGFxMovie* mv = pc ? pc->CharacterSelectMovie : nullptr;
+        n += snprintf(line + n, sizeof line - n, " | stand-ins registered %d, intro slots %d, select movie %s ready %u, displaying intros %u",
+            registered, introSlots, mv ? "yes" : "no", mv ? mv->bMovieAndManagerReady : 0, pc ? pc->bDisplayingCharacterIntros : 0);
+        if (pc) {
+            ACamera* cam = pc->PlayerCamera;
+            AActor* vt = cam ? cam->ViewTarget.Target : nullptr;
+            n += snprintf(line + n, sizeof line - n, ", view target %s, pc state %s", vt ? vt->GetName().c_str() : "none",
+                pc->GetStateName().ToString().c_str());
+        }
+        // Not registered: is there a coordinator object on this client at all? (One object walk,
+        // at most 3 times per process, only while the server's coordinator should be running.)
+        static int walks = 0;
+        static int callsSinceWalk = 100;   // called once a second
+        callsSinceWalk++;
+        if (!c && walks < 3 && pc && pc->WorldInfo && pc->WorldInfo->GRI
+            && reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI)->CurrentMatchState.State == 3
+            && callsSinceWalk >= 5) {
+            walks++;
+            callsSinceWalk = 0;
+            auto all = SDKUtils::GetAllOfClass<APoplarCharacterIntroCoordinator>();
+            std::string found;
+            for (APoplarCharacterIntroCoordinator* o : all) {
+                if (!o) continue;
+                char b[200];
+                snprintf(b, sizeof b, " %s(state %d wants %d n %d role %d)", o->GetFullName().c_str(), (int)o->CurrentState, (int)o->DesiredState, o->NumPlayersToIntroduce, (int)o->Role);
+                found += b;
+            }
+            printf("[INTRO] client: object walk %d at match 3 found %zu coordinator objects:%s\n", walks, all.size(), found.c_str());
+        }
+        static std::string last;
+        if (last != line) {
+            SYSTEMTIME st; GetLocalTime(&st);
+            printf("%s (at %02d:%02d:%02d)\n", line, st.wHour, st.wMinute, st.wSecond);
+            last = line;
+        }
     }
 
     void LogState(APoplarGameReplicationInfo* gri) {
@@ -187,6 +282,8 @@ namespace CharSelect {
                         mv ? (int)mv->PlayerUIState[0] : -1, pri ? (int)pri->CharacterSelectionState : -1, pc->Pawn ? "yes" : "no");
                     n += snprintf(line + n, sizeof line - n, "%s", client);
                     key += client;
+                    if (gri->CurrentMatchState.State >= 2 && gri->CurrentMatchState.State <= 6)
+                        LogClientIntro(pc);
                 }
             }
         }
@@ -398,6 +495,54 @@ namespace CharSelect {
 
     bool TimerPicksOnly() { return ServerSettings::RandomHero && !g_phaseComplete; }
 
+    // [INTRO] server, on change: the hero intro story games show after the pick (Ghidra: the
+    // PlayerSetup start, battleborn+0x147b040, spawns PoplarGameInfo.CharacterIntroCoordinator for
+    // the players with a hero and a taunt; while it runs the clients keep the select movie up).
+    // Diagnostic: tells whether the game type has an intro, whether a coordinator exists and how
+    // far it gets, and each player's hero and taunt.
+    static void LogIntro(APoplarGameReplicationInfo* gri) {
+        if (!gri || !gri->WorldInfo || !gri->WorldInfo->Game
+            || !gri->WorldInfo->Game->IsA(APoplarGameInfo::StaticClass())) return;
+        APoplarGameInfo* gi = reinterpret_cast<APoplarGameInfo*>(gri->WorldInfo->Game);   // no object walk: ~10 ms each
+        if (!IsLive(gi)) return;
+        UPoplarGameInfoDefinition* def = gri->GameInfoDefinition;
+        APoplarCharacterIntroCoordinator* c = gi->CharacterIntroCoordinator;
+        char line[600];
+        int n = snprintf(line, sizeof line, "[INTRO] server: match %d, game type %s, intro %s, coordinator %s",
+            gri->CurrentMatchState.State, def ? def->GetName().c_str() : "none",
+            def && def->CharacterIntroDefinition ? def->CharacterIntroDefinition->GetName().c_str() : "none",
+            IsLive(c) ? "yes" : "none");
+        if (IsLive(c))
+            n += snprintf(line + n, sizeof line - n, " (state %d, wants %d, %d players, %d ready, hero %d, elapsed %.0f, movie %.1f s + %.1f s each)", (int)c->CurrentState,
+                (int)c->DesiredState, c->NumPlayersToIntroduce, c->PlayersWaitingToStartCharacterIntros.ArrayCount, c->CurrentCharacterIndex,
+                c->ElapsedTime, c->CharacterIntroDefinition ? c->CharacterIntroDefinition->IntroMovieLength : -1.f,
+                c->CharacterIntroDefinition ? c->CharacterIntroDefinition->PerCharacterDisplayTime : -1.f);
+        if (IsLive(c)) {
+            // Does each client get the coordinator? Channel per connection and the class in its package map.
+            n += snprintf(line + n, sizeof line - n, " rep: role %d/%d hidden %u", (int)c->Role, (int)c->RemoteRole, (unsigned)c->bHidden);
+            for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+                if (!sp.Connection || !ServerNetworking::IsLiveConnection(sp.Connection)) continue;
+                UActorChannel* ch = ServerNetworking::GetActorChannelForActor(c, sp.Connection);
+                n += snprintf(line + n, sizeof line - n, ", %s: class in map %s channel %s", sp.Name.c_str(),
+                    ServerNetworking::PackageMapSupportsObject(sp.Connection, c->Class) ? "yes" : "NO",
+                    ch ? (std::string("idx ") + std::to_string(ch->ChIndex) + " openAckd " + std::to_string(ch->OpenAckd)).c_str() : "NONE");
+            }
+        }
+        std::string players;
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            APoplarPlayerController* pc = LiveController(sp);
+            APoplarPlayerReplicationInfo* pri = pc ? reinterpret_cast<APoplarPlayerReplicationInfo*>(pc->PlayerReplicationInfo) : nullptr;
+            if (!IsLive(pri)) continue;
+            APoplarMetaPlayerReplicationInfo* meta = pri->GetMetaPRI();
+            players += "; " + sp.Name + ": hero " + (pri->CharacterNameIdDef ? pri->CharacterNameIdDef->GetName() : std::string("none"))
+                + ", browsing " + (pri->BrowseCharacterNameIdDef ? pri->BrowseCharacterNameIdDef->GetName() : std::string("none"))
+                + ", taunt " + (IsLive(meta) && meta->CurrentTaunt ? meta->CurrentTaunt->GetName() : std::string(IsLive(meta) ? "none" : "no meta PRI"));
+        }
+        std::string out = std::string(line) + players;
+        static std::string last;
+        if (out != last) { printf("%s\n", out.c_str()); last = out; }
+    }
+
     void OnServerTick(float dt) {
         g_sinceServerTick += dt;
         if (g_sinceServerTick < 1.f) return;
@@ -406,6 +551,7 @@ namespace CharSelect {
 
         APoplarGameReplicationInfo* gri = LevelGRI();
         LogState(gri);
+        LogIntro(gri);
         ServerNetworking::CatchUpPackageMapsForQueuedBots();
         APoplarCharacterSelectManager* m = LiveManager(gri);
         if (!m) return;

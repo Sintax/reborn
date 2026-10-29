@@ -1,5 +1,6 @@
 #include "Networking.hpp"
 #include "GameState.hpp"
+#include "Perf.hpp"
 
 #include <algorithm>
 #include <map>
@@ -1026,7 +1027,13 @@ namespace ServerNetworking {
 
         ForgetClosedConnections("TickNetServer");
 
+        const double passStart = Perf::Now();
+        int sends = 0, saturatedSkips = 0, opened = 0;
         std::vector<AActor*> actors = BuildConsiderList(worldInfo, NetDriver);
+        struct PassDone {
+            double start; size_t considered; int& sends; int& saturated; int& opened;
+            ~PassDone() { Perf::NetPass(Perf::Now() - start, (int)considered, sends, saturated, opened); }
+        } passDone{ passStart, actors.size(), sends, saturatedSkips, opened };
 
         //std::sort(actors.begin(), actors.end(), CompareActorPriority);
         
@@ -1062,8 +1069,10 @@ namespace ServerNetworking {
                 if (actor->ObjectFlags & 0x2000000000000000)
                     continue;
 
-                if (!(*reinterpret_cast<bool(**)(UNetConnection*, bool)>(*(__int64*)connection + 0x260))(connection, 1))
+                if (!(*reinterpret_cast<bool(**)(UNetConnection*, bool)>(*(__int64*)connection + 0x260))(connection, 1)) {
+                    saturatedSkips++;
                     continue;
+                }
 
                 if (actor->IsA<APlayerController>() && (connection->Actor != actor)) {
                     continue;
@@ -1118,6 +1127,7 @@ namespace ServerNetworking {
 
                         if (channel) { //&& (*reinterpret_cast<bool(**)(UNetConnection*, bool)>(*(__int64*)connection + 0x260))(connection, 1)
                             //printf("[NETWORKING] Setting channel actor...\n");
+                            opened++;
                             reinterpret_cast<void(__thiscall*)(UActorChannel*, AActor*)>(Globals::baseAddress + 0x0611970)(channel, actor);
                         }
                     }
@@ -1133,6 +1143,7 @@ namespace ServerNetworking {
                     }
 
                     reinterpret_cast<void (*)(UActorChannel * channel)>(Globals::baseAddress + 0x0613050)(channel);
+                    sends++;
                     if (channel->Actor) {
                         channel->Actor->NetTag++;
                     }

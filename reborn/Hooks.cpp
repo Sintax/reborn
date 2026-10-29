@@ -12,6 +12,7 @@
 #include "DebugServer.hpp"
 #include "Autopilot.hpp"
 #include "GearDump.hpp"
+#include "Perf.hpp"
 #include "GameState.hpp"
 #include "LaunchOptions.hpp"
 #include "CharSelect.hpp"
@@ -1193,15 +1194,22 @@ namespace Hooks {
     SafetyHookInline GameEngineTick;
 
     void GameEngineTickHook(UGameEngine* engine, float DeltaTime) {
+        const double engineStart = Perf::Now();
         GameEngineTick.call<void>(engine, DeltaTime);
+        // [PERF]: when this frame's mod work is done, record the frame (see Perf.hpp).
+        struct FrameDone {
+            float dt; double engineStart, modStart;
+            ~FrameDone() { Perf::Frame(dt, modStart - engineStart, Perf::Now() - modStart); Perf::Report(Globals::amServer); }
+        } frameDone{ DeltaTime, engineStart, Perf::Now() };
+
         if (Globals::amServer && Globals::netDriver) // before the queued tasks below use a player's connection
             ServerNetworking::ForgetClosedConnections("engine tick");
-        FixPlayerPawnCollision();
+        { Perf::Part p("pawn collision"); FixPlayerPawnCollision(); }
         Diagnostics::NoteTick();
-        DebugServer::Pump();
-        Autopilot::Tick(DeltaTime);
+        { Perf::Part p("debug server"); DebugServer::Pump(); }
+        { Perf::Part p("autopilot"); Autopilot::Tick(DeltaTime); }
         GearDump::Tick(DeltaTime);
-        Engine::PumpGameThreadTasks(DeltaTime);
+        { Perf::Part p("queued tasks"); Engine::PumpGameThreadTasks(DeltaTime); }
 
         if (!Globals::amServer) {
             // Packages the client loads later (bot heroes, skins) can unblock queued NMT_Uses entries
@@ -1210,6 +1218,7 @@ namespace Hooks {
             sinceSweep += DeltaTime;
             if (sinceSweep >= 0.5f) {
                 sinceSweep = 0.0f;
+                Perf::Part p("package link");
                 ClientNetworking::LinkLoadedPendingPackages(*reinterpret_cast<UWorld**>(Globals::baseAddress + 0x34DFCA0), false, "tick");
             }
         }
@@ -1217,23 +1226,25 @@ namespace Hooks {
         // [CHARSEL]: the game's own character-select phase (see CharSelect.cpp). The server's
         // OnServerTick logs it and spawns the players when the pick phase completes.
         if (Globals::amServer) {
-            Access::Tick(DeltaTime);   // the user list (re-read every 2 s) and refused players' closes
-            CharSelect::OnServerTick(DeltaTime);
+            { Perf::Part p("access"); Access::Tick(DeltaTime); }   // the user list (re-read every 2 s) and refused players' closes
+            { Perf::Part p("charsel"); CharSelect::OnServerTick(DeltaTime); }
         }
         else {
-            PlayerNames::ClientTick(DeltaTime);
-            PlayerUpdateUi::Tick();   // is the main menu up (the update notice is only drawn there)
+            { Perf::Part p("names"); PlayerNames::ClientTick(DeltaTime); }
+            { Perf::Part p("update notice"); PlayerUpdateUi::Tick(); }   // is the main menu up (the update notice is only drawn there)
             // Four times a second: finding the local controller walks the object list.
             static float sinceGearBox = 0.0f;
             sinceGearBox += DeltaTime;
             if (sinceGearBox >= 0.25f) {
                 sinceGearBox = 0.0f;
+                Perf::Part p("gear box");
                 CharSelect::UpdateGearBox();
             }
             static float sinceCharSel = 0.0f;
             sinceCharSel += DeltaTime;
             if (sinceCharSel >= 1.0f) {
                 sinceCharSel = 0.0f;
+                Perf::Part p("charsel log");
                 CharSelect::LogState(CharSelect::LevelGRI());
             }
         }
@@ -1245,12 +1256,14 @@ namespace Hooks {
             sinceMinionLives += DeltaTime;
             if (Globals::amServer && Globals::netDriver && sinceMinionLives >= 0.5f) {
                 sinceMinionLives = 0.0f;
+                Perf::Part p("minion lives");
                 ServerNetworking::TrackMinionLives();
             }
             static float sinceMinionCensus = 0.0f;
             sinceMinionCensus += DeltaTime;
             if (sinceMinionCensus >= 5.0f) {
                 sinceMinionCensus = 0.0f;
+                Perf::Part p("minion census");
                 if (Globals::amServer) {
                     if (Globals::netDriver) {
                         ServerNetworking::LogMinionCensus();
@@ -1502,7 +1515,7 @@ namespace Hooks {
 
                     time = 0.0f;
 
-                    ServerNetworking::TickNetServer(Globals::netDriver);
+                    { Perf::Part p("replication"); ServerNetworking::TickNetServer(Globals::netDriver); }
                 //}
             }
         }
