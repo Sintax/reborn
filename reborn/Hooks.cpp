@@ -1207,11 +1207,42 @@ namespace Hooks {
 
         if (Globals::amServer && Globals::netDriver) // before the queued tasks below use a player's connection
             ServerNetworking::ForgetClosedConnections("engine tick");
-        // Server frame cap, once: UGameEngine::GetMaxTickRate (battleborn+0x207b00) takes "fps=" from
-        // the command line, else the net driver's NetServerMaxTickRate (set to 60 in
-        // ServerNetworking's listen setup), and frame smoothing (+0x5e3410: engine+0x454 bits 0x40
-        // and 0x80, clamped to Min/MaxSmoothedFrameRate) wins when it gives a rate. A smoothing
-        // ceiling under 60 would hold the server below 60, so it is raised.
+        // Server frame cap. UGameEngine::GetMaxTickRate (battleborn+0x207b00) decides it, in order:
+        //  1. "fps=" on the command line;
+        //  2. the [SystemSettings] FramerateLocking option (global battleborn+0x351f50c: 1 = 30 fps,
+        //     2 = 50, 3 = 60, 4 = 72, 5 = 120, 0 = none). It is the player's graphics option from
+        //     the Windows user's PoplarEngine.ini, which a server shares with any game install on
+        //     the same account. The laptop has 3 (its test servers ran at 60); the VM's servers held
+        //     a steady 30 through 1.0.4 and 1.0.5 whatever the net driver and smoothing said.
+        //  3. otherwise frame smoothing (+0x5e3410, engine+0x454 bits 0x40|0x80: the running
+        //     average rate clamped to Min/MaxSmoothedFrameRate) if it gives a rate, else the net
+        //     driver's NetServerMaxTickRate (set to 60 in ServerNetworking's listen setup), max 120.
+        //     With smoothing off and no lock the server still held exactly 30 (laptop repro,
+        //     2026-10-31): that path takes the stock 30 from another driver's NetServerMaxTickRate.
+        // So the server sets rule 1 itself: the function's cached "fps=" result (parsed flag
+        // battleborn+0x35750d8 bit 1, found +0x35750dc, value +0x3572c00), set each frame. The lock
+        // is cleared too (a 30 or 50 lock there would never win over rule 1, but it keeps the
+        // log honest) and smoothing is off.
+        const float kServerFrameRate = 60.f;
+        if (Globals::amServer && Globals::netDriver) {
+            uint8_t* fpsParsed = reinterpret_cast<uint8_t*>(Globals::baseAddress + 0x35750d8);
+            uint8_t* fpsFound = reinterpret_cast<uint8_t*>(Globals::baseAddress + 0x35750dc);
+            float* fpsValue = reinterpret_cast<float*>(Globals::baseAddress + 0x3572c00);
+            if (!(*fpsParsed & 1) || !*fpsFound || *fpsValue != kServerFrameRate) {
+                printf("[PERF] server frame cap: fps override %s -> %.0f\n",
+                    (*fpsParsed & 1) && *fpsFound ? std::to_string((int)*fpsValue).c_str() : "none", kServerFrameRate);
+                *fpsParsed |= 1;
+                *fpsFound = 1;
+                *fpsValue = kServerFrameRate;
+            }
+            int32_t* framerateLocking = reinterpret_cast<int32_t*>(Globals::baseAddress + 0x351f50c);
+            if (*framerateLocking != 0) {
+                printf("[PERF] server frame cap: graphics frame-rate lock %d (%s) cleared\n", *framerateLocking,
+                    *framerateLocking == 1 ? "30 fps" : *framerateLocking == 2 ? "50 fps" : *framerateLocking == 3 ? "60 fps"
+                    : *framerateLocking == 4 ? "72 fps" : *framerateLocking == 5 ? "120 fps" : "unknown");
+                *framerateLocking = 0;
+            }
+        }
         static bool frameCapLogged = false;
         if (Globals::amServer && Globals::netDriver && !frameCapLogged) {
             frameCapLogged = true;
@@ -1219,9 +1250,6 @@ namespace Hooks {
             float minRate = engine->MinSmoothedFrameRate, maxRate = engine->MaxSmoothedFrameRate;
             printf("[PERF] server frame cap: net driver %d, smoothing %s (flags 0x%x), smoothed %.0f-%.0f fps\n",
                 Globals::netDriver->NetServerMaxTickRate, (flags & 0xC0) == 0xC0 ? "on" : "off", flags & 0xC0, minRate, maxRate);
-            // Smoothing follows the server's own running average frame rate (+0x5e3410), so a server
-            // that starts slow stays slow: the VM held 30 fps with smoothing 22-62 and the net
-            // driver at 60 (1.0.4, 2026-10-31). Off on the server, so the net driver's 60 rules.
             if (flags & 0x40) {
                 *reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(engine) + 0x454) = flags & ~0x40u;
                 printf("[PERF] server frame cap: frame smoothing turned off\n");
