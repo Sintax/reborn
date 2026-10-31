@@ -19,6 +19,9 @@
 #include "PlayerNames.hpp"
 #include "Access.hpp"
 #include "PlayerUpdateUi.hpp"
+#include <Windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")   // timeBeginPeriod: the server's 1 ms timer
 
 namespace Hooks {
     SafetyHookInline ProcessRemoteFunction;
@@ -1216,10 +1219,17 @@ namespace Hooks {
             float minRate = engine->MinSmoothedFrameRate, maxRate = engine->MaxSmoothedFrameRate;
             printf("[PERF] server frame cap: net driver %d, smoothing %s (flags 0x%x), smoothed %.0f-%.0f fps\n",
                 Globals::netDriver->NetServerMaxTickRate, (flags & 0xC0) == 0xC0 ? "on" : "off", flags & 0xC0, minRate, maxRate);
-            if ((flags & 0xC0) == 0xC0 && maxRate < 60.f) {
-                engine->MaxSmoothedFrameRate = 62.f;
-                printf("[PERF] server frame cap: smoothed ceiling %.0f -> 62 fps\n", maxRate);
+            // Smoothing follows the server's own running average frame rate (+0x5e3410), so a server
+            // that starts slow stays slow: the VM held 30 fps with smoothing 22-62 and the net
+            // driver at 60 (1.0.4, 2026-10-31). Off on the server, so the net driver's 60 rules.
+            if (flags & 0x40) {
+                *reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(engine) + 0x454) = flags & ~0x40u;
+                printf("[PERF] server frame cap: frame smoothing turned off\n");
             }
+            // Windows' default 15.6 ms timer makes the engine's frame-limit sleep overshoot (a
+            // ~14 ms wait becomes ~31 ms); ask for 1 ms timing for this server process.
+            MMRESULT tr = timeBeginPeriod(1);
+            printf("[PERF] server frame cap: 1 ms timer %s\n", tr == TIMERR_NOERROR ? "on" : "refused");
         }
         { Perf::Part p("pawn collision"); FixPlayerPawnCollision(); }
         Diagnostics::NoteTick();
