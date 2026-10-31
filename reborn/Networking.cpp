@@ -665,6 +665,15 @@ namespace ServerNetworking {
 
         Globals::netDriver = NetDriver;
 
+        // Server frame rate. A dedicated server's frame cap is its world net driver's
+        // NetServerMaxTickRate, at most 120 (UGameEngine::GetMaxTickRate, battleborn+0x207b00), and
+        // BaseEngine.ini sets it to 30: the VM server ran at 29 fps (1.0.3 story run, 2026-10-31)
+        // and players saw the world update half as often as they drew it. Our own replication runs
+        // once per server frame, so this is also the update rate players get.
+        const int kServerTickRate = 60;
+        printf("[NETWORKING] server tick rate %d -> %d\n", NetDriver->NetServerMaxTickRate, kServerTickRate);
+        NetDriver->NetServerMaxTickRate = kServerTickRate;
+
         printf("[NETWORKING] Game networking listening on port %i!\n", ServerSettings::gamePort);
     }
 

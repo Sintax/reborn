@@ -1204,6 +1204,23 @@ namespace Hooks {
 
         if (Globals::amServer && Globals::netDriver) // before the queued tasks below use a player's connection
             ServerNetworking::ForgetClosedConnections("engine tick");
+        // Server frame cap, once: UGameEngine::GetMaxTickRate (battleborn+0x207b00) takes "fps=" from
+        // the command line, else the net driver's NetServerMaxTickRate (set to 60 in
+        // ServerNetworking's listen setup), and frame smoothing (+0x5e3410: engine+0x454 bits 0x40
+        // and 0x80, clamped to Min/MaxSmoothedFrameRate) wins when it gives a rate. A smoothing
+        // ceiling under 60 would hold the server below 60, so it is raised.
+        static bool frameCapLogged = false;
+        if (Globals::amServer && Globals::netDriver && !frameCapLogged) {
+            frameCapLogged = true;
+            uint32_t flags = *reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(engine) + 0x454);
+            float minRate = engine->MinSmoothedFrameRate, maxRate = engine->MaxSmoothedFrameRate;
+            printf("[PERF] server frame cap: net driver %d, smoothing %s (flags 0x%x), smoothed %.0f-%.0f fps\n",
+                Globals::netDriver->NetServerMaxTickRate, (flags & 0xC0) == 0xC0 ? "on" : "off", flags & 0xC0, minRate, maxRate);
+            if ((flags & 0xC0) == 0xC0 && maxRate < 60.f) {
+                engine->MaxSmoothedFrameRate = 62.f;
+                printf("[PERF] server frame cap: smoothed ceiling %.0f -> 62 fps\n", maxRate);
+            }
+        }
         { Perf::Part p("pawn collision"); FixPlayerPawnCollision(); }
         Diagnostics::NoteTick();
         { Perf::Part p("debug server"); DebugServer::Pump(); }
