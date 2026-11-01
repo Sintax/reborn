@@ -411,6 +411,19 @@ namespace Autopilot {
                 g_takenLogged = true;
                 std::printf("[AUTOPILOT] pick of cell %d taken (%s; selection state %d)\n", g_lastCell, why, (int)pri->CharacterSelectionState);
                 if (g_lastCell >= 0 && g_lastCell != g_wantedCell) SetFallbackHero(CellHero(m, g_lastCell));
+                // -rbgearset: click that cell of the loadout row, as a person would (the movie's
+                // own handler sends the pick to the server). Slowly, so someone watching sees the
+                // row before and after the click: 8 s, the click, 6 s, then Ready.
+                if (int cell = LaunchOptions::Get().gearSet; cell >= 0) {
+                    Engine::RunOnGameThreadAfter(8.0f, [cell] {
+                        UPoplarCharacterSelectGFxMovie* mv = SDKUtils::GetLastOfClass<UPoplarCharacterSelectGFxMovie>();
+                        if (!mv) { std::printf("[AUTOPILOT] no hero screen to pick gear set cell %d on\n", cell); return; }
+                        mv->extRequestLoadoutSelection(0, cell);
+                        std::printf("[AUTOPILOT] picked gear set cell %d\n", cell);
+                        Engine::RunOnGameThreadAfter(6.0f, [] { CharSelect::SetLocalReady(true); });
+                    });
+                    return true;
+                }
             }
             return why != nullptr;
         }
@@ -697,8 +710,9 @@ namespace Autopilot {
             if (pc && pc->Pawn && g_phaseTime > 5.f) { SetPhase(Phase::Playing); break; }
             if (pc) SelectTick(pc, dt);
             // Picked, and the Ready window is up: press Ready once, so the match starts when all
-            // test players have (instead of waiting out the longer timers).
-            if (CharSelect::ReadyWindowShown() && CharSelect::LocalHeroPicked() && !CharSelect::LocalReady()) {
+            // test players have (instead of waiting out the longer timers). With -rbgearset the
+            // gear-set click presses Ready itself, after the set is picked (PickTaken).
+            if (opt.gearSet < 0 && CharSelect::ReadyWindowShown() && CharSelect::LocalHeroPicked() && !CharSelect::LocalReady()) {
                 std::printf("[AUTOPILOT] pressing Ready\n");
                 CharSelect::SetLocalReady(true);
             }

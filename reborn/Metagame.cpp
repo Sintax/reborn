@@ -58,6 +58,7 @@ namespace Metagame {
         }
 
         for (int i = 0; i < file.loadouts.size(); i++) {
+            jsonObj["loadouts"][i]["name"] = file.loadouts[i].name;
             for (int j = 0; j < 0x3; j++) {
                 jsonObj["loadouts"][i]["items"][j]["itemObjectName"] = file.loadouts[i].items[j].itemObjectName;
                 jsonObj["loadouts"][i]["items"][j]["itemDisplayName"] = file.loadouts[i].items[j].itemDisplayName;
@@ -130,6 +131,8 @@ namespace Metagame {
         if (jsonObj.contains("loadouts")) {
             for (const auto& loadoutJson : jsonObj["loadouts"]) {
                 Loadout loadout;
+                if (loadoutJson.contains("name") && loadoutJson["name"].is_string())
+                    loadout.name = loadoutJson["name"];
                 if (loadoutJson.contains("items") && loadoutJson["items"].is_array()) {
                     for (size_t i = 0; i < min(static_cast<size_t>(0x3), loadoutJson["items"].size()); ++i) {
                         const auto& itemJson = loadoutJson["items"][i];

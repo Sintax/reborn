@@ -1,6 +1,7 @@
 #include "CharSelect.hpp"
 #include "CharSelectTimes.hpp"
 #include "Engine.hpp"
+#include "GearSetsGame.hpp"
 #include "Globals.hpp"
 #include "Hooks.hpp"
 #include "Networking.hpp"
@@ -144,7 +145,7 @@ namespace CharSelect {
         int total = before + granted;
         if (meta->NumStaticEntitlements != total) meta->NumStaticEntitlements = total;
         if (meta->ReceivedStaticEntitlements != total) meta->ReceivedStaticEntitlements = total;
-        if (meta->NumLoadoutEntitlements < 0) meta->NumLoadoutEntitlements = 0;   // "none", so the client's loadout gate passes
+        GearSets::OnLogin(pc);   // the loadout count waits for the player's gear sets (GearSetsGame.cpp)
         printf("[CHARSEL] %s granted %d items (heroes %d, skins %d, taunts %d); owns %d (had %d), %d left out (not in the client's package map), %d left out (no room), loadouts %d\n",
             name.c_str(), granted, added[0], added[1], added[2], total, before, notOnClient, noRoom, meta->NumLoadoutEntitlements);
     }

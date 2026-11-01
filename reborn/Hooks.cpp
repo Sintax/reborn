@@ -16,6 +16,7 @@
 #include "GameState.hpp"
 #include "LaunchOptions.hpp"
 #include "CharSelect.hpp"
+#include "GearSetsGame.hpp"
 #include "PlayerNames.hpp"
 #include "Access.hpp"
 #include "PlayerUpdateUi.hpp"
@@ -1286,6 +1287,7 @@ namespace Hooks {
         if (Globals::amServer) {
             { Perf::Part p("access"); Access::Tick(DeltaTime); }   // the user list (re-read every 2 s) and refused players' closes
             { Perf::Part p("charsel"); CharSelect::OnServerTick(DeltaTime); }
+            GearSets::ServerTick(DeltaTime);
         }
         else {
             { Perf::Part p("names"); PlayerNames::ClientTick(DeltaTime); }
@@ -1297,6 +1299,7 @@ namespace Hooks {
                 sinceGearBox = 0.0f;
                 Perf::Part p("gear box");
                 CharSelect::UpdateGearBox();
+                GearSets::ClientTick();
             }
             static float sinceCharSel = 0.0f;
             sinceCharSel += DeltaTime;
@@ -1916,9 +1919,21 @@ namespace Hooks {
         if (!characterSelectClosedUFunction)
             characterSelectClosedUFunction = UFunction::FindFunction("Function PoplarGame.PoplarCharacterSelectGFxMovie.WaitForCharacterSelectLevelToUnload");
 
-        // The hero screen is closing: send the gear picked in the Gear box.
+        // The hero screen is closing: send the gear of the set picked in the loadout row.
         if (!Globals::amServer && !Globals::amStandalone && function == characterSelectClosedUFunction) {
+            GearSets::ApplyPickedSet();
             SetGear();   // schedules its work on the game thread
+        }
+
+        // A pick in the hero screen's loadout row (client: sending it; server: receiving it).
+        static UFunction* selectLoadoutUFunction = nullptr;
+
+        if (!selectLoadoutUFunction)
+            selectLoadoutUFunction = UFunction::FindFunction("Function PoplarGame.PoplarPlayerController.ServerSelectPlayerMetaLoadoutIndex");
+
+        if (!Globals::amStandalone && function == selectLoadoutUFunction && params && object && object->IsA(APoplarPlayerController::StaticClass())) {
+            GearSets::OnSelectLoadout(reinterpret_cast<APoplarPlayerController*>(object),
+                reinterpret_cast<APoplarPlayerController_execServerSelectPlayerMetaLoadoutIndex_Params*>(params)->SelectedIndex);
         }
 
         static UFunction* matchEndedUFunction = nullptr;
@@ -2211,7 +2226,16 @@ namespace Hooks {
                 return ProcessEvent.call<void>(object, function, params);
             }
 
-            printf("[NETWORKING] Setting up a player's gear!\n");
+            if (GearSets::IsGearSetsMessage(jsonObj)) {
+                GearSets::OnSetsReceived(ppc, jsonObj);
+                return;
+            }
+
+            auto perkNamed = [&](const char* key) {
+                return jsonObj.contains(key) && jsonObj[key].is_string() ? jsonObj[key].get<std::string>() : std::string("-");
+            };
+            printf("[NETWORKING] Setting up a player's gear! (%s: %s | %s | %s)\n", ppc->MyPoplarPRI->PlayerName.ToString().c_str(),
+                perkNamed("perkOne").c_str(), perkNamed("perkTwo").c_str(), perkNamed("perkThree").c_str());
 
             { // Now you're in all of our matches :)
                 UPoplarPerkFunction* perkOne = nullptr;

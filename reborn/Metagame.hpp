@@ -129,7 +129,9 @@ namespace Metagame {
         }
     };
 
+    // A gear set: built in the Gear Sets window, picked in the hero screen's loadout row (GearSetsGame.cpp).
     struct Loadout {
+        std::string name;
         Item items[0x3];
     };
 

@@ -31,6 +31,7 @@ namespace LaunchOptions {
         bool keySet = false;          // -rbkey= was given; an empty -rbkey= means "send no key"
         std::wstring users;           // server, tests only: the user list file instead of <Win64>\reborn-users.json
         unsigned int seed = 0;
+        int gearSet = -1;             // client, autopilot: the loadout-row cell to pick after the hero (-1 = leave the game's pick)
         int hangSeconds = 60;
         bool testHang = false;        // freeze the game thread 20 s after play starts
         bool testCrash = false;       // null write 20 s after play starts
