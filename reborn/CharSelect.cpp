@@ -1,4 +1,5 @@
 #include "CharSelect.hpp"
+#include "CharSelectTimes.hpp"
 #include "Engine.hpp"
 #include "Globals.hpp"
 #include "Hooks.hpp"
@@ -301,6 +302,7 @@ namespace CharSelect {
         // Latched, never reset: one server process hosts one match (ShutdownTimer ends it).
         bool g_phaseComplete = false;   // this match's pick phase has completed
         float g_sinceServerTick = 0.f;
+        bool g_localReady = false;      // client: Ready pressed on this hero screen
         // A late joiner gets no hero screen (see EarlierHero's note), so there is nothing to wait
         // for beyond the game's default pending class, which arrives about 1 s after the login.
         const float kLateJoinSettleSeconds = 3.f;
@@ -345,6 +347,59 @@ namespace CharSelect {
             APlayerController* a = sp.Connection->Actor;
             if (!IsLive(a) || !a->IsA(APoplarPlayerController::StaticClass())) return nullptr;
             return reinterpret_cast<APoplarPlayerController*>(a);
+        }
+
+        // The game has a hero for this player: the team record or the hero list entry they hold
+        // (not the pending class, which is the default hero before any pick).
+        bool HasPicked(APoplarCharacterSelectManager* m, APlayerReplicationInfo* pri) {
+            if (!m || !pri) return false;
+            for (int t = 0; t < 2; t++)
+                for (int i = 0; i < 5; i++)
+                    if (m->Teams[t].Players[i].PRI == pri && m->Teams[t].Players[i].SelectedCharacter) return true;
+            for (int i = 0; i < 0x1E; i++)
+                if (m->MasterCharacterList[i].SelectedBy == pri && m->MasterCharacterList[i].NameID) return true;
+            return false;
+        }
+
+        bool IsPvE(APoplarGameReplicationInfo* gri) {
+            return !gri || !gri->GameInfoDefinition || gri->GameInfoDefinition->bPvE;
+        }
+
+        // Server: gives the pick and get-ready phases our lengths (CharSelectTimes) when each
+        // begins. The game's own length is in the definition (60 s / 40 s); the time left is
+        // replicated, so the clients' countdown follows. Random-hero games keep their 5 s pick.
+        void LengthenPhase(APoplarCharacterSelectManager* m, APoplarGameReplicationInfo* gri) {
+            static UPoplarCharacterSelectPhaseDefinition* seen = nullptr;
+            UPoplarCharacterSelectPhaseDefinition* p = m->CurrentPhase;
+            if (!p || p == seen) return;
+            seen = p;
+            std::string name = p->GetName();
+            if (ServerSettings::RandomHero && name == "PhaseDef_AllPlayers_Select") return;
+            float target = CharSelectTimes::PhaseSeconds(name, IsPvE(gri));
+            if (target <= 0.f) return;
+            float before = m->TimeRemainingInCurrentPhase;
+            m->TimeRemainingInCurrentPhase = CharSelectTimes::LengthenedTimeLeft(target, p->DurationOfPhase, before);
+            m->DurationOfPhase = target;
+            printf("[CHARSEL] %s: %.0f s (game's %.0f s), %.0f s left -> %.0f s\n", name.c_str(), target, p->DurationOfPhase,
+                before, m->TimeRemainingInCurrentPhase);
+        }
+
+        // Server: once every connected player who has a hero has pressed Ready (and at least one
+        // has), the pick or get-ready phase runs out in a few seconds.
+        void SkipWhenAllReady(APoplarCharacterSelectManager* m) {
+            if (!m->CurrentPhase || !CharSelectTimes::ReadyCanSkip(m->CurrentPhase->GetName())) return;
+            if (m->TimeRemainingInCurrentPhase <= CharSelectTimes::kReadyLeftSeconds) return;
+            int players = 0, ready = 0;
+            for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+                APoplarPlayerController* pc = LiveController(sp);
+                if (!pc || sp.Refused) continue;
+                players++;
+                if (sp.Ready && HasPicked(m, pc->PlayerReplicationInfo)) ready++;
+            }
+            if (!CharSelectTimes::EveryoneReady(players, ready)) return;
+            printf("[CHARSEL] everyone is ready (%d/%d) in %s: %.0f s left -> %.0f s\n", ready, players,
+                m->CurrentPhase->GetName().c_str(), m->TimeRemainingInCurrentPhase, CharSelectTimes::kReadyLeftSeconds);
+            m->TimeRemainingInCurrentPhase = CharSelectTimes::kReadyLeftSeconds;
         }
 
         // A player who joins after the pick phase (Ghidra): the game's PostLogin (battleborn+0x1481ba0)
@@ -573,7 +628,11 @@ namespace CharSelect {
         WatchWaitingRoom(m);
 
         if (!g_phaseComplete) {
-            if (m->CharacterSelectState != ECharacterSelectManagerState::CSMS_Complete) return;
+            if (m->CharacterSelectState != ECharacterSelectManagerState::CSMS_Complete) {
+                LengthenPhase(m, gri);
+                SkipWhenAllReady(m);
+                return;
+            }
             g_phaseComplete = true;
             Globals::haveHumansStarted = true;
             printf("[CHARSEL] pick phase complete; spawning the logged-in players\n");
@@ -640,6 +699,36 @@ namespace CharSelect {
             open = IsLive(pc) && pc->CurrentCharacterSelectMovieState == ECharacterSelectMovieState::CharacterSelectMovie_InProgress;
         }
         if (open != Globals::GearBoxOpen) printf("[CHARSEL] gear box %s\n", open ? "shown" : "hidden");
+        if (!open) g_localReady = false;   // a new hero screen starts not ready
         Globals::GearBoxOpen = open;
+    }
+
+    void SetLocalReady(bool ready) {
+        g_localReady = ready;
+        printf("[CHARSEL] ready %s\n", ready ? "pressed" : "taken back");
+        Engine::RunOnGameThreadAfter(0.f, [ready] {
+            APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+            if (!IsLive(pc)) return;
+            pc->eventServerProcessConvolve(ready ? L"{\"RBREADY\":true}" : L"{\"RBREADY\":false}", 0);
+        });
+    }
+
+    bool LocalReady() { return g_localReady; }
+
+    bool LocalHeroPicked() {
+        APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+        if (!IsLive(pc) || !pc->WorldInfo) return false;
+        APoplarGameReplicationInfo* gri = reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI);
+        return gri && HasPicked(gri->CharacterSelectManager, pc->PlayerReplicationInfo);
+    }
+
+    void OnReadyMessage(APoplarPlayerController* pc, bool ready) {
+        for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
+            if (LiveController(sp) != pc) continue;
+            if (sp.Ready != ready) printf("[CHARSEL] %s is %s\n", sp.Name.c_str(), ready ? "ready" : "no longer ready");
+            sp.Ready = ready;
+            return;
+        }
+        printf("[CHARSEL] ready message from a controller with no player entry; ignored\n");
     }
 }

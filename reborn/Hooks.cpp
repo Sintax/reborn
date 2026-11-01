@@ -2197,6 +2197,11 @@ namespace Hooks {
             }
 
             nlohmann::json jsonObj = nlohmann::json::parse(joinParams, nullptr, false);
+            // The hero screen's Ready button ({"RBREADY":true|false}, CharSelect::SetLocalReady).
+            if (!jsonObj.is_discarded() && jsonObj.is_object() && jsonObj.contains("RBREADY") && jsonObj["RBREADY"].is_boolean()) {
+                CharSelect::OnReadyMessage(ppc, jsonObj["RBREADY"].get<bool>());
+                return;
+            }
             if (jsonObj.is_discarded() || !jsonObj.is_object() || !jsonObj.contains("NEMA") || jsonObj["NEMA"] != true || !ppc->MyPoplarPRI) {
                 printf("[NETWORKING] ServerProcessConvolve on %s is not the mod's gear message%s; passing it to the game\n",
                     ppc->GetName().c_str(), ppc->MyPoplarPRI ? "" : " (or the controller has no PRI yet)");

@@ -411,6 +411,9 @@ namespace Autopilot {
                 g_takenLogged = true;
                 std::printf("[AUTOPILOT] pick of cell %d taken (%s; selection state %d)\n", g_lastCell, why, (int)pri->CharacterSelectionState);
                 if (g_lastCell >= 0 && g_lastCell != g_wantedCell) SetFallbackHero(CellHero(m, g_lastCell));
+                // Like a player who has picked: press Ready, so the match starts once all test
+                // players have (instead of waiting out the longer timers).
+                CharSelect::SetLocalReady(true);
             }
             return why != nullptr;
         }
