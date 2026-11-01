@@ -4,6 +4,7 @@
 #include "Globals.hpp"
 #include "Engine.hpp"
 #include "GameCoordinator.hpp"
+#include "GearSetsGame.hpp"
 #include "Constants.hpp"
 #include "Hooks.hpp"
 #include "LocalHost.hpp"
@@ -73,32 +74,6 @@ namespace Overlay {
         return "No Item";
     }
 
-    
-
-    // One gear slot: a drop-down of the save's items with a filter box.
-    void GearCombo(const char* id, Metagame::Item*& slot) {
-        ImGui::PushID(id);
-        std::string shown = GetItemDisplayName(slot);
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::BeginCombo("##slot", shown.c_str(), ImGuiComboFlags_HeightLarge)) {
-            static std::string filter;
-            ImGui::InputText("Filter Gear", &filter);
-            if (ImGui::Selectable("No Item", slot == nullptr)) slot = nullptr;
-            for (Metagame::Item& item : Globals::saveFiles[Globals::CurrentSaveFile].items) {
-                if (!filter.empty() && !item.itemDisplayName.contains(filter)) continue;
-                if (ImGui::Selectable(item.itemDisplayName.c_str(), slot == &item)) slot = &item;
-                if (ImGui::IsItemHovered()) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextUnformatted(item.itemDisplayName.c_str());
-                    ImGui::Separator();
-                    ImGui::TextUnformatted(item.itemFlavor.c_str());
-                    ImGui::EndTooltip();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::PopID();
-    }
 
     void Render() {
         UiStyle::Apply();
@@ -321,8 +296,8 @@ namespace Overlay {
 
         // The Gear box, while the game's own hero screen is up. Bottom-right: in Versus the
         // top-right holds the enemy team list, the left our team list, the centre the hero.
-        // The screen's own loadout row cannot replace it yet: loadouts came from the old online
-        // service, so every player has none (NumLoadoutEntitlements 0) and the cells stay locked.
+        // Gear itself is picked in the screen's own loadout row now (GearSetsGame.cpp); the box
+        // only says where, and where sets are made.
         if (Globals::GearBoxOpen && Globals::CurrentSaveFile < Globals::saveFiles.size()) {
             ImVec2 screen = ImGui::GetIO().DisplaySize;
             ImGui::SetNextWindowPos(ImVec2(screen.x - 16.0f, screen.y - 16.0f), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
@@ -331,11 +306,13 @@ namespace Overlay {
                 | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
             UiStyle::WindowFont();
             ImGui::TextUnformatted("Gear");
-            GearCombo("GearOne", Globals::GearSlotOne);
-            GearCombo("GearTwo", Globals::GearSlotTwo);
-            GearCombo("GearThree", Globals::GearSlotThree);
+            ImGui::TextWrapped(Globals::saveFiles[Globals::CurrentSaveFile].loadouts.empty()
+                ? "No gear sets yet. Make them on the main menu under Command."
+                : "Pick a gear set in the row under the heroes.");
             ImGui::End();
         }
+
+        GearSets::DrawEditor();
 
         // "Start a Game": runs every frame so a start under way is followed even with the window closed.
         static StartGameModel startGame;

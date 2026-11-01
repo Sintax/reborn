@@ -170,6 +170,8 @@
     <ClInclude Include="GearDump.hpp" />
     <ClInclude Include="Perf.hpp" />
     <ClInclude Include="CharSelectRules.hpp" />
+    <ClInclude Include="GearSets.hpp" />
+    <ClInclude Include="GearSetsGame.hpp" />
     <ClInclude Include="PlayerNameRules.hpp" />
     <ClInclude Include="PlayerNames.hpp" />
     <ClInclude Include="AccessRules.hpp" />
@@ -223,6 +225,7 @@
     <ClCompile Include="LocalHost.cpp" />
     <ClCompile Include="StartKey.cpp" />
     <ClCompile Include="CharSelect.cpp" />
+    <ClCompile Include="GearSetsGame.cpp" />
     <ClCompile Include="GearDump.cpp" />
     <ClCompile Include="Perf.cpp" />
     <ClCompile Include="PlayerNames.cpp" />
