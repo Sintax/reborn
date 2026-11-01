@@ -10,6 +10,7 @@
 #include "imgui/imgui_stdlib.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -350,18 +351,38 @@ namespace GearSets {
     }
 
     namespace {
-        // One gear slot in the editor: a drop-down of the save's items with a filter box.
-        void SlotCombo(const char* id, Metagame::Item& slot, const std::vector<Metagame::Item>& items) {
+        std::string Lower(std::string s) {
+            for (char& c : s) c = (char)std::tolower((unsigned char)c);
+            return s;
+        }
+
+        // One gear slot in the editor: a drop-down of the save's items with a filter box (not
+        // case-sensitive, focused when the list opens). Items already in the set's other slots
+        // are greyed out: a set holds three different items.
+        void SlotCombo(const char* id, Metagame::Item& slot, const Metagame::Item& otherA, const Metagame::Item& otherB,
+                       const std::vector<Metagame::Item>& items) {
             ImGui::PushID(id);
             ImGui::SetNextItemWidth(-1.0f);
             const char* shown = slot.itemObjectName.empty() ? "No Item" : slot.itemDisplayName.c_str();
             if (ImGui::BeginCombo("##slot", shown, ImGuiComboFlags_HeightLarge)) {
+                UiStyle::WindowFont();   // the list is its own window, at the default size otherwise
                 static std::string filter;
-                ImGui::InputText("Filter Gear", &filter);
+                if (ImGui::IsWindowAppearing()) { filter.clear(); ImGui::SetKeyboardFocusHere(); }
+                ImGui::InputTextWithHint("##filter", "Type to filter", &filter);
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();   // the filter box eats Escape otherwise
+                const std::string wanted = Lower(filter);
                 if (ImGui::Selectable("No Item", slot.itemObjectName.empty())) slot = Metagame::Item();
-                for (const Metagame::Item& item : items) {
-                    if (!filter.empty() && !item.itemDisplayName.contains(filter)) continue;
-                    if (ImGui::Selectable(item.itemDisplayName.c_str(), slot.itemObjectName == item.itemObjectName)) slot = item;
+                for (size_t i = 0; i < items.size(); i++) {
+                    const Metagame::Item& item = items[i];
+                    if (!wanted.empty() && Lower(item.itemDisplayName).find(wanted) == std::string::npos) continue;
+                    // Several items share a display name; the index keeps each row's ID unique.
+                    ImGui::PushID((int)i);
+                    bool used = item.itemObjectName == otherA.itemObjectName || item.itemObjectName == otherB.itemObjectName;
+                    if (used) ImGui::BeginDisabled();
+                    bool picked = ImGui::Selectable(item.itemDisplayName.c_str(), slot.itemObjectName == item.itemObjectName);
+                    if (used) ImGui::EndDisabled();
+                    ImGui::PopID();
+                    if (picked) slot = item;
                     if (ImGui::IsItemHovered()) {
                         ImGui::BeginTooltip();
                         ImGui::TextUnformatted(item.itemDisplayName.c_str());
@@ -389,7 +410,7 @@ namespace GearSets {
         ImGui::Begin("Gear Sets", &Globals::GearViewerOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
         UiStyle::WindowFont();
         ImGui::TextUnformatted("Gear Sets");
-        ImGui::TextWrapped("Each set is three gear items. Pick one in the row under the heroes when you choose your hero.");
+        ImGui::TextWrapped("Each set is up to three different gear items. Pick a set in the game's loadout list when you choose your hero.");
         ImGui::Separator();
 
         for (int i = 0; i < (int)draft.size(); i++) {
@@ -410,9 +431,9 @@ namespace GearSets {
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::InputText("##name", &l.name);
             if (l.name.size() > kMaxNameLength) l.name.resize(kMaxNameLength);
-            SlotCombo("one", l.items[0], save->items);
-            SlotCombo("two", l.items[1], save->items);
-            SlotCombo("three", l.items[2], save->items);
+            SlotCombo("one", l.items[0], l.items[1], l.items[2], save->items);
+            SlotCombo("two", l.items[1], l.items[0], l.items[2], save->items);
+            SlotCombo("three", l.items[2], l.items[0], l.items[1], save->items);
             if (UiStyle::Button("Delete This Set")) {
                 draft.erase(draft.begin() + selected);
                 if (selected >= (int)draft.size()) selected = (int)draft.size() - 1;
