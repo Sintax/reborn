@@ -63,5 +63,20 @@ namespace CharSelect {
 
     // Client, four times a second: Globals::GearBoxOpen is true while the local controller's
     // CurrentCharacterSelectMovieState is InProgress (2, the hero screen is up), false otherwise.
+    // Leaving the hero screen clears the local Ready.
     void UpdateGearBox();
+
+    // Client: the player pressed Ready (or took it back) on the hero screen. Tells the server
+    // ({"RBREADY":true|false} over ServerProcessConvolve, on the game thread).
+    void SetLocalReady(bool ready);
+    bool LocalReady();
+
+    // Client: the game has recorded a hero for the local player (team record or hero list), so
+    // Ready can count.
+    bool LocalHeroPicked();
+
+    // Server: a player's {"RBREADY":...} message. Once every connected player with a hero is
+    // ready, the pick or get-ready phase drops to CharSelectTimes::kReadyLeftSeconds
+    // ("[CHARSEL] everyone is ready").
+    void OnReadyMessage(APoplarPlayerController* pc, bool ready);
 }

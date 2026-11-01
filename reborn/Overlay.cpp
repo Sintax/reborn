@@ -1,6 +1,7 @@
 #include "Overlay.hpp"
 
 #include "Access.hpp"
+#include "CharSelect.hpp"
 #include "Globals.hpp"
 #include "Engine.hpp"
 #include "GameCoordinator.hpp"
@@ -313,6 +314,29 @@ namespace Overlay {
         }
 
         GearSets::DrawEditor();
+
+        // The Ready window, its own box at the bottom centre of the hero screen: when every
+        // player has pressed Ready, the match starts in a few seconds.
+        if (Globals::GearBoxOpen) {
+            ImVec2 screen = ImGui::GetIO().DisplaySize;
+            ImGui::SetNextWindowPos(ImVec2(screen.x * 0.5f, screen.y - 16.0f), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+            ImGui::SetNextWindowSize(ImVec2(screen.x * 0.2f, 0.0f), ImGuiCond_Always);
+            ImGui::Begin("Ready", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+                | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
+            UiStyle::WindowFont();
+            const bool picked = CharSelect::LocalHeroPicked();
+            if (CharSelect::LocalReady()) {
+                ImGui::TextWrapped("You're ready. The match starts when everyone is.");
+                if (UiStyle::Button("Not ready", -1.0f)) CharSelect::SetLocalReady(false);
+            }
+            else {
+                ImGui::TextWrapped(picked ? "Press Ready when you're set." : "Pick your hero first.");
+                if (!picked) ImGui::BeginDisabled();
+                if (UiStyle::Button("Ready", -1.0f)) CharSelect::SetLocalReady(true);
+                if (!picked) ImGui::EndDisabled();
+            }
+            ImGui::End();
+        }
 
         // "Start a Game": runs every frame so a start under way is followed even with the window closed.
         static StartGameModel startGame;
