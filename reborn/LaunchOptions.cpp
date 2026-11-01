@@ -74,6 +74,7 @@ namespace LaunchOptions {
             else if (key == L"-rbkey") { o.key = Narrow(val); o.keySet = true; }   // test players only; may be empty
             else if (key == L"-rbusers" && !val.empty()) o.users = val;         // tests only
             else if (key == L"-rbseed") { if (ToInt(val, 0, INT_MAX, n)) o.seed = (unsigned)n; else o.errors.push_back(a); }
+            else if (key == L"-rbgearset") { if (ToInt(val, 0, 74, n)) o.gearSet = n; else o.errors.push_back(a); }
             else if (key == L"-rbhangsecs") { if (ToInt(val, 5, 3600, n)) o.hangSeconds = n; else o.errors.push_back(a); }
             else if (key == L"-rbtesthang") o.testHang = true;
             else if (key == L"-rbtestcrash") o.testCrash = true;

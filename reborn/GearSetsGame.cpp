@@ -75,7 +75,49 @@ namespace GearSets {
             p.bActive = 0;
         }
 
+        // Writes the sets into ReplicatedLoadouts[0..n) in order, leaving out gear that is unknown
+        // or that usable() refuses, and sets with no gear left; returns n. Only entries that pass
+        // the hero screen's check are written, so n is exactly what that check counts.
+        template <typename Usable>
+        int FillLoadouts(APoplarMetaPlayerReplicationInfo* meta, const std::vector<Set>& sets, const char* who, Usable usable) {
+            int n = 0;
+            for (const Set& s : sets) {
+                if (n >= 0x4B) break;
+                FMetaLoadoutInstance& L = meta->ReplicatedLoadouts[n];
+                PerkFields f[3];
+                std::string perksLog;
+                for (int k = 0; k < 3; k++) {
+                    FReplicatedPerkItem& p = L.Perks[k];
+                    ClearPerk(p);
+                    if (s.perks[k].empty()) { perksLog += " -"; continue; }
+                    UPoplarPerkFunction* perk = UObject::FindObject<UPoplarPerkFunction>(s.perks[k]);
+                    if (!IsLive(perk) || !usable(perk)) {
+                        perksLog += perk ? " (not usable here)" : " (unknown)";
+                        continue;
+                    }
+                    p.PerkFunction = perk;
+                    p.Rarity = GameUtils::RarityStringToRarity(s.perks[k]);
+                    p.ItemLevel = 0;
+                    p.bCanUse = 1;
+                    f[k] = { p.Rarity, true, p.ItemLevel };
+                    perksLog += " " + perk->GetName();
+                }
+                if (!LoadoutCounts(f)) {
+                    for (int k = 0; k < 3; k++) ClearPerk(L.Perks[k]);
+                    printf("[GEARSETS] %s: set %d \"%s\" left out: no usable gear (%s )\n", who, s.index, s.name.c_str(), perksLog.c_str());
+                    continue;
+                }
+                L.Index = s.index;
+                L.Version = 1;
+                SetEngineString(L.LoadoutName, s.name);
+                printf("[GEARSETS] %s: row cell %d = set %d \"%s\":%s\n", who, n, s.index, s.name.c_str(), perksLog.c_str());
+                n++;
+            }
+            return n;
+        }
+
         // Client state, per connection (the local controller).
+        bool g_filledLocally = false;
         APoplarPlayerController* g_sentFor = nullptr;
         int g_sends = 0;
         float g_sinceSend = 0.0f;
@@ -160,40 +202,11 @@ namespace GearSets {
         StopWaiting(pc);
 
         UNetConnection* conn = reinterpret_cast<UNetConnection*>(pc->Player);
-        int n = 0;
-        for (const Set& s : sets) {
-            FMetaLoadoutInstance& L = meta->ReplicatedLoadouts[n];
-            PerkFields f[3];
-            std::string perksLog;
-            for (int k = 0; k < 3; k++) {
-                FReplicatedPerkItem& p = L.Perks[k];
-                ClearPerk(p);
-                if (s.perks[k].empty()) { perksLog += " -"; continue; }
-                UPoplarPerkFunction* perk = UObject::FindObject<UPoplarPerkFunction>(s.perks[k]);
-                // Only an object the client can resolve: one that arrives as null would leave the
-                // set uncounted on the client while the server counts it (the screen would wait).
-                if (!IsLive(perk) || !conn || !ServerNetworking::PackageMapSupportsObject(conn, perk)) {
-                    perksLog += perk ? " (not on client)" : " (unknown)";
-                    continue;
-                }
-                p.PerkFunction = perk;
-                p.Rarity = GameUtils::RarityStringToRarity(s.perks[k]);
-                p.ItemLevel = 0;
-                p.bCanUse = 1;
-                f[k] = { p.Rarity, true, p.ItemLevel };
-                perksLog += " " + perk->GetName();
-            }
-            if (!LoadoutCounts(f)) {
-                for (int k = 0; k < 3; k++) ClearPerk(L.Perks[k]);
-                printf("[GEARSETS] %s: set %d \"%s\" left out: no usable gear (%s )\n", name.c_str(), s.index, s.name.c_str(), perksLog.c_str());
-                continue;
-            }
-            L.Index = s.index;
-            L.Version = 1;
-            SetEngineString(L.LoadoutName, s.name);
-            printf("[GEARSETS] %s: row cell %d = set %d \"%s\":%s\n", name.c_str(), n, s.index, s.name.c_str(), perksLog.c_str());
-            n++;
-        }
+        // Only objects the client can resolve. (The perks do not reach the client anyway, see
+        // ClientTick; the server's copy is what its own CurrentLoadout is taken from.)
+        int n = FillLoadouts(meta, sets, name.c_str(), [conn](UPoplarPerkFunction* perk) {
+            return conn && ServerNetworking::PackageMapSupportsObject(conn, perk);
+        });
         meta->NumLoadoutEntitlements = n;
         printf("[GEARSETS] %s: %d gear sets in the hero screen row (%d sent)\n", name.c_str(), n, (int)sets.size());
     }
@@ -238,6 +251,7 @@ namespace GearSets {
             g_pickedCell = -1;
             g_mismatchSeconds = 0.0f;
             g_countLowered = false;
+            g_filledLocally = false;
         }
         else {
             g_sinceSend += 0.25f;
@@ -256,6 +270,30 @@ namespace GearSets {
             g_sinceSend = 0.0f;
             printf("[GEARSETS] client: sent %d gear sets to the server (%zu messages, longest %zu bytes, try %d)\n",
                 PartsExpected(nlohmann::json::parse(msgs[0])), msgs.size(), longest, g_sends);
+            return;
+        }
+
+        // The server's count arrives, its perks do not (in run 20261101-014136 all three sets came
+        // with no usable perk: the loadout's perk fields are not sent to clients). So once the
+        // count is known (the server has the sets; the screen is still waiting, since 0 perks are
+        // valid), this client writes the same sets from its own save into its own copy, and sets
+        // the count to what it wrote. Same order and same rule as the server, so the row cell
+        // the player picks is the server's cell too.
+        if (meta && !g_filledLocally && meta->NumLoadoutEntitlements > 0) {
+            g_filledLocally = true;
+            const FMetaLoadoutInstance& first = meta->ReplicatedLoadouts[0];
+            printf("[GEARSETS] client: server lists %d sets; arrived for cell 0: index %d, version %d, name \"%s\", perk 0 %s rarity %d level %d\n",
+                meta->NumLoadoutEntitlements, first.Index, first.Version, first.LoadoutName.ToString().c_str(),
+                first.Perks[0].PerkFunction ? "set" : "none", first.Perks[0].Rarity, first.Perks[0].ItemLevel);
+            Metagame::SaveFile* save = CurrentSave();
+            std::vector<Set> sets;
+            if (save) for (const Set& s : SetsFromSave(*save)) if (HasGear(s)) sets.push_back(s);
+            int n = FillLoadouts(meta, sets, "client", [](UPoplarPerkFunction*) { return true; });
+            for (int i = n; i < meta->NumLoadoutEntitlements && i < 0x4B; i++)
+                for (int k = 0; k < 3; k++) ClearPerk(meta->ReplicatedLoadouts[i].Perks[k]);
+            if (n != meta->NumLoadoutEntitlements)
+                printf("[GEARSETS] client: wrote %d sets, the server listed %d; showing %d\n", n, meta->NumLoadoutEntitlements, n);
+            meta->NumLoadoutEntitlements = n;
             return;
         }
 

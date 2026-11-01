@@ -309,7 +309,7 @@ namespace Overlay {
             ImGui::TextUnformatted("Gear");
             ImGui::TextWrapped(Globals::saveFiles[Globals::CurrentSaveFile].loadouts.empty()
                 ? "No gear sets yet. Make them on the main menu under Command."
-                : "Pick a gear set in the row under the heroes.");
+                : "Pick a gear set in the game's loadout list.");
             ImGui::End();
         }
 
