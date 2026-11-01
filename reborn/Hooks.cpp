@@ -2228,7 +2228,11 @@ namespace Hooks {
                 return;
             }
 
-            printf("[NETWORKING] Setting up a player's gear!\n");
+            auto perkNamed = [&](const char* key) {
+                return jsonObj.contains(key) && jsonObj[key].is_string() ? jsonObj[key].get<std::string>() : std::string("-");
+            };
+            printf("[NETWORKING] Setting up a player's gear! (%s: %s | %s | %s)\n", ppc->MyPoplarPRI->PlayerName.ToString().c_str(),
+                perkNamed("perkOne").c_str(), perkNamed("perkTwo").c_str(), perkNamed("perkThree").c_str());
 
             { // Now you're in all of our matches :)
                 UPoplarPerkFunction* perkOne = nullptr;

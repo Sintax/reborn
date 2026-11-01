@@ -14,7 +14,9 @@ class APoplarPlayerController;
 //  - A pick sends PoplarPlayerController.ServerSelectPlayerMetaLoadoutIndex(i); the server copies
 //    ReplicatedLoadouts[i] into CurrentLoadout (+0x1130510).
 // So the server holds NumLoadoutEntitlements at -1 (check not passed, the screen waits) until the
-// client's sets arrive, then sets it to the number of sets it filled.
+// client's sets arrive, then sets it to the number of sets it filled. Clients receive that count
+// and the sets' names, but not their perk objects, so each client then writes the same sets from
+// its own save into its own copy (ClientTick) and the screen shows them.
 namespace GearSets {
     // Server, at login (CharSelect::GrantEverything): hold the player's loadout count at -1 until
     // their sets arrive, at most kWaitSeconds. Logs "[GEARSETS] waiting for <name>'s gear sets".
@@ -32,9 +34,11 @@ namespace GearSets {
     // picked cell. Server: logs it.
     void OnSelectLoadout(APoplarPlayerController* pc, int index);
 
-    // Client, four times a second: sends the save's sets once per connection, and watches that
-    // the hero screen's loadout check can pass (if the received sets do not add up after a few
-    // seconds, it lowers the local count so the screen never stays stuck).
+    // Client, four times a second: sends the save's sets once per connection (one message per
+    // set; resent while the server shows no count), fills its own copy of the row once the
+    // server's count arrives, and watches that the hero screen's loadout check can pass (if the
+    // sets do not add up after a few seconds, it lowers the local count so the screen never stays
+    // stuck).
     void ClientTick();
 
     // Client, when the hero screen closes and before SetGear: puts the picked set's three items
