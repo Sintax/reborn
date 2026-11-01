@@ -27,10 +27,11 @@ namespace Access {
     // Server: whether this player passes the current list (no logging, no side effects).
     bool CanJoinNow(const Globals::ServerPlayer& sp);
 
-    // Client, on NMT_DebugText (joining and in the map): "RebornRefused=<text>" is the server
-    // turning us away. Keeps the text (made safe, at most 80 characters) and logs
+    // Client, on NMT_DebugText (joining and in the map; the text read with
+    // PlayerNames::ReadControlText): "RebornRefused=<text>" is the server turning us away. Keeps
+    // the text (made safe, at most 80 characters) and logs
     // "[ACCESS] client: refused by the server: <text>".
-    void OnClientText(void* inbunch);
+    void OnClientText(const std::string& text);
 
     // Client: the last refusal the server sent (for the screen that tells the player).
     bool HasRefusal();

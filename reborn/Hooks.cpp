@@ -1121,9 +1121,12 @@ namespace Hooks {
         if (!Globals::amServer) {
             // Client: the first argument is the world's FNetworkNotify sub-object (UWorld + 0x58).
             // NMT_DebugText in the loaded map: the original (battleborn+0x45c540) only reads the
-            // text and frees it, so read it here instead (a refusal from the server, Access).
+            // text and frees it, so read it here instead (a refusal from the server, Access; the
+            // hero screen's ready count, CharSelect).
             if (message == 0x11) {
-                Access::OnClientText(inbunch);
+                std::string text = PlayerNames::ReadControlText(inbunch);
+                Access::OnClientText(text);
+                CharSelect::OnClientText(text);
                 return;
             }
             WorldControlMessage.call<void>(world, connection, message, inbunch);

@@ -338,9 +338,10 @@ namespace Overlay {
             ImGui::End();
         }
 
-        // The Ready window, its own box at the bottom centre of the hero screen: when every
-        // player has pressed Ready, the match starts in a few seconds.
-        if (Globals::GearBoxOpen) {
+        // The Ready window, its own box at the bottom centre of the hero screen while heroes are
+        // picked and players get ready: when every player has pressed Ready, the match starts in a
+        // few seconds. The line shows the server's count ("Waiting for 1 more player.").
+        if (CharSelect::ReadyWindowShown()) {
             ImVec2 screen = ImGui::GetIO().DisplaySize;
             ImGui::SetNextWindowPos(ImVec2(screen.x * 0.5f, screen.y - 16.0f), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
             ImGui::SetNextWindowSize(ImVec2(screen.x * 0.2f, 0.0f), ImGuiCond_Always);
@@ -348,12 +349,11 @@ namespace Overlay {
                 | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
             UiStyle::WindowFont();
             const bool picked = CharSelect::LocalHeroPicked();
+            ImGui::TextWrapped("%s", CharSelect::ReadyStatusLine().c_str());
             if (CharSelect::LocalReady()) {
-                ImGui::TextWrapped("You're ready. The match starts when everyone is.");
                 if (UiStyle::Button("Not ready", -1.0f)) CharSelect::SetLocalReady(false);
             }
             else {
-                ImGui::TextWrapped(picked ? "Press Ready when you're set." : "Pick your hero first.");
                 if (!picked) ImGui::BeginDisabled();
                 if (UiStyle::Button("Ready", -1.0f)) CharSelect::SetLocalReady(true);
                 if (!picked) ImGui::EndDisabled();

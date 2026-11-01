@@ -29,6 +29,22 @@ int main() {
     CHECK(LengthenedTimeLeft(45.f, 40.f, 40.5f) == 45.f);   // a timer read above its length
     CHECK(LengthenedTimeLeft(5.f, 60.f, 0.f) == 1.f);
 
+    // The ready count travels as "RebornReady=<ready>/<players>".
+    int r = -1, p = -1;
+    CHECK(ReadyCountText(1, 3) == "RebornReady=1/3");
+    CHECK(ParseReadyCount("RebornReady=1/3", r, p) && r == 1 && p == 3);
+    CHECK(!ParseReadyCount("RebornRefused=Improper Credentials!", r, p) && r == 1);   // other text: untouched
+    CHECK(!ParseReadyCount("RebornReady=4/3", r, p));    // more ready than players
+    CHECK(!ParseReadyCount("RebornReady=x/3", r, p));
+
+    // The window's line.
+    CHECK(ReadyStatus(false, false, 0, 2) == "Pick your hero first.");
+    CHECK(ReadyStatus(false, true, 1, 3) == "1 of 3 players ready. Press Ready when you're set.");
+    CHECK(ReadyStatus(true, true, 1, 3) == "You're ready. Waiting for 2 more players.");
+    CHECK(ReadyStatus(true, true, 2, 3) == "You're ready. Waiting for 1 more player.");
+    CHECK(ReadyStatus(true, true, 3, 3) == "Everyone is ready. Starting...");
+    CHECK(ReadyStatus(true, true, 0, 0) == "You're ready. The match starts when everyone is.");   // no count yet
+
     if (failures == 0) std::printf("PASS\n");
     return failures == 0 ? 0 : 1;
 }

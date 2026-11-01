@@ -2,6 +2,8 @@
 
 #include "CharSelectRules.hpp"
 
+#include <string>
+
 class APoplarGameInfo;
 class APoplarGameReplicationInfo;
 class APoplarPlayerController;
@@ -72,8 +74,19 @@ namespace CharSelect {
     bool LocalReady();
 
     // Client: the game has recorded a hero for the local player (team record or hero list), so
-    // Ready can count.
+    // Ready can count. Updated by UpdateGearBox.
     bool LocalHeroPicked();
+
+    // Client: show the Ready window: the hero screen is up and heroes are being picked or players
+    // are getting ready (not the waiting room before, not the loading intro after). Updated by
+    // UpdateGearBox ("[CHARSEL] ready window shown|hidden").
+    bool ReadyWindowShown();
+
+    // Client: the Ready window's line, with the server's count ("Waiting for 1 more player.").
+    std::string ReadyStatusLine();
+
+    // Client: control text from the server; "RebornReady=<ready>/<players>" updates the count.
+    void OnClientText(const std::string& text);
 
     // Server: a player's {"RBREADY":...} message. Once every connected player with a hero is
     // ready, the pick or get-ready phase drops to CharSelectTimes::kReadyLeftSeconds

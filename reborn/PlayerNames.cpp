@@ -147,7 +147,7 @@ namespace PlayerNames {
         // NMT_DebugText: this handler has no case for it (the bunch is left unread), so a server
         // message sent before the map has loaded is read here (Access::OnClientText).
         else if (message == 0x11)
-            Access::OnClientText(inbunch);
+            Access::OnClientText(ReadControlText(inbunch));
     }
 
     void InstallHooks() {

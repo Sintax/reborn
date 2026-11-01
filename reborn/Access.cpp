@@ -194,8 +194,7 @@ namespace Access {
         return true;
     }
 
-    void OnClientText(void* inbunch) {
-        std::string s = PlayerNames::ReadControlText(inbunch);
+    void OnClientText(const std::string& s) {
         const std::string tag = "RebornRefused=";
         if (s.rfind(tag, 0) != 0) return;   // other server text: nothing to do (the engine only logs it)
         std::string text = PlayerNames::SafeLogText(s.substr(tag.size()), 80);

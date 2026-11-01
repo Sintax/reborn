@@ -411,9 +411,6 @@ namespace Autopilot {
                 g_takenLogged = true;
                 std::printf("[AUTOPILOT] pick of cell %d taken (%s; selection state %d)\n", g_lastCell, why, (int)pri->CharacterSelectionState);
                 if (g_lastCell >= 0 && g_lastCell != g_wantedCell) SetFallbackHero(CellHero(m, g_lastCell));
-                // Like a player who has picked: press Ready, so the match starts once all test
-                // players have (instead of waiting out the longer timers).
-                CharSelect::SetLocalReady(true);
             }
             return why != nullptr;
         }
@@ -699,6 +696,12 @@ namespace Autopilot {
             }
             if (pc && pc->Pawn && g_phaseTime > 5.f) { SetPhase(Phase::Playing); break; }
             if (pc) SelectTick(pc, dt);
+            // Picked, and the Ready window is up: press Ready once, so the match starts when all
+            // test players have (instead of waiting out the longer timers).
+            if (CharSelect::ReadyWindowShown() && CharSelect::LocalHeroPicked() && !CharSelect::LocalReady()) {
+                std::printf("[AUTOPILOT] pressing Ready\n");
+                CharSelect::SetLocalReady(true);
+            }
             break;
         case Phase::Playing:
             if (g_menuTime >= kMenuGrace) {   // kicked back to the menu: try again

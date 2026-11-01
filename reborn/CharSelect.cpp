@@ -4,8 +4,10 @@
 #include "Globals.hpp"
 #include "Hooks.hpp"
 #include "Networking.hpp"
+#include "PlayerNames.hpp"
 #include "ServerSettings.hpp"
 #include "Utils.hpp"
+#include <atomic>
 #include <cstdio>
 #include <string>
 #include <unordered_set>
@@ -302,7 +304,11 @@ namespace CharSelect {
         // Latched, never reset: one server process hosts one match (ShutdownTimer ends it).
         bool g_phaseComplete = false;   // this match's pick phase has completed
         float g_sinceServerTick = 0.f;
-        bool g_localReady = false;      // client: Ready pressed on this hero screen
+        std::atomic<bool> g_localReady{ false };   // client: Ready pressed on this hero screen
+        // Client, set four times a second on the game thread (UpdateGearBox), read by the overlay.
+        std::atomic<bool> g_readyShown{ false };   // picking a hero or getting ready right now
+        std::atomic<bool> g_heroPicked{ false };
+        std::atomic<int> g_readyCount{ 0 }, g_readyOf{ 0 };   // the server's last count; 0/0 = none yet
         // A late joiner gets no hero screen (see EarlierHero's note), so there is nothing to wait
         // for beyond the game's default pending class, which arrives about 1 s after the login.
         const float kLateJoinSettleSeconds = 3.f;
@@ -384,11 +390,11 @@ namespace CharSelect {
                 before, m->TimeRemainingInCurrentPhase);
         }
 
-        // Server: once every connected player who has a hero has pressed Ready (and at least one
-        // has), the pick or get-ready phase runs out in a few seconds.
+        // Server: tells every player how many are ready ("RebornReady=<ready>/<players>") when
+        // that changes, and once every connected player who has a hero has pressed Ready (and at
+        // least one has), the pick or get-ready phase runs out in a few seconds.
         void SkipWhenAllReady(APoplarCharacterSelectManager* m) {
             if (!m->CurrentPhase || !CharSelectTimes::ReadyCanSkip(m->CurrentPhase->GetName())) return;
-            if (m->TimeRemainingInCurrentPhase <= CharSelectTimes::kReadyLeftSeconds) return;
             int players = 0, ready = 0;
             for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
                 APoplarPlayerController* pc = LiveController(sp);
@@ -396,6 +402,16 @@ namespace CharSelect {
                 players++;
                 if (sp.Ready && HasPicked(m, pc->PlayerReplicationInfo)) ready++;
             }
+            static int sentReady = -1, sentPlayers = -1;
+            if (ready != sentReady || players != sentPlayers) {
+                sentReady = ready;
+                sentPlayers = players;
+                std::string text = CharSelectTimes::ReadyCountText(ready, players);
+                for (Globals::ServerPlayer& sp : Globals::ServerPlayers)
+                    if (LiveController(sp) && !sp.Refused) PlayerNames::SendControlText(sp.Connection, text);
+                printf("[CHARSEL] ready count %d/%d sent\n", ready, players);
+            }
+            if (m->TimeRemainingInCurrentPhase <= CharSelectTimes::kReadyLeftSeconds) return;
             if (!CharSelectTimes::EveryoneReady(players, ready)) return;
             printf("[CHARSEL] everyone is ready (%d/%d) in %s: %.0f s left -> %.0f s\n", ready, players,
                 m->CurrentPhase->GetName().c_str(), m->TimeRemainingInCurrentPhase, CharSelectTimes::kReadyLeftSeconds);
@@ -699,8 +715,46 @@ namespace CharSelect {
             open = IsLive(pc) && pc->CurrentCharacterSelectMovieState == ECharacterSelectMovieState::CharacterSelectMovie_InProgress;
         }
         if (open != Globals::GearBoxOpen) printf("[CHARSEL] gear box %s\n", open ? "shown" : "hidden");
-        if (!open) g_localReady = false;   // a new hero screen starts not ready
+        if (!open) {   // a new hero screen starts not ready, with no count
+            g_localReady = false;
+            g_readyCount = 0;
+            g_readyOf = 0;
+        }
         Globals::GearBoxOpen = open;
+
+        // Ready only while heroes are being picked or players get ready: not in the waiting room
+        // before, and not once the match is loading (the game keeps the movie state InProgress
+        // through the intro, run 20261101-010838 screenshot at 61 s). Known gap (LATER.md): in
+        // story missions the pick phase starts while the mission's story scene (Kleese) still
+        // covers the screen, so Ready shows then too. Nothing found marks that scene's end:
+        // IsLoadingMoviePlaying, extFadeInComplete, the grids' bIsShown, bCinematicMode and the
+        // level's playing SeqAct_Interps all stay the same (runs 20261101-011701, -012924).
+        bool shown = false, picked = false;
+        if (open) {
+            APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
+            APoplarGameReplicationInfo* gri = pc && pc->WorldInfo ? reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI) : nullptr;
+            APoplarCharacterSelectManager* m = gri ? gri->CharacterSelectManager : nullptr;
+            if (IsLive(m) && m->CharacterSelectState == ECharacterSelectManagerState::CSMS_InProgress && m->CurrentPhase)
+                shown = CharSelectTimes::ReadyCanSkip(m->CurrentPhase->GetName());
+            picked = IsLive(m) && HasPicked(m, pc->PlayerReplicationInfo);
+        }
+        if (shown != g_readyShown) printf("[CHARSEL] ready window %s\n", shown ? "shown" : "hidden");
+        g_readyShown = shown;
+        g_heroPicked = picked;
+    }
+
+    bool ReadyWindowShown() { return g_readyShown; }
+
+    std::string ReadyStatusLine() {
+        return CharSelectTimes::ReadyStatus(g_localReady, g_heroPicked, g_readyCount, g_readyOf);
+    }
+
+    void OnClientText(const std::string& text) {
+        int ready = 0, players = 0;
+        if (!CharSelectTimes::ParseReadyCount(text, ready, players)) return;
+        g_readyCount = ready;
+        g_readyOf = players;
+        printf("[CHARSEL] client: %d of %d players ready\n", ready, players);
     }
 
     void SetLocalReady(bool ready) {
@@ -715,12 +769,7 @@ namespace CharSelect {
 
     bool LocalReady() { return g_localReady; }
 
-    bool LocalHeroPicked() {
-        APoplarPlayerController* pc = SDKUtils::GetLocalPlayerController();
-        if (!IsLive(pc) || !pc->WorldInfo) return false;
-        APoplarGameReplicationInfo* gri = reinterpret_cast<APoplarGameReplicationInfo*>(pc->WorldInfo->GRI);
-        return gri && HasPicked(gri->CharacterSelectManager, pc->PlayerReplicationInfo);
-    }
+    bool LocalHeroPicked() { return g_heroPicked; }
 
     void OnReadyMessage(APoplarPlayerController* pc, bool ready) {
         for (Globals::ServerPlayer& sp : Globals::ServerPlayers) {
