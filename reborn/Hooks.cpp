@@ -1612,8 +1612,14 @@ namespace Hooks {
 
     void MainPanelClickedHook(uint32_t PanelId) {
         std::cout << PanelId << std::endl;
-        if (PanelId == 1 || PanelId == 2 || PanelId == 6) { // Versus Public; Story Public; Operations Public
-            Overlay::OpenServerBrowser();
+        if (PanelId == 1) { // Versus Public
+            Overlay::OpenServerBrowser(GameKind::Versus);
+        }
+        else if (PanelId == 2) { // Story Public
+            Overlay::OpenServerBrowser(GameKind::Story);
+        }
+        else if (PanelId == 6) { // Operations Public
+            Overlay::OpenServerBrowser(GameKind::Operations);
         }
         else if (PanelId == 4) { // Versus Private
             Overlay::OpenSoloVSAI();

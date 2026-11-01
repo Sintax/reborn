@@ -121,7 +121,7 @@ namespace StartGameWindow {
                 ImGui::InputTextWithHint("##filter", "Filter maps and modes", &filter);
                 for (int i = 0; i < (int)Constants::GameCreationOptions.size(); i++) {
                     const auto& option = Constants::GameCreationOptions[i];
-                    if (filter.empty() || option.first.contains(filter)) {
+                    if (m.Shows(i) && (filter.empty() || option.first.contains(filter))) {
                         if (ImGui::Selectable(option.first.c_str(), m.mapIndex == i)) m.mapIndex = i;
                     }
                 }

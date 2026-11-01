@@ -49,6 +49,23 @@ int main() {
     m.draftStyleIndex = 0;   // Quick Select: the game's default, nothing added
     CHECK(m.HostDraftStyleValue().empty());
 
+    // Each "Public" offers only its own kind of game.
+    StartGameModel k;
+    k.ShowOnly(GameKind::Story);
+    CHECK(k.MapMode().first == "Story - The Algorithm");          // already a story map: kept
+    CHECK(!k.Shows(IndexOf("Operations - Toby's Friendship Raid")));
+    CHECK(!k.Shows(IndexOf("Incursion - Echelon")));
+    k.ShowOnly(GameKind::Operations);
+    CHECK(k.MapMode().first.starts_with("Operations - "));      // moved to the first operation
+    CHECK(!k.Shows(IndexOf("Story - Prologue")));
+    k.ShowOnly(GameKind::Versus);
+    CHECK(k.IsVersus());
+    CHECK(k.Shows(IndexOf("Face-Off - Temples")));
+    CHECK(!k.Shows(IndexOf("Operations - Toby's Friendship Raid")));
+    k.ShowOnly(GameKind::All);
+    CHECK(k.Shows(IndexOf("Story - Prologue")) && k.Shows(IndexOf("Capture - Outback")));
+    CHECK(!k.Shows(-1) && !k.Shows(999));
+
     // A broken index never reads past the lists.
     m.mapIndex = 999; m.draftStyleIndex = -3;
     CHECK(m.MapMode().first == Constants::GameCreationOptions[0].first);

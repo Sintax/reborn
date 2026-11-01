@@ -6,11 +6,13 @@
 #include "imgui/imgui_stdlib.h"
 
 #include "Metagame.hpp"
+#include "StartGameWindow.hpp"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 namespace Overlay {
-    void OpenServerBrowser();
+    // kind: the "Public" it was opened from; "Start a Game" then offers only those maps.
+    void OpenServerBrowser(GameKind kind = GameKind::All);
 
     void OpenDirectConnect();
 

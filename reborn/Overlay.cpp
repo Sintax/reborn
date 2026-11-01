@@ -15,7 +15,12 @@
 #include <algorithm>
 
 namespace Overlay {
-    void OpenServerBrowser() {
+    namespace {
+        GameKind g_publicKind = GameKind::All;   // the "Public" the server browser was opened from
+    }
+
+    void OpenServerBrowser(GameKind kind) {
+        g_publicKind = kind;
         std::thread t(GameCoordinator::RefreshServerBrowser);
         t.detach();
 
@@ -358,6 +363,7 @@ namespace Overlay {
 
             if (UiStyle::Button("Start a Game", buttonWidth)) {
                 Globals::ServerBrowserOpen = false;
+                startGame.ShowOnly(g_publicKind);
                 // Starting on the server names the game after the player, so ask for a name first.
                 if (!StartKey::Key().empty() && StartKey::PlayerName().empty()) Globals::PlayerNameOpen = true;
                 else Globals::StartGameOpen = true;

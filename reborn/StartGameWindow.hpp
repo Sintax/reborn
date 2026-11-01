@@ -5,6 +5,15 @@
 #include "Constants.hpp"
 #include "StartGameRequest.hpp"
 
+// Which "Public" the player picked on the main menu; the map list shows only that kind of game.
+enum class GameKind { All, Story, Operations, Versus };
+
+inline GameKind KindOf(const std::string& mapMode) {
+    if (mapMode.starts_with("Story")) return GameKind::Story;
+    if (mapMode.starts_with("Operations")) return GameKind::Operations;
+    return GameKind::Versus;
+}
+
 // What the player has chosen in the "Start a Game" window. Pure data so it can be unit tested.
 struct StartGameModel {
     bool runOnServer = false;   // true: the matchmaking server starts it; false: this PC hosts it
@@ -14,8 +23,23 @@ struct StartGameModel {
     int botsA = 5, botsB = 5;   // Versus only
     int draftStyleIndex = 0;    // into Constants::DraftStyleNames; Versus only
     std::string gameName;       // server only: shown in the server browser
+    GameKind kind = GameKind::All;   // the maps the list offers
 
     bool ServerChoiceEnabled() const { return hasKey; }
+
+    bool Shows(int i) const {
+        const auto& all = Constants::GameCreationOptions;
+        if (i < 0 || i >= (int)all.size()) return false;
+        return kind == GameKind::All || KindOf(all[i].first) == kind;
+    }
+
+    // Offer only one kind of game; a chosen map of another kind moves to the first of this kind.
+    void ShowOnly(GameKind k) {
+        kind = k;
+        if (Shows(mapIndex)) return;
+        for (int i = 0; i < (int)Constants::GameCreationOptions.size(); i++)
+            if (Shows(i)) { mapIndex = i; return; }
+    }
 
     const std::pair<std::string, std::string>& MapMode() const {
         const auto& all = Constants::GameCreationOptions;
