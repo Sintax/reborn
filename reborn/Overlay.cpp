@@ -308,12 +308,10 @@ namespace Overlay {
             UiStyle::WindowFont();
             ImGui::TextUnformatted("Gear");
             ImGui::TextWrapped(Globals::saveFiles[Globals::CurrentSaveFile].loadouts.empty()
-                ? "No gear sets yet. Make them on the main menu under Command."
+                ? "No gear sets yet. Make them on the main menu under Command, Gear."
                 : "Pick a gear set in the game's loadout list.");
             ImGui::End();
         }
-
-        GearSets::DrawEditor();
 
         // The Ready window while heroes are picked and players get ready: when every player has
         // pressed Ready, the match starts in a few seconds. The line shows the server's count

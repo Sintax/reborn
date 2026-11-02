@@ -4,13 +4,9 @@
 #include "Globals.hpp"
 #include "Metagame.hpp"
 #include "Networking.hpp"
-#include "UiStyle.hpp"
 #include "Utils.hpp"
-#include "imgui/imgui.h"
-#include "imgui/imgui_stdlib.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -350,109 +346,4 @@ namespace GearSets {
             set.items[0].itemDisplayName.c_str(), set.items[1].itemDisplayName.c_str(), set.items[2].itemDisplayName.c_str());
     }
 
-    namespace {
-        std::string Lower(std::string s) {
-            for (char& c : s) c = (char)std::tolower((unsigned char)c);
-            return s;
-        }
-
-        // One gear slot in the editor: a drop-down of the save's items with a filter box (not
-        // case-sensitive, focused when the list opens). Items already in the set's other slots
-        // are greyed out: a set holds three different items.
-        void SlotCombo(const char* id, Metagame::Item& slot, const Metagame::Item& otherA, const Metagame::Item& otherB,
-                       const std::vector<Metagame::Item>& items) {
-            ImGui::PushID(id);
-            ImGui::SetNextItemWidth(-1.0f);
-            const char* shown = slot.itemObjectName.empty() ? "No Item" : slot.itemDisplayName.c_str();
-            if (ImGui::BeginCombo("##slot", shown, ImGuiComboFlags_HeightLarge)) {
-                UiStyle::WindowFont();   // the list is its own window, at the default size otherwise
-                static std::string filter;
-                if (ImGui::IsWindowAppearing()) { filter.clear(); ImGui::SetKeyboardFocusHere(); }
-                ImGui::InputTextWithHint("##filter", "Type to filter", &filter);
-                if (ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();   // the filter box eats Escape otherwise
-                const std::string wanted = Lower(filter);
-                if (ImGui::Selectable("No Item", slot.itemObjectName.empty())) slot = Metagame::Item();
-                for (size_t i = 0; i < items.size(); i++) {
-                    const Metagame::Item& item = items[i];
-                    if (!wanted.empty() && Lower(item.itemDisplayName).find(wanted) == std::string::npos) continue;
-                    // Several items share a display name; the index keeps each row's ID unique.
-                    ImGui::PushID((int)i);
-                    bool used = item.itemObjectName == otherA.itemObjectName || item.itemObjectName == otherB.itemObjectName;
-                    if (used) ImGui::BeginDisabled();
-                    bool picked = ImGui::Selectable(item.itemDisplayName.c_str(), slot.itemObjectName == item.itemObjectName);
-                    if (used) ImGui::EndDisabled();
-                    ImGui::PopID();
-                    if (picked) slot = item;
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted(item.itemDisplayName.c_str());
-                        ImGui::Separator();
-                        ImGui::TextUnformatted(item.itemFlavor.c_str());
-                        ImGui::EndTooltip();
-                    }
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::PopID();
-        }
-    }
-
-    void DrawEditor() {
-        // Edits are made on a copy and written on Save, so Close throws them away.
-        static std::vector<Metagame::Loadout> draft;
-        static bool loaded = false;
-        static int selected = 0;
-        Metagame::SaveFile* save = CurrentSave();
-        if (!Globals::GearViewerOpen || !save) { loaded = false; return; }
-        if (!loaded) { draft = save->loadouts; loaded = true; selected = 0; }
-
-        UiStyle::NextWindow(0.6f);
-        ImGui::Begin("Gear Sets", &Globals::GearViewerOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
-        UiStyle::WindowFont();
-        ImGui::TextUnformatted("Gear Sets");
-        ImGui::TextWrapped("Each set is up to three different gear items. Pick a set in the game's loadout list when you choose your hero.");
-        ImGui::Separator();
-
-        for (int i = 0; i < (int)draft.size(); i++) {
-            std::string label = CleanName(draft[i].name, i) + "##set" + std::to_string(i);
-            if (ImGui::RadioButton(label.c_str(), selected == i)) selected = i;
-            if (i % 4 != 3 && i + 1 < (int)draft.size()) ImGui::SameLine();
-        }
-        if ((int)draft.size() < kMaxSets && UiStyle::Button("+ New Set")) {
-            Metagame::Loadout l;
-            l.name = DefaultName((int)draft.size());
-            draft.push_back(l);
-            selected = (int)draft.size() - 1;
-        }
-
-        if (selected >= 0 && selected < (int)draft.size()) {
-            Metagame::Loadout& l = draft[selected];
-            ImGui::Separator();
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputText("##name", &l.name);
-            if (l.name.size() > kMaxNameLength) l.name.resize(kMaxNameLength);
-            SlotCombo("one", l.items[0], l.items[1], l.items[2], save->items);
-            SlotCombo("two", l.items[1], l.items[0], l.items[2], save->items);
-            SlotCombo("three", l.items[2], l.items[0], l.items[1], save->items);
-            if (UiStyle::Button("Delete This Set")) {
-                draft.erase(draft.begin() + selected);
-                if (selected >= (int)draft.size()) selected = (int)draft.size() - 1;
-            }
-        }
-
-        ImGui::Separator();
-        float w = UiStyle::ButtonWidth(2);
-        if (UiStyle::Button("Save", w)) {
-            save->loadouts = draft;
-            for (int i = 0; i < (int)save->loadouts.size(); i++) save->loadouts[i].name = CleanName(save->loadouts[i].name, i);
-            // Gear slots point into the save; they are picked again at the next hero screen.
-            Globals::GearSlotOne = Globals::GearSlotTwo = Globals::GearSlotThree = nullptr;
-            Metagame::WriteSave((int)Globals::CurrentSaveFile, *save);
-            printf("[GEARSETS] saved %d gear sets\n", (int)save->loadouts.size());
-            Globals::GearViewerOpen = false;
-        }
-        ImGui::SameLine();
-        if (UiStyle::Button("Close", w)) Globals::GearViewerOpen = false;
-        ImGui::End();
-    }
 }

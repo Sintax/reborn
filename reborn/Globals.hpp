@@ -172,7 +172,6 @@ namespace Globals {
     // The game's hero screen is up on this client (CharSelect::UpdateGearBox); shows the Gear box.
     extern bool GearBoxOpen;
 
-    extern bool GearViewerOpen;
 
     namespace Telemetry {
         extern std::mutex TickrateMutex;

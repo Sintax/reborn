@@ -95,7 +95,6 @@ namespace Globals {
 
     bool GearBoxOpen = false;
 
-    bool GearViewerOpen = false;
 
     UWorld* GetGWorld() {
         return *reinterpret_cast<UWorld**>(baseAddress + 0x34dfca0);

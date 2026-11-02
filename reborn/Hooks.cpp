@@ -1636,9 +1636,6 @@ namespace Hooks {
         else if (PanelId == 7) { // Operations Private
             Overlay::OpenOperations();
         }
-        else if (PanelId == 3 || PanelId == 18) {
-            Globals::GearViewerOpen = true;
-        }
         else if (PanelId == 8) { // Dojo
             Globals::amStandalone = true;
             Overlay::StartLaunchSequence(L"open Dojo_P");
@@ -2298,7 +2295,9 @@ namespace Hooks {
 
         if (function == mainPanelClickedUFunction) {
             MainPanelClickedHook(reinterpret_cast<UPoplarFrontendScreenMainGFxObject_execHandleMainPanelButtonClicked_Params*>(params)->PanelId);
-            if (reinterpret_cast<UPoplarFrontendScreenMainGFxObject_execHandleMainPanelButtonClicked_Params*>(params)->PanelId != 11) {
+            int32_t panel = reinterpret_cast<UPoplarFrontendScreenMainGFxObject_execHandleMainPanelButtonClicked_Params*>(params)->PanelId;
+            // 3 and 18: Command, the game's own screen (its Gear tab is fed by CommandGear).
+            if (panel != 11 && panel != 3 && panel != 18) {
                 return;
             }
         }

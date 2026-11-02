@@ -44,7 +44,4 @@ namespace GearSets {
     // Client, when the hero screen closes and before SetGear: puts the picked set's three items
     // in Globals::GearSlotOne/Two/Three. Logs "[GEARSETS] using set ...".
     void ApplyPickedSet();
-
-    // Client: the Gear Sets window (main menu, Command). Builds and saves the sets.
-    void DrawEditor();
 }
