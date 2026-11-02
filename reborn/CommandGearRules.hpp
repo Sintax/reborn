@@ -186,4 +186,18 @@ namespace CommandGearRules {
         out.ok = out.id >= 1;
         return out;
     }
+
+    // The sets for the reply to a save, with the saved one exactly as the game sent it. After a
+    // save the page checks its sets against the stored ones (battleborn+0x155d740: name and the
+    // three gear ids) and, while leaving the screen, saves any that differ again until none do
+    // (0x1206ba0). A reply that changed the set (a default name for an unnamed set, our guid for a
+    // bank item's id) made it save forever.
+    inline void EchoSaved(std::vector<GearLoadout>& loadouts, const SavedLoadout& saved) {
+        for (GearLoadout& l : loadouts) {
+            if (l.id != saved.id) continue;
+            l.name = saved.name;
+            for (int k = 0; k < 3; k++) l.perks[k] = saved.perks[k];
+            return;
+        }
+    }
 }

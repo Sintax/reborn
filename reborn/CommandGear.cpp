@@ -220,9 +220,11 @@ namespace CommandGear {
             return SideboardsReply(items);
         }
 
-        std::string MetaProfileBody() {
+        // saved: the set the game just saved, echoed back unchanged (EchoSaved).
+        std::string MetaProfileBody(const SavedLoadout* saved = nullptr) {
             Metagame::SaveFile* save = CurrentSave();
             std::vector<GearLoadout> loadouts = save ? LoadoutsFromSave(*save) : std::vector<GearLoadout>();
+            if (saved && saved->ok) EchoSaved(loadouts, *saved);
             int bank = 0;
             if (save) { int unknown = 0; bank = (int)GearFromSave(*save, &unknown).size(); }
             printf("[GEARTAB] loadouts: %d saved sets in save %u \"%s\", %d slots\n", (int)loadouts.size(), Globals::CurrentSaveFile,
@@ -230,15 +232,17 @@ namespace CommandGear {
             return MetaProfileReply(loadouts, GearSets::kMaxSets, bank);
         }
 
-        // The Gear tab saved a loadout: write it into the save's gear sets.
-        void SaveLoadout(const std::string& body) {
+        // The Gear tab saved a loadout: write it into the save's gear sets. Returns the request as
+        // read (ok false when nothing was saved).
+        SavedLoadout SaveLoadout(const std::string& body) {
             SavedLoadout l = ParseSaveRequest(body);
             Metagame::SaveFile* save = CurrentSave();
             int index = SaveIndexFor(l.id);
             if (!l.ok || !save || index < 0 || index >= GearSets::kMaxSets) {
                 printf("[GEARTAB] save loadout: not saved (%s; %zu bytes)\n",
                     !l.ok ? "could not read the request" : !save ? "no save selected" : "loadout id out of range", body.size());
-                return;   // still answered: the screen would only show an error
+                l.ok = false;
+                return l;   // still answered: the screen would only show an error
             }
             while ((int)save->loadouts.size() <= index) {
                 Metagame::Loadout empty;
@@ -267,6 +271,21 @@ namespace CommandGear {
             Globals::GearSlotOne = Globals::GearSlotTwo = Globals::GearSlotThree = nullptr;
             Metagame::WriteSave((int)Globals::CurrentSaveFile, *save);
             printf("[GEARTAB] save loadout %d (set %d) \"%s\":%s\n", l.id, index, set.name.c_str(), log.c_str());
+            return l;
+        }
+
+        // Safety stop for the page saving the same set over and over (EchoSaved is the fix): on the
+        // third identical save in a row the page is told it is no longer leaving, so it stops.
+        std::string g_lastSaveBody;
+        int g_sameSaveCount = 0;
+        void StopSaveLoop(const std::string& body) {
+            g_sameSaveCount = body == g_lastSaveBody ? g_sameSaveCount + 1 : 1;
+            g_lastSaveBody = body;
+            if (g_sameSaveCount < 3) return;
+            UPoplarCommandArtifactsGFxMovie* page = SDKUtils::GetLastOfClass<UPoplarCommandArtifactsGFxMovie>();
+            if (!page) return;
+            page->SaveLoadoutHandlerType = ECommandArtifactSaveLoadoutHandlerType::ARTIFACTSAVELOADOUTSTATE_None;
+            printf("[GEARTAB] same loadout saved %d times in a row; stopped the page's save loop\n", g_sameSaveCount);
         }
 
         // The Command screen's requests, by path.
@@ -362,9 +381,10 @@ namespace CommandGear {
                 // code is the reply's HTTP status (battleborn+0x15c0ab0) and the page shows any code
                 // but 0 as an error box, so this reply says status 0; the handler does not check it.
                 std::string text = body && body->ArrayData ? WideToUtf8(body->ArrayData) : std::string();
-                SaveLoadout(text);
+                SavedLoadout saved = SaveLoadout(text);
+                StopSaveLoop(text);
                 AddClientRequest(service, u, id);
-                std::string reply = MetaProfileBody();
+                std::string reply = MetaProfileBody(&saved);
                 Engine::RunOnGameThreadAfter(0.0f, [service, callback, id, reply, what]() { Respond(service, callback, id, reply, what.c_str(), 0); });
                 break;
             }

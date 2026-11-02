@@ -63,6 +63,15 @@ int main() {
     CHECK(!ParseSaveRequest("{\"loadout\":{\"loadout_id\":0}}").ok);
     CHECK(!ParseSaveRequest("").ok);
 
+    // The reply to a save gives the saved set back exactly as sent (else the page saves forever)
+    SavedLoadout unnamed = ParseSaveRequest("{\"loadout\":{\"version\":1,\"loadout_id\":1,\"name\":\"\",\"structure\":{\"perks\":[\"3ACD9B46\",\"rb2\",\"\"]}}}");
+    GearLoadout s1; s1.id = 1; s1.name = "Set 1"; s1.perks[0] = "rb9"; s1.perks[1] = "rb2"; s1.perks[2] = "rb3";
+    GearLoadout s2; s2.id = 2; s2.name = "Set 2"; s2.perks[0] = "rb4";
+    std::vector<GearLoadout> sets = { s1, s2 };
+    EchoSaved(sets, unnamed);
+    CHECK(sets[0].name.empty() && sets[0].perks[0] == "3ACD9B46" && sets[0].perks[1] == "rb2" && sets[0].perks[2].empty());
+    CHECK(sets[1].name == "Set 2" && sets[1].perks[0] == "rb4");
+
     if (failures == 0) std::printf("PASS\n");
     return failures == 0 ? 0 : 1;
 }
