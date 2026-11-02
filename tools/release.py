@@ -4,7 +4,8 @@
 
 In order, it:
   1. checks the code is committed and on GitHub, and the signing key is on this PC;
-  2. runs every test (Python, matchmaking, Control Panel, update installer); stops at the first failure;
+  2. runs the tests (Python, matchmaking, Control Panel, update installer); stops at the first failure.
+     A suite whose code is unchanged since it last passed on this PC is skipped (--all-tests runs all);
   3. picks the next number 1.0.N from the releases already in Sintax/reborn-builds and builds the mod,
      dxgi, matchmaking (with .NET inside), the Control Panel, the updater and the player installer zip;
   4. makes the player update (the two DLLs plus a signed list of them) that matchmaking offers players;
@@ -49,12 +50,21 @@ COMMIT_ASSET = "commit.txt"
 # The owner's settings on the server: never in an update zip (the installer keeps them too).
 LEFT_OUT = {name.lower() for name in (*vm.KEPT_MATCHMAKING_FILES, "reborn-users.json",
                                       "reborn-users-seen.json", "reborn-zips.json")}
+# (name, command, what it checks). What it checks is a list of folders, or None for everything but
+# C# code; a suite whose files are unchanged since it last passed is skipped (--all-tests runs all).
 SUITES = (
-    ("Python tests", [sys.executable, "-m", "pytest", "debugloop/tests", "-q"]),
-    ("matchmaking tests", ["dotnet", "test", "gamecontroller.Tests"]),
-    ("Control Panel tests", ["dotnet", "test", "controlpanel/ControlPanel.Tests"]),
-    ("update installer tests", ["dotnet", "test", "controlpanel/Reborn.Update.Tests"]),
+    ("Python tests", [sys.executable, "-m", "pytest", "debugloop/tests", "-q"], None),
+    ("matchmaking tests", ["dotnet", "test", "gamecontroller.Tests"], ("gamecontroller/", "gamecontroller.Tests/")),
+    ("Control Panel tests", ["dotnet", "test", "controlpanel/ControlPanel.Tests"],
+     ("controlpanel/ControlPanel.Core/", "controlpanel/ControlPanel.Tests/", "controlpanel/Reborn.Update/",
+      "docs/FRIEND-SETUP.md")),   # the Core embeds that page
+    ("update installer tests", ["dotnet", "test", "controlpanel/Reborn.Update.Tests"],
+     ("controlpanel/Reborn.Update/", "controlpanel/RebornUpdater/", "controlpanel/Reborn.Update.Tests/")),
 )
+# Which suites passed, and on what files (dist/ is gitignored, so this stays on the laptop).
+PASSED_FILE = config.REPO / "dist" / "private" / "tests-passed.json"
+# Files git ignores that the Python tests still read: the debug loop and the private settings.
+IGNORED_TESTED = ("debugloop/*","debugloop/tests/**/*", "debugloop/scenarios/**/*", "reborn/LocalSettings.hpp")
 
 
 class ReleaseError(RuntimeError):
@@ -105,12 +115,54 @@ def check_key(key_path: Path) -> None:
                                "games and the server would refuse this release")
 
 
-def run_suites() -> None:
-    for name, cmd in SUITES:
+def repo_files() -> list[str]:
+    """Every file of the code, repo-relative with forward slashes: what git tracks or would add,
+    plus the ignored files the tests read. Build output is ignored by git, so it is left out."""
+    p = subprocess.run(["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=config.REPO,
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        raise ReleaseError(f"could not list the code's files: {p.stderr.strip()[:300]}")
+    names = {n for n in p.stdout.split("\0") if n}
+    for pattern in IGNORED_TESTED:
+        names.update(f.relative_to(config.REPO).as_posix() for f in config.REPO.glob(pattern) if f.is_file())
+    return sorted(n for n in names if "__pycache__/" not in n)
+
+
+def suite_fingerprint(watch: tuple[str, ...] | None, files: list[str]) -> str:
+    """One hash of the names and contents of the files a suite checks."""
+    h = hashlib.sha256()
+    for name in files:
+        if watch is None and name.endswith(".cs") or watch is not None and not name.startswith(watch):
+            continue
+        path = config.REPO / name
+        if path.is_file():   # listed by git but deleted on disk: gone, so not hashed
+            h.update(name.encode("utf-8") + b"\0" + sha256(path).encode("ascii") + b"\n")
+    return h.hexdigest()
+
+
+def read_passed() -> dict[str, str]:
+    try:
+        data = json.loads(PASSED_FILE.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def run_suites(all_tests: bool = False) -> None:
+    passed = read_passed()
+    files = repo_files()
+    for name, cmd, watch in SUITES:
+        fingerprint = suite_fingerprint(watch, files)
+        if not all_tests and passed.get(name) == fingerprint:
+            say(f"  Skipping the {name}: nothing they check changed since they last passed.")
+            continue
         say(f"  Running the {name}...")
         if run(cmd, capture=False).returncode != 0:
             shown = " ".join(["python", *cmd[1:]] if cmd[0] == sys.executable else cmd)
             raise ReleaseError(f"the {name} failed ({shown}). Nothing was built or uploaded.")
+        passed[name] = fingerprint
+        PASSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PASSED_FILE.write_text(json.dumps(passed, indent=2) + "\n", encoding="utf-8")
 
 
 def existing_tags() -> list[str]:
@@ -251,7 +303,7 @@ def server_zip_name(ver: str) -> str:
 
 # --- the whole release ----------------------------------------------------------------------------
 
-def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
+def release(notes: str, key_path: Path = signing.KEY_PATH, all_tests: bool = False) -> str:
     notes = check_notes(notes)
     try:
         say("Step 1 of 8: checking the code is committed and on GitHub, and the signing key is here.")
@@ -261,8 +313,8 @@ def release(notes: str, key_path: Path = signing.KEY_PATH) -> str:
         existing_tags()   # gh signed in and the builds repo reachable: found now, not after the tests
         check_installer_tools()   # likewise Inno Setup and the runtime file
 
-        say("Step 2 of 8: running every test. This takes a few minutes.")
-        run_suites()
+        say("Step 2 of 8: running the tests (those whose code changed). This can take a few minutes.")
+        run_suites(all_tests)
 
         build = version.next_build(existing_tags())   # asked again: the tests took minutes
         ver = version.version_string(build)
@@ -328,9 +380,11 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m tools.release", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--notes", required=True, help="what changed, in plain words (players see it)")
+    p.add_argument("--all-tests", action="store_true",
+                   help="run every test suite, even those whose code has not changed since they last passed")
     a = p.parse_args(argv)
     try:
-        release(a.notes)
+        release(a.notes, all_tests=a.all_tests)
         return 0
     except (RuntimeError, OSError) as e:   # ReleaseError, VmError, a failed build, a locked or full disk
         print(f"PROBLEM: {e}")
