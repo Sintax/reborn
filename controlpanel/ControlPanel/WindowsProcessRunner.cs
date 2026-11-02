@@ -43,9 +43,6 @@ namespace ControlPanel
 		public int Run(string file, string args, IReadOnlyDictionary<string, string> environment, out string output) =>
 			RunCore(file, info => info.Arguments = args, environment, RunLimit, out output);
 
-		public int Run(string file, IReadOnlyList<string> arguments, TimeSpan limit, out string output) =>
-			RunCore(file, info => { foreach (string a in arguments) info.ArgumentList.Add(a); }, new Dictionary<string, string>(), limit, out output);
-
 		private static int RunCore(string file, Action<ProcessStartInfo> arguments, IReadOnlyDictionary<string, string> environment, TimeSpan limit, out string output)
 		{
 			output = "";

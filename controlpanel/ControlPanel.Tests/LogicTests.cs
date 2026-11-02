@@ -64,45 +64,44 @@ namespace ControlPanel.Tests
 			return r.ReadToEnd();
 		}
 
-		// A runner whose "7-Zip" succeeds and, while it runs, copies what is in the staging folder (the
-		// folder named by its last argument, minus the \*) into staged: relative name (with /) to bytes.
-		private static FakeRunner StagingRunner(SortedDictionary<string, byte[]> staged)
+		// A zip's entries: name (with /) to bytes.
+		private static SortedDictionary<string, byte[]> Entries(string zipPath)
 		{
-			var runner = new FakeRunner();
-			runner.AcceptPacking(args =>
+			var entries = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+			using ZipArchive zip = ZipFile.OpenRead(zipPath);
+			foreach (ZipArchiveEntry e in zip.Entries)
 			{
-				string dir = Path.GetDirectoryName(args[^1])!;
-				foreach (string file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
-					staged[Path.GetRelativePath(dir, file).Replace('\\', '/')] = File.ReadAllBytes(file);
-			});
-			return runner;
+				using Stream s = e.Open();
+				using var m = new MemoryStream();
+				s.CopyTo(m);
+				entries.Add(e.FullName, m.ToArray());
+			}
+			return entries;
 		}
 
 		private static string StagedText(SortedDictionary<string, byte[]> staged, string name) => new UTF8Encoding(false).GetString(staged[name]);
 
 		[Fact]
-		public void Friend_file_has_the_three_files_and_the_right_steam_id()
+		public void Friend_zip_has_the_three_files_and_the_right_steam_id()
 		{
 			using var t = new TempPanel();
 			string baseZip = MakeBaseZip(t.Root);
 			string outDir = Path.Combine(t.Root, "out");
 			string record = Path.Combine(t.Root, "reborn-zips.json");
 			string key = "ABCDEFGHJKMNPQRSTVWXYZ23";
-			string sevenZip = FakeRunner.FakeSevenZipFolder(t.Root);
-			var staged = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
-			FakeRunner runner = StagingRunner(staged);
 
 			// python -c "from tools import package; print(package.friend_steamid('Kaz'))"
 			Assert.Equal(76561197960325377UL, FriendZip.SteamId("Kaz"));
 
-			var (ok, message, path) = FriendZip.Make(baseZip, "Kaz", key, outDir, runner, record,
-				new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc), "1.0.7", sevenZip);
+			var (ok, message, path) = FriendZip.Make(baseZip, "Kaz", key, outDir, record,
+				new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc), "1.0.7");
 			Assert.True(ok, message);
-			Assert.Equal(Path.Combine(outDir, "Reborn-Mod-Installer_Kaz.exe"), path);
+			Assert.Equal(Path.Combine(outDir, "Reborn-Mod-Installer_Kaz.zip"), path);
 			Assert.True(File.Exists(path));
 			Assert.DoesNotContain(key, message);
 			Assert.Empty(Directory.GetFiles(outDir, "*.tmp"));
-			Assert.Empty(Directory.GetDirectories(outDir));   // the staging folder is gone
+			Assert.Empty(Directory.GetDirectories(outDir));   // nothing was unpacked on disk
+			var staged = Entries(path!);
 
 			// The friend's guide, made as tools/package.py friend_readme does: docs/FRIEND-SETUP.md with
 			// {NAME} filled in, CRLF line ends, a "Battleborn Reborn <version>" line on top, UTF-8 without BOM.
@@ -126,12 +125,12 @@ namespace ControlPanel.Tests
 				Assert.Equal("2026-10-22T12:00:00Z", doc.RootElement.GetProperty("Kaz").GetString());
 			Assert.Equal(new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc), ZipRecords.Load(record)["kaz"]);
 
-			// A second file (another name, base without a user ini) keeps the first record.
+			// A second zip (another name, base without a user ini) keeps the first record.
 			string baseZip2 = MakeBaseZip(Directory.CreateDirectory(Path.Combine(t.Root, "second")).FullName, withUserIni: false);
-			staged.Clear();
-			var second = FriendZip.Make(baseZip2, "Pip", "BCDEFGHJKMNPQRSTVWXYZ234", outDir, runner, record, DateTime.UtcNow, sevenZipDir: sevenZip);
+			var second = FriendZip.Make(baseZip2, "Pip", "BCDEFGHJKMNPQRSTVWXYZ234", outDir, record, DateTime.UtcNow);
 			Assert.True(second.ok, second.message);
 			Assert.Equal(2, ZipRecords.Load(record).Count);
+			staged = Entries(second.path!);
 			Assert.Equal("Pip\r\n", StagedText(staged, "files/reborn-player.txt"));
 			// No server version known (an older matchmaking): the guide says so instead of a blank.
 			Assert.StartsWith("Battleborn Reborn unknown\r\n\r\n", StagedText(staged, "README-Pip.txt"));
@@ -159,7 +158,7 @@ namespace ControlPanel.Tests
 			""";
 
 		[Fact]
-		public void Friend_files_match_the_zip_tools_package_makes()
+		public void Friend_zips_match_the_zip_tools_package_makes()
 		{
 			using var t = new TempPanel();
 			string work = Path.Combine(t.Root, "py");
@@ -179,30 +178,14 @@ namespace ControlPanel.Tests
 				Assert.True(python.ExitCode == 0, "tools/package.py could not make the zips:\n" + output);
 			}
 
-			var made = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
-			FakeRunner runner = StagingRunner(made);
-			var (ok, message, _) = FriendZip.Make(Path.Combine(work, "base.zip"), "Kaz", key, Path.Combine(t.Root, "out"), runner,
-				version: "abc1234", sevenZipDir: FakeRunner.FakeSevenZipFolder(t.Root));
+			var (ok, message, path) = FriendZip.Make(Path.Combine(work, "base.zip"), "Kaz", key, Path.Combine(t.Root, "out"),
+				version: "abc1234");
 			Assert.True(ok, message);
-
-			var expected = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
-			using (var zip = ZipFile.OpenRead(Path.Combine(work, "friend.zip")))
-				foreach (ZipArchiveEntry e in zip.Entries)
-				{
-					using var s = e.Open();
-					using var m = new MemoryStream();
-					s.CopyTo(m);
-					expected.Add(e.FullName, m.ToArray());
-				}
+			var made = Entries(path!);
+			var expected = Entries(Path.Combine(work, "friend.zip"));
 
 			Assert.Equal(expected.Keys, made.Keys);
-			// The laptop zip's guide says "zip" (package.py swaps those lines); the panel's file keeps the doc's exe wording.
-			string panelGuide = new UTF8Encoding(false).GetString(made["README-Kaz.txt"]);
-			string zipGuide = new UTF8Encoding(false).GetString(expected["README-Kaz.txt"]);
-			Assert.Contains("Double-click Reborn-Mod-Installer_Kaz.exe", panelGuide);
-			Assert.DoesNotContain("Double-click Reborn-Mod-Installer_Kaz.exe", zipGuide);
-			Assert.Contains("Right-click this zip and choose **Extract All**", zipGuide);
-			expected.Remove("README-Kaz.txt");
+			Assert.Contains("Right-click this zip and choose **Extract All**", new UTF8Encoding(false).GetString(made["README-Kaz.txt"]));
 			foreach (string name in expected.Keys)
 				Assert.True(expected[name].AsSpan().SequenceEqual(made[name]), name + " differs from tools/package.py's");
 
@@ -220,18 +203,14 @@ namespace ControlPanel.Tests
 			string outDir = Path.Combine(t.Root, "out");
 			string record = Path.Combine(t.Root, "reborn-zips.json");
 			string key = "ABCDEFGHJKMNPQRSTVWXYZ23";
-			string sevenZip = FakeRunner.FakeSevenZipFolder(t.Root);
-			var runner = new FakeRunner();
-			runner.AcceptPacking();
-
 			void Refused(string baseZip, string name, string k, string expect)
 			{
-				var (ok, message, path) = FriendZip.Make(baseZip, name, k, outDir, runner, record, DateTime.UtcNow, sevenZipDir: sevenZip);
+				var (ok, message, path) = FriendZip.Make(baseZip, name, k, outDir, record, DateTime.UtcNow);
 				Assert.False(ok);
 				Assert.Null(path);
 				Assert.Contains(expect, message);
 				Assert.DoesNotContain(k, message);
-				Assert.True(!Directory.Exists(outDir) || Directory.GetFileSystemEntries(outDir).Length == 0, "no file or staging folder may be left behind");
+				Assert.True(!Directory.Exists(outDir) || Directory.GetFileSystemEntries(outDir).Length == 0, "no zip or .tmp file may be left behind");
 				Assert.False(File.Exists(record));
 			}
 
@@ -241,7 +220,7 @@ namespace ControlPanel.Tests
 			File.WriteAllText(notZip, "this is not a zip file at all");
 			Refused(notZip, "Kaz", key, "damaged");
 
-			// A real zip whose stored data is broken part-way: found while copying, after the staging folder was started.
+			// A real zip whose stored data is broken part-way: found while copying, after the new zip was started.
 			string good = MakeBaseZip(t.Root);
 			byte[] bytes = File.ReadAllBytes(good);
 			byte[] needle = Encoding.ASCII.GetBytes("files/reborn.dll");
@@ -258,7 +237,6 @@ namespace ControlPanel.Tests
 
 			Refused(good, "Kaz!", key, "name");
 			Refused(good, "Kaz", "not a key", "key");
-			Assert.Empty(runner.RanList);   // 7-Zip was never started
 		}
 
 		private static int IndexOf(byte[] hay, byte[] needle, int from)

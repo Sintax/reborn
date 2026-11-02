@@ -17,7 +17,7 @@ namespace ControlPanel.Core
 		// The same as tools/package.py friend_steamid: base + CRC-32("friend:" + name) % 100000.
 		public static ulong SteamId(string name) => SteamIdBase + Crc32.Of(Encoding.UTF8.GetBytes("friend:" + name)) % 100000;
 
-		public static string FileName(string name) => $"Reborn-Mod-Installer_{name}.exe";
+		public static string FileName(string name) => $"Reborn-Mod-Installer_{name}.zip";
 
 		public static string ReadmeName(string name) => $"README-{name}.txt";
 
@@ -36,23 +36,19 @@ namespace ControlPanel.Core
 			return $"Battleborn Reborn {shown}\r\n\r\n" + doc.Replace("\n", "\r\n");
 		}
 
-		// Packs the friend's files into <outDir>\Reborn-Mod-Installer_<name>.exe: a self-unpacking 7-Zip file
-		// (no password). The files are first laid out in a staging folder under outDir, which is deleted on
-		// every path. The file is built under a temp name and moved over the old one only when 7-Zip
-		// succeeded. Then the date is recorded in recordFile (when given). version goes on top of the guide
-		// (the server's version, as matchmaking reports it). The message is plain text for the owner and
-		// never contains the key. sevenZipDir: the folder with 7z.exe and 7z.sfx (null: look for 7-Zip with
-		// findSevenZip, or in the usual places).
+		// Writes <outDir>\Reborn-Mod-Installer_<name>.zip through a .tmp file, so a failure never leaves a
+		// half-written zip, then records the date in recordFile (when given). Each file is copied from the
+		// installer zip straight into the new one: nothing is unpacked on the server, where Windows
+		// Defender deletes the Steam loader from any folder it is not told to skip. version goes on top of
+		// the guide (the server's version, as matchmaking reports it). The message is plain text for the
+		// owner and never contains the key.
 		public static (bool ok, string message, string? path) Make(string baseZip, string name, string key, string outDir,
-			IProcessRunner runner, string? recordFile = null, DateTime? nowUtc = null, string version = "", string? sevenZipDir = null,
-			TimeSpan? limit = null, Func<string?>? findSevenZip = null)
+			string? recordFile = null, DateTime? nowUtc = null, string version = "")
 		{
 			if (!Keys.ValidName(name)) return (false, Keys.BadName, null);
 			if (!Keys.ValidKey(key)) return (false, "That user's key isn't valid. Give them a new key first.", null);
 			if (!File.Exists(baseZip))
 				return (false, $"The player installer zip is missing ({baseZip}). It comes with each server update; install the update again.", null);
-			string? sevenZip = sevenZipDir ?? (findSevenZip ?? (() => SevenZip.Find()))();
-			if (sevenZip == null) return (false, SevenZip.NotInstalled, null);
 
 			var added = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 			{
@@ -64,7 +60,7 @@ namespace ControlPanel.Core
 			};
 
 			string path = Path.Combine(outDir, FileName(name));
-			string staging = Path.Combine(outDir, ".staging-" + Guid.NewGuid().ToString("N"));
+			string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 			try
 			{
 				Directory.CreateDirectory(outDir);
@@ -72,31 +68,26 @@ namespace ControlPanel.Core
 				{
 					if (!LooksLikeInstaller(source))
 						return (false, "The player installer zip does not look like the player installer. Install the server update again.", null);
-					Directory.CreateDirectory(staging);
+					using var output = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write);
+					using var zip = new ZipArchive(output, ZipArchiveMode.Create);
 					foreach (ZipArchiveEntry entry in source.Entries)
 					{
 						string entryName = Normal(entry.FullName);
 						if (added.ContainsKey(entryName)) continue;   // replaced below
 						if (entryName.Equals(BaseReadmeName, StringComparison.OrdinalIgnoreCase)) continue;   // their own guide instead
-						if (entryName.EndsWith('/')) continue;   // a folder entry; its files make the folder
-						string target = Inside(staging, entryName);
-						Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-						entry.ExtractToFile(target, overwrite: false);
-						File.SetLastWriteTime(target, entry.LastWriteTime.LocalDateTime);
+						ZipArchiveEntry copy = zip.CreateEntry(entry.FullName, CompressionLevel.Optimal);
+						copy.LastWriteTime = entry.LastWriteTime;
+						using Stream from = entry.Open();
+						using Stream to = copy.Open();
+						from.CopyTo(to);
+					}
+					foreach (var (entryName, text) in added)
+					{
+						using var w = new StreamWriter(zip.CreateEntry(entryName, CompressionLevel.Optimal).Open(), new UTF8Encoding(false));
+						w.Write(text);
 					}
 				}
-				foreach (var (entryName, text) in added)
-				{
-					string target = Inside(staging, entryName);
-					Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-					File.WriteAllText(target, text, new UTF8Encoding(false));
-				}
-
-				var (packed, packMessage) = SevenZip.PackSfx(sevenZip, staging, path, runner, limit ?? SevenZip.PackLimit);
-				if (!packed) return (false, packMessage, null);
-
-				if (recordFile != null) ZipRecords.Record(recordFile, name, nowUtc ?? DateTime.UtcNow);
-				return (true, $"{name}'s file is ready: {path}. Send it to {name} only: it holds their key.", path);
+				File.Move(tmp, path, overwrite: true);
 			}
 			catch (Exception e) when (e is InvalidDataException or EndOfStreamException)
 			{
@@ -104,26 +95,20 @@ namespace ControlPanel.Core
 			}
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException)
 			{
-				return (false, $"The file could not be made in {outDir}. Check that the folder can be written to and the file is not open, then try again.", null);
+				return (false, $"The zip could not be written in {outDir}. Check that the folder can be written to and the zip is not open, then try again.", null);
 			}
 			finally
 			{
-				DeleteFolder(staging);
+				Delete(tmp);
 			}
+
+			if (recordFile != null) ZipRecords.Record(recordFile, name, nowUtc ?? DateTime.UtcNow);
+			return (true, $"{name}'s zip is ready: {path}. Send it to {name} only: it holds their key.", path);
 		}
 
-		// A path inside root, refusing a name that would climb out of it.
-		private static string Inside(string root, string relative)
+		private static void Delete(string file)
 		{
-			string full = Path.GetFullPath(Path.Combine(root, relative));
-			if (!full.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-				throw new InvalidDataException("An entry leaves its folder");
-			return full;
-		}
-
-		private static void DeleteFolder(string dir)
-		{
-			try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+			try { if (File.Exists(file)) File.Delete(file); }
 			catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
 		}
 

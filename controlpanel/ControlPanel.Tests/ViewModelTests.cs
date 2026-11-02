@@ -208,18 +208,16 @@ namespace ControlPanel.Tests
 				zip.CreateEntry("files/reborn.dll");
 			}
 			MainViewModel main = t.Main();
-			main.Users.SevenZipDir = FakeRunner.FakeSevenZipFolder(t.Root);
-			t.Runner.AcceptPacking();
 			await main.RefreshAsync();
 			UserRow kaz = main.Users.Users.Single(u => u.Name == "Kaz");
 			Assert.Equal("", kaz.ZipMadeText);
 
 			await kaz.MakeZipCommand.ExecuteAsync(null);
 			Assert.Equal("/api/admin/users/Kaz/key", t.Api.Requests.Last(r => r.Method == "GET" && r.Path.EndsWith("/key")).Path);
-			string made = Path.Combine(t.Paths.ZipOutputDir, "Reborn-Mod-Installer_Kaz.exe");
+			string made = Path.Combine(t.Paths.ZipOutputDir, "Reborn-Mod-Installer_Kaz.zip");
 			Assert.True(File.Exists(made));
 			Assert.NotEqual("", kaz.ZipMadeText);
-			Assert.Contains("Reborn-Mod-Installer_Kaz.exe", main.Users.Message);
+			Assert.Contains("Reborn-Mod-Installer_Kaz.zip", main.Users.Message);
 			Assert.DoesNotContain("ABCDEFGHJKMNPQRSTVWXYZ23", main.Users.Message);
 			main.Users.OpenZipFolderCommand.Execute(null);
 			Assert.Equal(new[] { t.Paths.ZipOutputDir }, t.Runner.Opened);
@@ -375,10 +373,10 @@ namespace ControlPanel.Tests
 			// Even if it is run anyway: no key is fetched and no zip is made.
 			await dj.MakeZipCommand.ExecuteAsync(null);
 			Assert.DoesNotContain(t.Api.Requests, r => r.Path.EndsWith("/key"));
-			Assert.False(File.Exists(Path.Combine(t.Paths.ZipOutputDir, "Reborn-Mod-Installer_dj.exe")));
+			Assert.False(File.Exists(Path.Combine(t.Paths.ZipOutputDir, "Reborn-Mod-Installer_dj.zip")));
 			Assert.Contains("Confirm their name first", main.Users.Message);
 
-			// Once the name is confirmed, Make file works.
+			// Once the name is confirmed, Make zip works.
 			t.Api.Users = new
 			{
 				requireKeys = true,
@@ -403,7 +401,7 @@ namespace ControlPanel.Tests
 			await kaz.RenameCommand.ExecuteAsync(null);
 			string rename = Assert.Single(t.Dialogs.Questions);
 			Assert.Contains("Kaz", rename);
-			Assert.Contains("new file", rename);
+			Assert.Contains("new zip", rename);
 			Assert.Contains("in a game now, they'll be dropped", rename);
 			Assert.Empty(t.Api.Writes);
 
@@ -427,7 +425,7 @@ namespace ControlPanel.Tests
 			// A real rename: the message says to send the new zip.
 			t.Dialogs.TextAnswer = "Kazzy";
 			await kaz.RenameCommand.ExecuteAsync(null);
-			Assert.Contains("new file", main.Users.Message);
+			Assert.Contains("new zip", main.Users.Message);
 		}
 
 		[Fact]

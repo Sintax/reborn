@@ -57,7 +57,7 @@ namespace ControlPanel.Core.ViewModels
 		public IAsyncRelayCommand ToggleRequireKeysCommand { get; }
 
 		public const string KeysOnQuestion = "Require keys to join? Players without a key will be dropped from games. "
-			+ "From then on, only players on the list can join, each with the key in their file.";
+			+ "From then on, only players on the list can join, each with the key in their zip.";
 
 		public const string NoListText = "There is no user list yet, so anyone can join. The first player you add starts the list. "
 			+ "From then on, only players on the list can join.";
@@ -86,9 +86,6 @@ namespace ControlPanel.Core.ViewModels
 		public string? LastZipPath { get => _lastZipPath; private set => SetProperty(ref _lastZipPath, value); }
 
 		public IRelayCommand OpenZipFolderCommand { get; }
-
-		// The folder with 7z.exe and 7z.sfx; null looks for 7-Zip (tests point it at a fake one).
-		public string? SevenZipDir { get; set; }
 
 		// The server's version (from matchmaking), put on top of the guide in each friend zip.
 		internal string ServerVersion { get; set; } = "";
@@ -172,13 +169,13 @@ namespace ControlPanel.Core.ViewModels
 			NewName = "";
 			NewCanCreate = false;
 			PreviewKey = null;
-			Message = $"{name} was added. Press Make file on their row to make the file to send them.";
+			Message = $"{name} was added. Press Make zip on their row to make the zip to send them.";
 			await ReloadAsync();
 		}
 
 		// Adding the first player starts the user list: from then on, everyone else is shut out.
 		internal static string FirstAddQuestion(string name, bool canCreateGames) =>
-			$"Start the user list with {name}? From now on, only players on the list can join, each with the key in their file. "
+			$"Start the user list with {name}? From now on, only players on the list can join, each with the key in their zip. "
 			+ "Anyone else in a game now will be dropped."
 			+ (canCreateGames ? "" : $"\n\n{name} can't start games, so nobody on the list could start one. "
 				+ "Add yourself first, with Can create games ticked.");
@@ -246,15 +243,15 @@ namespace ControlPanel.Core.ViewModels
 			}
 			ZipRecords.Forget(_paths.ZipRecordFile, old);   // a zip made before carries the old name
 			Message = row.ConfirmName
-				? $"Saved. From now on this key only works with the name {typed}. You can make their file now."
-				: $"{old} is now {typed}. Press Make file and send them the new file: they can't join until they install it.";
+				? $"Saved. From now on this key only works with the name {typed}. You can make their zip now."
+				: $"{old} is now {typed}. Press Make zip and send them the new zip: they can't join until they install it.";
 			await ReloadAsync();
 		}
 
 		// What the rename box says before anything is saved (the change takes effect at once).
 		internal static string RenameQuestion(string old) =>
 			$"New name for {old}:\n\n"
-			+ $"This takes effect at once. {old} then needs a new file with the new name, and can't join until they install it. "
+			+ $"This takes effect at once. {old} then needs a new zip with the new name, and can't join until they install it. "
 			+ "If they're in a game now, they'll be dropped.";
 
 		// A key brought over from the old key files: the label is not their in-game name. Typing their
@@ -267,7 +264,7 @@ namespace ControlPanel.Core.ViewModels
 
 		internal async Task NewKeyAsync(UserRow row)
 		{
-			if (!_dialogs.Confirm($"Make a new key for {row.Name}? Their old key stops working at once, so they can't join until you send them a new file."))
+			if (!_dialogs.Confirm($"Make a new key for {row.Name}? Their old key stops working at once, so they can't join until you send them a new zip."))
 				return;
 			var r = await _client.ReplaceKeyAsync(row.Name, Keys.New());
 			if (!r.Ok)
@@ -276,7 +273,7 @@ namespace ControlPanel.Core.ViewModels
 				return;
 			}
 			ZipRecords.Forget(_paths.ZipRecordFile, row.Name);
-			Message = $"{row.Name} has a new key. Press Make file to make their new file, then send it to them.";
+			Message = $"{row.Name} has a new key. Press Make zip to make their new zip, then send it to them.";
 			await ReloadAsync();
 		}
 
@@ -301,7 +298,7 @@ namespace ControlPanel.Core.ViewModels
 			if (row.ConfirmName)
 			{
 				// The stored name is only a label: a zip would make it their in-game name and Steam identity.
-				Message = $"{UserRow.ConfirmFirstNote}: press Confirm name on {name}'s row, so the file has the name they play as.";
+				Message = $"{UserRow.ConfirmFirstNote}: press Confirm name on {name}'s row, so the zip has the name they play as.";
 				return;
 			}
 			var key = await _client.GetKeyAsync(name);
@@ -313,7 +310,7 @@ namespace ControlPanel.Core.ViewModels
 			DateTime now = _clock.GetUtcNow().UtcDateTime;
 			// Off the window's thread: the installer zip can be large.
 			var (ok, message, path) = await Task.Run(() =>
-				FriendZip.Make(_paths.PlayerInstallerZip, name, key.Value!, _paths.ZipOutputDir, _runner, _paths.ZipRecordFile, now, ServerVersion, SevenZipDir));
+				FriendZip.Make(_paths.PlayerInstallerZip, name, key.Value!, _paths.ZipOutputDir, _paths.ZipRecordFile, now, ServerVersion));
 			Message = message;
 			if (!ok) return;
 			LastZipPath = path;
@@ -373,7 +370,7 @@ namespace ControlPanel.Core.ViewModels
 			}
 		}
 
-		// Why Make file is off on such a row ("" when it is on): until the owner confirms the name, the
+		// Why Make zip is off on such a row ("" when it is on): until the owner confirms the name, the
 		// stored name is only a label, and a zip would make it the player's in-game name.
 		public string MakeZipNote => ConfirmName ? ConfirmFirstNote : "";
 
